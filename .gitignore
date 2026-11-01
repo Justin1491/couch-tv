@@ -1,5 +1,8 @@
 # Your own settings and secrets
 config.json
+config/
+.serena/
+.superpowers/
 .env
 *.pem
 *.key

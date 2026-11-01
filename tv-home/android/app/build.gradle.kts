@@ -13,8 +13,8 @@ android {
         applicationId = "app.couchtv.launcher"
         minSdk = 28
         targetSdk = 34
-        versionCode = 5
-        versionName = "0.3"
+        versionCode = 6
+        versionName = "0.3.1"
         // Where the bridge might be: ./gradlew assembleRelease -PbridgeUrls=http://my-computer.local:5400
         // (comma separated, more than one is fine). The last one that answered is remembered on the TV.
         // Without it, apply.sh tells the app the address when it installs (the "bridge" extra), and
@@ -23,7 +23,7 @@ android {
         buildConfigField("String[]", "BRIDGES", "{" + urls.joinToString(", ") { "\"" + it + "\"" } + "}")
         // Whose GitHub releases Home settings, Updates offers: -PupdateRepo=owner/name for a fork
         // with releases of its own, -PupdateRepo= (empty) for none. Updater.kt checks the format.
-        val updateRepo = (project.findProperty("updateRepo") as String? ?: "Seagey/couch-tv").trim()
+        val updateRepo = (project.findProperty("updateRepo") as String? ?: "Justin1491/couch-tv").trim()
         buildConfigField("String", "UPDATE_REPO", "\"" + updateRepo.filter { it.isLetterOrDigit() || it in "/._-" } + "\"")
     }
     buildFeatures { buildConfig = true }
@@ -50,6 +50,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+}
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
 }
 
 /**

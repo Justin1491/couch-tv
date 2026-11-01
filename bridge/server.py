@@ -800,6 +800,8 @@ async def power_on():
     send Wake-on-LAN every 2 s, check the remote port every second, and reconnect the moment it
     opens. Then press POWER if it is still in standby, and press again once if it did not take.
     """
+    if not tv.paired:
+        raise TVUnavailable("TV is not paired yet")
     loop = asyncio.get_running_loop()
     end = loop.time() + POWER_ON_BUDGET
     if not tv.connected:
