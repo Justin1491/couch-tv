@@ -46,5 +46,11 @@ no further remote inputs were sent. The bridge history remains empty; this
 verifies the fallback rather than claiming a history import. Private captures
 remain in the ignored build folder.
 
+After the owner stopped using the remote, Home was freshly launched again with
+the saved Night look. A settled physical-TV screenshot confirmed Continue
+Watching, the scenic clock/background, and the existing ordered app dock were
+present together. This verifies restoration in Night as well as Classic and
+persistence across an activity restart.
+
 The previous `couch-tv-bridge:local` image remains available: restoring that tag
 and recreating the project with the same volumes rolls back this web correction.
