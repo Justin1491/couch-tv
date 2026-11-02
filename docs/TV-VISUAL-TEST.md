@@ -93,6 +93,8 @@ change the device's rendering resolution or qualify long-run memory/performance.
 - A default build also compiled and its generated values were checked:
   original application ID, `VISUAL_TEST=false`, `ICON_RENDER_SCALE=1`.
 
-The owner’s visual sharpness judgment and extended use remain open. No true-4K
+The owner confirmed: **“Looks right and navigation feels normal.”** This accepts
+the visible test and basic navigation, not a measured sharpness improvement or
+extended performance qualification. No true-4K
 Android rendering, reboot/standby testing, bridge integration in the test app,
 or final acceptance is claimed. Private screenshot and logs remain local.
