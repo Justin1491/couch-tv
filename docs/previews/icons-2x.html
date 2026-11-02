@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Icon resolution comparison</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #101116; color: #eeeef3; font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 1440px; margin: auto; padding: 32px; }
+  h1 { font-size: 36px; margin: 0; }
+  p { max-width: 90ch; color: #b9bbc8; }
+  a { color: #a8dfcf; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  figure { margin: 0; min-width: 0; }
+  figcaption { margin: 16px 0; font-weight: 600; }
+  .logos { display: flex; gap: 12px; flex-wrap: wrap; }
+  .logos img { width: 256px; height: 256px; border-radius: 18px; }
+  .frame { aspect-ratio: 16/9; overflow: hidden; border-radius: 12px; }
+  iframe { width: 3840px; height: 2160px; border: 0; transform-origin: top left; }
+  @media(max-width: 760px) { main { padding: 20px; } .pair { grid-template-columns: 1fr; } }
+</style>
+<main>
+  <p>TCL 85QM850G · local experiment · no TV installation</p>
+  <h1>Higher-resolution icons, same artwork</h1>
+  <p>Left: the sample logos reduced to the launcher's current 128 × 128 icon size.
+    Right: the same sample artwork at 256 × 256. Each close-up displays at 256 CSS pixels
+    so you can inspect the edges. No AI enhancement or redrawn logos.</p>
+  <div class="pair">
+    <figure><figcaption>Original rendering limit · 128 × 128</figcaption><div class="logos">
+      <img src="/icon-test/original/com.netflix.ninja.png" alt="Netflix at 128 pixels">
+      <img src="/icon-test/original/com.google.android.youtube.tv.png" alt="YouTube at 128 pixels">
+    </div></figure>
+    <figure><figcaption>Candidate · 256 × 256</figcaption><div class="logos">
+      <img src="/icon-test/candidate/com.netflix.ninja.png" alt="Netflix at 256 pixels">
+      <img src="/icon-test/candidate/com.google.android.youtube.tv.png" alt="YouTube at 256 pixels">
+    </div></figure>
+  </div>
+  <h2>In the dashboard</h2>
+  <p>Both frames use the original Night background and identical layout. Only the mock
+    square-icon source resolution changes. This illustrates the raster-size difference;
+    it is not a capture of the TV's installed apps or its native banner renderer.</p>
+  <div class="pair" id="dashboards">
+    <figure><figcaption>128px sample icons</figcaption><div class="frame"><iframe title="128px icon dashboard" src="/icons-original/tv-home/web/index.html?mock=1&amp;reset=1&amp;scenes=night&amp;people=0"></iframe></div></figure>
+    <figure><figcaption>256px sample icons</figcaption><div class="frame"><iframe title="256px icon dashboard" src="/icons-candidate/tv-home/web/index.html?mock=1&amp;reset=1&amp;scenes=night&amp;people=0"></iframe></div></figure>
+  </div>
+  <p>The Android test build also doubles app banners from 640 × 360 to 1280 × 720,
+    with the existing layout preserved. It requires the explicit build option
+    <code>-PiconRenderScale=2</code>. Normal builds retain the old sizes.</p>
+  <p>Vector artwork can provide real additional detail. Low-resolution app artwork
+    cannot. Device memory, launch speed and visual quality remain untested.</p>
+  <p><a href="night-4k.html">Back to the Night background comparison</a></p>
+</main>
+<script>
+  function fit() {
+    document.querySelectorAll('iframe').forEach(function(frame) {
+      frame.style.transform = 'scale(' + frame.parentElement.clientWidth / 3840 + ')';
+    });
+  }
+  new ResizeObserver(fit).observe(document.getElementById('dashboards'));
+  fit();
+</script>
+</html>

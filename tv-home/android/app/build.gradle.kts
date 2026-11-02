@@ -15,6 +15,10 @@ android {
         targetSdk = 34
         versionCode = 6
         versionName = "0.3.1"
+        // Local icon experiment only: normal builds keep their original raster sizes.
+        val iconScale = (project.findProperty("iconRenderScale") as String? ?: "1").toInt()
+        require(iconScale in 1..2) { "iconRenderScale must be 1 or 2" }
+        buildConfigField("int", "ICON_RENDER_SCALE", iconScale.toString())
         // Where the bridge might be: ./gradlew assembleRelease -PbridgeUrls=http://my-computer.local:5400
         // (comma separated, more than one is fine). The last one that answered is remembered on the TV.
         // Without it, apply.sh tells the app the address when it installs (the "bridge" extra), and

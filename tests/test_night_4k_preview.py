@@ -3,6 +3,7 @@
 Run: .venv/bin/python -m unittest discover -s tests -p test_night_4k_preview.py -v
 """
 import importlib.util
+from io import BytesIO
 from functools import partial
 from pathlib import Path
 from threading import Thread
@@ -39,6 +40,36 @@ class NightPreviewTests(unittest.TestCase):
 
     def test_layer_integrity(self):
         preview.check()
+
+    def test_icon_source_sizes_and_browser_comparison(self):
+        from PIL import Image
+        logo = "com.netflix.ninja.png"
+        for variant, size in (("original", 128), ("candidate", 256)):
+            data = urlopen(self.url + "/icon-test/" + variant + "/" + logo).read()
+            with Image.open(BytesIO(data)) as image:
+                self.assertEqual(image.size, (size, size))
+        page = self.browser.new_page(viewport={"width": 1440, "height": 1100})
+        self.addCleanup(page.close)
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.route("https://**/*", lambda route: route.abort())
+        page.goto(self.url + "/docs/previews/icons-2x.html")
+        self.assertEqual(page.title(), "Icon resolution comparison")
+        for title, size in (("128px icon dashboard", 128), ("256px icon dashboard", 256)):
+            scope = page.frame_locator('iframe[title="' + title + '"]')
+            scope.locator("#grid img").first.wait_for(state="visible")
+            self.assertEqual(scope.locator("#grid img").first.evaluate("el => el.naturalWidth"), size)
+            self.assertNotIn("night-4k-test", scope.locator(".scene.on .sbg").get_attribute("src"))
+        for frame in page.frames[1:]:
+            frame.wait_for_function("document.querySelector('.scene.on .sbg').naturalWidth > 0 && document.fonts.status === 'loaded'")
+            frame.add_style_tag(content="*, *::before, *::after { animation: none !important; transition: none !important; }")
+        page.wait_for_function("[...document.querySelectorAll('.logos img')].every(i => i.complete && i.naturalWidth > 0)")
+        output = ROOT / "build/night-4k"
+        output.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(output / "icon-comparison.png"), full_page=True)
+        page.set_viewport_size({"width": 390, "height": 844})
+        self.assertEqual(page.evaluate("document.documentElement.scrollWidth"), 390)
+        self.assertFalse(errors, errors)
 
     def test_server_excludes_private_files_and_original_js_is_unchanged(self):
         for path in ("/config.json", "/.env", "/build/setup-status.json",

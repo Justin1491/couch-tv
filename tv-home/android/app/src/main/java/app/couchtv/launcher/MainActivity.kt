@@ -484,6 +484,15 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- what the page can ask for
 
     inner class Native {
+        // Distinct URLs prevent the experiment from reusing cached 128px icons.
+        @JavascriptInterface
+        fun iconUrl(pkg: String): String = "http://tvos.invalid/icon/$pkg" +
+            if (BuildConfig.ICON_RENDER_SCALE == 1) "" else "?render=2"
+
+        @JavascriptInterface
+        fun bannerUrl(pkg: String): String = "http://tvos.invalid/banner/$pkg" +
+            if (BuildConfig.ICON_RENDER_SCALE == 1) "" else "?render=2"
+
         @JavascriptInterface
         fun apps(): String {
             val out = JSONArray()
@@ -664,7 +673,8 @@ class MainActivity : Activity() {
         banners[pkg]?.let { return it }
         val ri = tvApps().firstOrNull { it.activityInfo.packageName == pkg } ?: return null
         val version = try { packageManager.getPackageInfo(pkg, 0).lastUpdateTime } catch (e: Exception) { 0L }
-        val file = java.io.File(java.io.File(filesDir, "banners").apply { mkdirs() }, "$pkg-$version-v3.jpg")
+        val cacheVersion = if (BuildConfig.ICON_RENDER_SCALE == 1) "v3" else "v4-2x"
+        val file = java.io.File(java.io.File(filesDir, "banners").apply { mkdirs() }, "$pkg-$version-$cacheVersion.jpg")
         val bytes = if (file.exists()) file.readBytes() else bannerBytes(ri)?.also { file.writeBytes(it) }
         if (bytes != null) banners[pkg] = bytes
         return bytes
@@ -788,8 +798,10 @@ class MainActivity : Activity() {
     private fun bannerBytes(ri: ResolveInfo): ByteArray? {
         val banner = ri.activityInfo.loadBanner(packageManager)
             ?: ri.activityInfo.applicationInfo.loadBanner(packageManager)
-        val bmp = Bitmap.createBitmap(640, 360, Bitmap.Config.ARGB_8888)
-        val c = Canvas(bmp)
+        val scale = BuildConfig.ICON_RENDER_SCALE
+        val bmp = Bitmap.createBitmap(640 * scale, 360 * scale, Bitmap.Config.ARGB_8888)
+        // Keep the layout in the original logical coordinates, rasterize at 2x.
+        val c = Canvas(bmp).apply { scale(scale.toFloat(), scale.toFloat()) }
         c.drawColor(FLAP)
         if (banner != null) {
             banner.setBounds(0, 0, 640, 360)
@@ -807,8 +819,9 @@ class MainActivity : Activity() {
     private fun iconTile(icon: Drawable, c: Canvas) {
         // the icon as a plain square, without the launcher's round mask
         val n = 432
-        val sq = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
-        val sc = Canvas(sq)
+        val scale = BuildConfig.ICON_RENDER_SCALE
+        val sq = Bitmap.createBitmap(n * scale, n * scale, Bitmap.Config.ARGB_8888)
+        val sc = Canvas(sq).apply { scale(scale.toFloat(), scale.toFloat()) }
         if (icon is android.graphics.drawable.AdaptiveIconDrawable) {
             icon.background?.apply { setBounds(0, 0, n, n); draw(sc) }
             icon.foreground?.apply { setBounds(0, 0, n, n); draw(sc) }
@@ -817,10 +830,10 @@ class MainActivity : Activity() {
             icon.draw(sc)
         }
         // find the logo: everything that differs from the icon's edge colour
-        val edge = sq.getPixel(2, n / 2)
+        val edge = sq.getPixel(2 * scale, n / 2 * scale)
         var l = n; var t = n; var r = 0; var b = 0
         for (y in 0 until n step 2) for (x in 0 until n step 2) {
-            val px = sq.getPixel(x, y)
+            val px = sq.getPixel(x * scale, y * scale)
             val d = Math.abs(Color.red(px) - Color.red(edge)) + Math.abs(Color.green(px) - Color.green(edge)) +
                 Math.abs(Color.blue(px) - Color.blue(edge))
             if (d > 60 && Color.alpha(px) > 128) { l = minOf(l, x); t = minOf(t, y); r = maxOf(r, x); b = maxOf(b, y) }
@@ -835,10 +848,11 @@ class MainActivity : Activity() {
         c.drawColor(edge)
         val p = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
         val rect = { a: Int, bb: Int, cc: Int, dd: Int -> android.graphics.Rect(a, bb, cc, dd) }
-        if (left > 0) c.drawBitmap(sq, rect(1, 0, 2, n), rect(0, top, left, top + size), p)
-        if (left + size < 640) c.drawBitmap(sq, rect(n - 2, 0, n - 1, n), rect(left + size, top, 640, top + size), p)
-        if (top > 0) c.drawBitmap(sq, rect(0, 1, n, 2), rect(left, 0, left + size, top), p)
-        if (top + size < 360) c.drawBitmap(sq, rect(0, n - 2, n, n - 1), rect(left, top + size, left + size, 360), p)
+        val source = { a: Int, bb: Int, cc: Int, dd: Int -> rect(a * scale, bb * scale, cc * scale, dd * scale) }
+        if (left > 0) c.drawBitmap(sq, source(1, 0, 2, n), rect(0, top, left, top + size), p)
+        if (left + size < 640) c.drawBitmap(sq, source(n - 2, 0, n - 1, n), rect(left + size, top, 640, top + size), p)
+        if (top > 0) c.drawBitmap(sq, source(0, 1, n, 2), rect(left, 0, left + size, top), p)
+        if (top + size < 360) c.drawBitmap(sq, source(0, n - 2, n, n - 1), rect(left, top + size, left + size, 360), p)
         c.drawBitmap(sq, null, rect(left, top, left + size, top + size), p)
         sq.recycle()
     }
@@ -849,8 +863,9 @@ class MainActivity : Activity() {
         val ri = tvApps().firstOrNull { it.activityInfo.packageName == pkg }
         val d = ri?.loadIcon(packageManager)
             ?: try { packageManager.getApplicationIcon(pkg) } catch (e: Exception) { return null }
-        val bmp = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888)
-        d.setBounds(0, 0, 128, 128)
+        val size = 128 * BuildConfig.ICON_RENDER_SCALE
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        d.setBounds(0, 0, size, size)
         d.draw(Canvas(bmp))
         val bytes = ByteArrayOutputStream().also { bmp.compress(Bitmap.CompressFormat.PNG, 100, it); bmp.recycle() }.toByteArray()
         icons[pkg] = bytes

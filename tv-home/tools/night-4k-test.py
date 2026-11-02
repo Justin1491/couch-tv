@@ -6,6 +6,7 @@ Requires Pillow. Does not connect to a TV or use personal configuration.
 import argparse
 import hashlib
 import json
+from io import BytesIO
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -78,6 +79,13 @@ class PreviewHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
+        icon_variant = None
+        for variant in ("original", "candidate"):
+            prefix = "/icons-" + variant + "/"
+            if path.startswith(prefix):
+                icon_variant = variant
+                path = path[len(prefix) - 1:]
+                break
         candidate = path.startswith("/candidate/")
         if candidate:
             path = path[len("/candidate"):]
@@ -86,6 +94,25 @@ class PreviewHandler(SimpleHTTPRequestHandler):
             self.send_header("Location", "/docs/previews/night-4k.html")
             self.end_headers()
             return
+        if path.startswith("/icon-test/"):
+            # Preview the old 128px raster limit versus the bundled 256px PNGs.
+            # These sample logos are not actual installed-TV drawable captures.
+            from PIL import Image
+            parts = path.split("/")
+            if (len(parts) != 4 or parts[2] not in ("original", "candidate")
+                    or not parts[3].endswith(".png")):
+                self.send_error(404)
+                return
+            source = ROOT / "remote/src/app-logos" / parts[3]
+            if not source.is_file():
+                self.send_error(404)
+                return
+            with Image.open(source) as logo:
+                size = 128 if parts[2] == "original" else 256
+                output = BytesIO()
+                logo.resize((size, size), Image.Resampling.LANCZOS).save(output, format="PNG")
+                self.send_body(output.getvalue(), "image/png")
+                return
         # Only public artwork and the mock page are served, never config.json,
         # .env, pairing data, or the bridge. Bind to loopback only below.
         resolved = (ROOT / path.lstrip("/")).resolve()
@@ -97,6 +124,14 @@ class PreviewHandler(SimpleHTTPRequestHandler):
             return
         if path == "/tv-home/web/config.js":
             body = b"window.COUCH_CONFIG = {};"
+            content_type = "text/javascript"
+        elif icon_variant and path == "/tv-home/web/mock.js":
+            script = resolved.read_text()
+            original = '"../../remote/src/app-logos/"'
+            if script.count(original) != 1:
+                self.send_error(500, "Mock icon path changed; preview needs review")
+                return
+            body = script.replace(original, '"/icon-test/' + icon_variant + '/"').encode()
             content_type = "text/javascript"
         elif candidate and path == "/tv-home/web/app.js":
             original = 'photo: "scene-night", fg: true, glass: true'
@@ -110,6 +145,9 @@ class PreviewHandler(SimpleHTTPRequestHandler):
             self.public_path = resolved
             self.path = path
             return super().do_GET()
+        self.send_body(body, content_type)
+
+    def send_body(self, body, content_type):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))

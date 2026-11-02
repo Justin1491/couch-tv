@@ -4,9 +4,10 @@ Target display, as supplied by the owner: **TCL 85QM850G, 85 inches**.
 The panel model does not establish the launcher's actual WebView render resolution;
 that remains to be measured on the device in a separately approved test.
 
-This branch tests only Night. All original backgrounds, optical glass fills,
-foreground cutouts, icons, clock geometry, and production application code stay
-unchanged. Nothing is installed on or sent to the TV or NAS.
+The background experiment tests only Night. All original background assets and
+clock geometry stay unchanged. A separate opt-in native icon-rendering test is
+described in `ICON-RESOLUTION-TEST.md`; normal builds retain the old icon sizes.
+Nothing is installed on or sent to the TV or NAS.
 
 ## Method
 
@@ -69,9 +70,8 @@ Doubling width and height uses four times the decoded pixels: one RGBA layer
 is about 31.6 MiB at 4K versus 7.9 MiB at 1080p, before other rendering overhead.
 Browser timing is not a substitute for physical-TV testing.
 
-Icons are deliberately outside this Night-only experiment. A later test can
-render installed apps' original drawables at greater resolution without
-redrawing their branding. AI super-resolution would also be a separately
+The separate icon experiment renders installed apps' original drawables at
+greater resolution without redrawing their branding. AI super-resolution would be a separately
 labeled candidate, with new glass generation and skyline-edge checks.
 
 Stop the preview with Ctrl-C and switch back to `main` to leave the experiment.
