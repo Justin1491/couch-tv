@@ -29,3 +29,22 @@ the previous image and the existing configuration/data volumes. Do not delete
 or reset volumes, rerun pairing, or replace the TV's working Home APK for this
 web-only correction. Confirm the row on the actual TV after deployment before
 claiming the live issue is fixed.
+
+## Deployment verification
+
+The owner opened the signed-in DSM Container Manager session. The corrected
+`couch-tv-bridge:continue-fix` image was imported alongside the existing image.
+The project's YAML was preserved and checked: only the image tag changed;
+configuration/data volumes and network settings were retained. The bridge
+project was recreated, with pairing, TV connection and ADB still healthy.
+The served `app.js` matched the locally tested file byte-for-byte.
+
+The existing Home app was reloaded without changing its settings or APK.
+A physical-TV capture confirmed the Continue Watching row returned with native
+TV entries in Classic layout. The owner subsequently navigated the look settings;
+no further remote inputs were sent. The bridge history remains empty; this
+verifies the fallback rather than claiming a history import. Private captures
+remain in the ignored build folder.
+
+The previous `couch-tv-bridge:local` image remains available: restoring that tag
+and recreating the project with the same volumes rolls back this web correction.
