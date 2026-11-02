@@ -43,7 +43,7 @@
     </queries>
 
     <application
-        android:label="Home"
+        android:label="${homeLabel}"
         android:icon="@drawable/icon"
         android:banner="@drawable/banner"
         android:theme="@style/Home"
@@ -64,7 +64,7 @@
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|fontScale|locale">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.HOME" />
+                <category android:name="${homeCategory}" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
             <intent-filter>

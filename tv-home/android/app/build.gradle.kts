@@ -6,11 +6,17 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val visualTest = providers.gradleProperty("visualTest").orNull == "true"
+
 android {
     namespace = "app.couchtv.launcher"
     compileSdk = 34
     defaultConfig {
-        applicationId = "app.couchtv.launcher"
+        applicationId = if (visualTest) "app.couchtv.launcher.visualtest" else "app.couchtv.launcher"
+        manifestPlaceholders["homeLabel"] = if (visualTest) "Couch TV Visual Test" else "Home"
+        // The test is an ordinary app: it cannot become the remote's Home destination.
+        manifestPlaceholders["homeCategory"] = if (visualTest) "app.couchtv.launcher.VISUAL_TEST" else "android.intent.category.HOME"
+        buildConfigField("boolean", "VISUAL_TEST", visualTest.toString())
         minSdk = 28
         targetSdk = 34
         versionCode = 6
@@ -27,7 +33,7 @@ android {
         buildConfigField("String[]", "BRIDGES", "{" + urls.joinToString(", ") { "\"" + it + "\"" } + "}")
         // Whose GitHub releases Home settings, Updates offers: -PupdateRepo=owner/name for a fork
         // with releases of its own, -PupdateRepo= (empty) for none. Updater.kt checks the format.
-        val updateRepo = (project.findProperty("updateRepo") as String? ?: "Justin1491/couch-tv").trim()
+        val updateRepo = if (visualTest) "" else (project.findProperty("updateRepo") as String? ?: "Justin1491/couch-tv").trim()
         buildConfigField("String", "UPDATE_REPO", "\"" + updateRepo.filter { it.isLetterOrDigit() || it in "/._-" } + "\"")
     }
     buildFeatures { buildConfig = true }
@@ -74,6 +80,9 @@ abstract class BundleTvWeb : DefaultTask() {
     @get:InputFile
     abstract val configJson: RegularFileProperty
 
+    @get:Input
+    abstract val visualTest: Property<Boolean>
+
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
@@ -88,6 +97,13 @@ abstract class BundleTvWeb : DefaultTask() {
             // development only, or not part of the page
             if (rel == "mock.js" || rel.endsWith(".md") || f.name.startsWith(".")) return@forEach
             f.copyTo(File(dest, rel), overwrite = true)
+        }
+        if (visualTest.get()) {
+            val script = File(dest, "app.js")
+            val original = "photo: \"scene-night\", fg: true, glass: true"
+            val body = script.readText()
+            require(body.split(original).size == 2) { "Night definition changed; review visual test" }
+            script.writeText(body.replace(original, "photo: \"night-4k-test/scene-night\", fg: true, glass: true"))
         }
         File(dest, "config.js").writeText("window.COUCH_CONFIG = " + JsonOutput.toJson(publicConfig(configJson.get().asFile)) + ";\n")
     }
@@ -135,6 +151,7 @@ val configFile: File = (project.findProperty("configJson") as String?)?.let { fi
 val bundleTvWeb = tasks.register<BundleTvWeb>("bundleTvWeb") {
     web.set(rootProject.layout.projectDirectory.dir("../web"))
     configJson.set(configFile)
+    visualTest.set(project.providers.gradleProperty("visualTest").orNull == "true")
     outputDir.set(layout.buildDirectory.dir("generated/tvweb"))
 }
 

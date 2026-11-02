@@ -7,7 +7,9 @@ that remains to be measured on the device in a separately approved test.
 The background experiment tests only Night. All original background assets and
 clock geometry stay unchanged. A separate opt-in native icon-rendering test is
 described in `ICON-RESOLUTION-TEST.md`; normal builds retain the old icon sizes.
-Nothing is installed on or sent to the TV or NAS.
+The initial desktop experiments install nothing on either device. The later
+authorized, isolated TV trial is documented in `TV-VISUAL-TEST.md`; the NAS and
+working Home installation remain unchanged.
 
 ## Method
 

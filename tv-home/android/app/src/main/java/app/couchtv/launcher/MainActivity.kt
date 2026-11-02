@@ -81,7 +81,7 @@ class MainActivity : Activity() {
         hideSystemBars()
         intent?.let { readExtras(it) }
         io.execute { warmApps() }
-        askWatchNextPermission()
+        if (!BuildConfig.VISUAL_TEST) askWatchNextPermission()
         Doorbell.start(this)   // smart home (optional): nothing happens unless a doorbell is set up
         // At power-on the page is often asked for before Wi-Fi is up: try again the moment it is.
         getSystemService(android.net.ConnectivityManager::class.java)?.registerDefaultNetworkCallback(

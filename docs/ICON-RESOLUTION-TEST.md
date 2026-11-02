@@ -51,4 +51,5 @@ TV performance and actual app artwork quality must be checked before deployment.
 - Screenshot: ignored `build/night-4k/icon-comparison.png`.
 
 These are compilation and desktop-browser checks. The actual Android drawable
-raster output has not been captured on an emulator or physical TV.
+raster output was subsequently checked in an isolated physical-TV trial; see
+`TV-VISUAL-TEST.md` for measured results and remaining limitations.
