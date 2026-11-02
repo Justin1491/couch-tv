@@ -243,7 +243,7 @@
   function status(text, sticky) {
     clearTimeout(statusTimer);
     $("status").textContent = text || "";
-    if (text && !sticky) statusTimer = setTimeout(function () { status(data.bridge === false && !ALONE ? t("computer_quiet") : "", true); }, 6000);
+    if (text && !sticky) statusTimer = setTimeout(function () { status("", true); }, 6000);
   }
 
   function iconUrl(pkg) {
@@ -322,9 +322,11 @@
     var loc = window.I18N ? window.I18N.locale() : "en-AU";
     var day = d.toLocaleDateString(loc, { weekday: "long", day: "numeric", month: "long" }).replace(",", "");
     day = day.charAt(0).toUpperCase() + day.slice(1);   // "lunes 27 de octubre" starts a line on screen
-    var w = NIGHT && WX_SHOW && data.weather && data.weather.temp != null ? data.weather : null;
+    var w = NIGHT && WX_SHOW ? window.WeatherCache.read(kept("tvhome.weather"), WXCFG, Date.now()) : null;
+    var weatherRecord = kept("tvhome.weather");
     $("date").innerHTML = '<span class="dline">' + esc(day) + (w ? '<span class="wx">' + wxIcon(w) + esc(tempText(w.temp)) +
       '<span class="ww"> ' + esc(wxText(w)) + "</span></span>" : "") + "</span>";
+    if (w) $("date").querySelector(".wx").title = "Updated " + new Date(weatherRecord.accepted).toLocaleTimeString();
     fitDate();
     document.body.classList.toggle("night", h >= 21 || h < 6);
     if (NIGHT) glassClock(hm);
@@ -548,8 +550,12 @@
   // or when Home settings chose another place. Hidden when Home settings switched the weather off.
   function refreshWeather() {
     if (!NIGHT || !WX_SHOW) return Promise.resolve();
-    var direct = OFFLINE || !!(ST.place && isFinite(ST.place.lat));
-    return (direct ? weatherDirect() : api("GET", "/api/weather")).then(function (j) { data.weather = j; clock(); }, function () {});
+    clock();
+    return weatherDirect().then(function (j) {
+      var reading = window.WeatherCache.record(j.place, j.weather, Date.now());
+      if (reading) keep("tvhome.weather", reading);
+      clock();
+    }, function () { clock(); });
   }
 
   // Open-Meteo (free, no key), the same call the bridge makes. The words come from i18n.js.
@@ -558,11 +564,22 @@
     63: "wx_rain", 65: "wx_heavy_rain", 66: "wx_rain", 67: "wx_rain", 80: "wx_showers", 81: "wx_showers",
     82: "wx_heavy_showers", 95: "wx_storms", 96: "wx_storms", 99: "wx_storms" };
   function weatherDirect() {
-    var url = "https://api.open-meteo.com/v1/forecast?latitude=" + WXCFG.lat + "&longitude=" + WXCFG.lon +
-      "&current=temperature_2m,weather_code,is_day&timezone=" + encodeURIComponent(WXCFG.timezone || "auto") + "&forecast_days=1";
-    return fetch(url).then(function (r) { return r.json(); }).then(function (j) {
-      var c = j.current, code = Math.round(c.weather_code);
-      return { temp: Math.round(c.temperature_2m), code: code, text: "", is_day: !!c.is_day };
+    var place = Object.assign({}, WXCFG);
+    var url = "https://api.open-meteo.com/v1/forecast?latitude=" + place.lat + "&longitude=" + place.lon +
+      "&current=temperature_2m,weather_code,is_day&timezone=" + encodeURIComponent(place.timezone || "auto") + "&forecast_days=1";
+    return new Promise(function (resolve, reject) {
+      var x = new XMLHttpRequest();
+      x.open("GET", url); x.timeout = 5000;
+      x.onerror = x.ontimeout = function () { reject(new Error("weather unavailable")); };
+      x.onload = function () {
+        try {
+          if (x.status < 200 || x.status >= 300) throw new Error("weather unavailable");
+          var c = JSON.parse(x.responseText).current;
+          if (!c || typeof c.temperature_2m !== "number" || typeof c.weather_code !== "number") throw new Error("invalid weather");
+          resolve({ place: place, weather: { temp: Math.round(c.temperature_2m), code: Math.round(c.weather_code), text: "", is_day: !!c.is_day } });
+        } catch (e) { reject(e); }
+      };
+      x.send();
     });
   }
 
@@ -2313,7 +2330,7 @@
         PEOPLE.forEach(function (p) { data.showsBy[p.id] = wn; });
       }
       detectNew();
-      status(ALONE ? "" : t("computer_off"), true);
+      status("", true);
       render();
       return Promise.resolve();
     }
@@ -2349,7 +2366,7 @@
         }
         reportApps();
         detectNew();
-        status(data.bridge ? "" : t("computer_quiet"), true);
+        status("", true);
         if (data.bridge) save();
         render();
         clearTimeout(retryTimer);

@@ -63,8 +63,11 @@ class MainActivity : Activity() {
     private var pageReady = false
     private var loadFailed = false
     private var probing = false
-    private var offline = false   // showing the saved copy because the computer is off
+    @Volatile private var offline = false   // showing the saved copy because the computer is off
     private var resumed = false
+    private val loading = HomeLoadPolicy()
+    private var remoteAttempt = 0
+    private var deadline: Runnable? = null
     private val retry = Runnable { if (!pageReady || offline) connect() }
 
     private val prefs by lazy { getSharedPreferences("home", MODE_PRIVATE) }
@@ -102,15 +105,18 @@ class MainActivity : Activity() {
             return
         }
         // HOME pressed while we are already in front: back to the first tile.
-        js("window.tv && tv.home()")
+        if (!returnToServer()) js("window.tv && tv.home()")
     }
 
     override fun onResume() {
         super.onResume()
         resumed = true
         hideSystemBars()
-        if (pageReady && offline && alone()) {
-            js("window.tv && tv.resume()")   // option A: the built-in copy is the home, keep it fresh
+        if (pageReady && offline) {
+            if (!returnToServer()) {
+                js("window.tv && tv.resume()")
+                if (!alone()) connect()
+            }
         } else if (pageReady && !offline) {
             js("window.tv && tv.resume()")
             // the computer may have gone off while the page was open: then the saved copy takes over
@@ -126,6 +132,28 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         resumed = false
+    }
+
+    // A recovered server is only used at an explicit Home/foreground transition.
+    private fun returnToServer(): Boolean {
+        if (!offline) return false
+        val base = loading.takeRecovered() ?: return false
+        showWeb(base)
+        return true
+    }
+
+    private fun startDeadline(): Int {
+        deadline?.let { main.removeCallbacks(it) }
+        val attempt = loading.start()
+        remoteAttempt = attempt
+        deadline = Runnable {
+            if (loading.expired(attempt)) {
+                web?.stopLoading()
+                if (hasOffline()) showOffline() else showFallback()
+                later(loading.retryDelay())
+            }
+        }.also { main.postDelayed(it, loading.budgetMs) }
+        return attempt
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -187,6 +215,8 @@ class MainActivity : Activity() {
             return
         }
         probing = true
+        // Include discovery/health time in the initial budget, even if the IO queue is busy.
+        val attempt = if (!offline && !pageReady) startDeadline() else null
         val saved = prefs.getString("bridge", null)
         val candidates = (listOfNotNull(saved) + BuildConfig.BRIDGES).distinct()
         io.execute {
@@ -195,12 +225,14 @@ class MainActivity : Activity() {
                 probing = false
                 if (found != null) {
                     prefs.edit().putString("bridge", found).apply()
-                    // back from the saved copy only while the home is on screen, never during a show
-                    if (offline && !resumed) return@post
-                    showWeb(found)
+                    if (offline) {
+                        loading.found(found)
+                        // Cache recovery; do not reload under remote navigation or playback.
+                        later(60_000L)
+                    } else if (!pageReady) showWeb(found, attempt)
                 } else if (hasOffline()) {
                     if (!offline) showOffline()
-                    later(OFFLINE_RETRY_MS)
+                    later(loading.retryDelay())
                 } else {
                     showFallback()
                     later(RETRY_MS)
@@ -227,15 +259,14 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- the page
 
-    private fun showWeb(base: String) {
+    private fun showWeb(base: String, attempt: Int? = null) {
         val w = web ?: makeWebView().also { web = it; root.addView(it, 0, MATCH) }
         loadFailed = false
         offline = false
         pageReady = false
+        remoteAttempt = attempt ?: startDeadline()
         val tv = prefs.getString("tv", null)
         w.loadUrl(if (tv.isNullOrEmpty()) "$base/tv/" else "$base/tv/?tv=$tv")
-        // Never a blank screen: if the page is slow, show the app grid until it arrives.
-        main.postDelayed({ if (!pageReady) showFallback() }, SLOW_MS)
     }
 
     private fun makeWebView(): WebView = WebView(this).apply {
@@ -255,7 +286,11 @@ class MainActivity : Activity() {
         addJavascriptInterface(Updater.Page(this@MainActivity, this), "TVUP")   // updates from GitHub releases, see Updater.kt
         webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) {
-                if (!loadFailed && url.startsWith("http")) {
+                val localPage = android.net.Uri.parse(url).host == OFFLINE_HOST
+                // Ignore a late server callback after the deadline chose the local copy.
+                if (!loadFailed && url == view.url && localPage == offline &&
+                    (localPage || loading.finished(remoteAttempt))) {
+                    deadline?.let { main.removeCallbacks(it) }
                     pageReady = true
                     removeFallback()
                     view.visibility = View.VISIBLE
@@ -266,11 +301,11 @@ class MainActivity : Activity() {
             }
 
             override fun onReceivedError(view: WebView, req: WebResourceRequest, err: WebResourceError) {
-                if (req.isForMainFrame) pageFailed()
+                if (req.isForMainFrame && (req.url.host == OFFLINE_HOST) == offline) pageFailed()
             }
 
             override fun onReceivedHttpError(view: WebView, req: WebResourceRequest, res: WebResourceResponse) {
-                if (req.isForMainFrame && res.statusCode >= 500) pageFailed()
+                if (req.isForMainFrame && res.statusCode >= 400 && (req.url.host == OFFLINE_HOST) == offline) pageFailed()
             }
 
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest) = true
@@ -319,14 +354,15 @@ class MainActivity : Activity() {
         web?.visibility = View.INVISIBLE
         web?.stopLoading()
         if (!offline && hasOffline()) main.post { showOffline() } else showFallback()
-        later(3000)
+        later(loading.retryDelay())
     }
 
     // ---------------------------------------------------------------- the saved copy 
 
-    private val offlineDir get() = java.io.File(filesDir, "offline/web")
+    private val offlineFiles by lazy { OfflineHome(java.io.File(filesDir, "offline")) }
+    private val offlineDir get() = offlineFiles.active() ?: offlineFiles.current
 
-    private fun hasSynced() = java.io.File(offlineDir, "index.html").isFile
+    private fun hasSynced() = offlineFiles.active() != null
 
     /** The copy of the home built into the app (assets/www/tv, from tv-home/web at build time). */
     private val hasBundled by lazy {
@@ -345,6 +381,9 @@ class MainActivity : Activity() {
     private fun showOffline() {
         if (!hasOffline()) { showFallback(); return }
         val w = web ?: makeWebView().also { web = it; root.addView(it, 0, MATCH) }
+        deadline?.let { main.removeCallbacks(it) }
+        loading.localShown()
+        pageReady = false
         loadFailed = false
         offline = true
         val tv = prefs.getString("tv", null)
@@ -360,9 +399,11 @@ class MainActivity : Activity() {
             if (version == prefs.getString("offline_version", null) && hasSynced()) return
             val tmp = java.io.File(filesDir, "offline/new").apply { deleteRecursively(); mkdirs() }
             val files = m.getJSONArray("files")
+            val expectedFiles = mutableMapOf<String, Long>()
             for (i in 0 until files.length()) {
                 val rel = files.getJSONObject(i).getString("path")
                 if (rel.contains("..")) continue
+                expectedFiles[rel] = files.getJSONObject(i).getLong("size")
                 val out = java.io.File(tmp, rel).apply { parentFile?.mkdirs() }
                 val c = URL("$base/tv/$rel").openConnection() as HttpURLConnection
                 c.connectTimeout = 3000
@@ -374,8 +415,10 @@ class MainActivity : Activity() {
                     c.disconnect()
                 }
             }
-            offlineDir.deleteRecursively()
-            if (tmp.renameTo(offlineDir)) prefs.edit().putString("offline_version", version).apply()
+            // A rolling server update must not mix two versions into one saved home.
+            if (JSONObject(fetchText("$base/tv/manifest.json")).getString("version") != version) return
+            // Never modify the assets currently being served by the local home.
+            if (!offline && offlineFiles.promote(tmp, expectedFiles)) prefs.edit().putString("offline_version", version).apply()
         } catch (e: Exception) {
             // try again the next time the live page loads
         }
@@ -832,7 +875,7 @@ class MainActivity : Activity() {
             typeface = Typeface.create("sans-serif-condensed", Typeface.BOLD)
         })
         column.addView(TextView(this).apply {
-            text = "The bridge isn't answering, so shows and picks are hidden. Your apps still work."
+            text = "Apps"
             setTextColor(CREAM_2)
             textSize = 17f
             setPadding(0, px(4), 0, px(18))
@@ -928,7 +971,6 @@ class MainActivity : Activity() {
         private const val OFFLINE_RETRY_MS = 60_000L   // looking for the bridge while the saved copy shows
         private const val OFFLINE_HOST = "home.tvos.invalid"
         private const val BUNDLED = "www/tv"   // the built-in copy, in the app's assets
-        private const val SLOW_MS = 2_500L
         private const val PICK_PHOTOS = 41
         private const val MATCH_W = ViewGroup.LayoutParams.MATCH_PARENT
         private val MATCH = FrameLayout.LayoutParams(MATCH_W, MATCH_W)

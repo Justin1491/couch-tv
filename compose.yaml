@@ -1,0 +1,32 @@
+services:
+  bridge:
+    image: couch-tv-bridge:local
+    build: .
+    # Host networking on Synology permits LAN discovery and Wake-on-LAN.
+    # Bind to the NAS LAN address via .env; loopback is the safe initial default.
+    network_mode: host
+    environment:
+      BIND_HOST: "${COUCH_BIND_ADDRESS:-127.0.0.1}"
+      PORT: "5400"
+      TZ: "${TZ:-America/New_York}"
+    volumes:
+      - ./config:/seed:ro
+      - config:/config
+      - data:/data
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+volumes:
+  config:
+  data:

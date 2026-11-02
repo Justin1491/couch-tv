@@ -12,7 +12,7 @@
 # CONFIG is the settings file built into the home's own copy (default: config.example.json, so a
 # build is the same on every computer). apply.sh hands the TV your config.json at install time
 # anyway, so the default is fine for everyone.
-# UPDATE_REPO is whose GitHub releases Home settings, Updates offers (default Seagey/couch-tv):
+# UPDATE_REPO is whose GitHub releases Home settings, Updates offers (this fork by default):
 # a fork with releases of its own sets it, and UPDATE_REPO= (empty) switches updates off.
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
