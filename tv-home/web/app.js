@@ -2315,6 +2315,14 @@
     }
   }
 
+  function nativeWatchNext() {
+    if (!TV || !TV.watchNext) return [];
+    try {
+      var rows = JSON.parse(TV.watchNext());
+      return Array.isArray(rows) ? rows.slice(0, 12) : [];
+    } catch (e) { return []; }
+  }
+
   function refresh() {
     // never reshuffle under something being moved, or under the settings screen
     if (lift || zone === "pmenu" || zone === "settings" || zone === "gear" || zone === "smart" || zone === "updask") return Promise.resolve();
@@ -2325,8 +2333,7 @@
       data.bridge = false;
       // Keep watching with no computer: Android's own Watch Next list, the same for everyone in the house
       if (TV && TV.watchNext) {
-        var wn = [];
-        try { wn = JSON.parse(TV.watchNext()) || []; } catch (e) {}
+        var wn = nativeWatchNext();
         PEOPLE.forEach(function (p) { data.showsBy[p.id] = wn; });
       }
       detectNew();
@@ -2338,7 +2345,12 @@
     var jobs = [
       people.then(function () {
         return Promise.all(PEOPLE.map(function (p) {
-          return api("GET", "/api/continue?who=" + p.id, null, 9000).then(function (j) { data.showsBy[p.id] = (j.items || []).slice(0, 12); });
+          return api("GET", "/api/continue?who=" + p.id, null, 9000).then(function (j) {
+            var items = (j.items || []).slice(0, 12);
+            // An empty bridge history must not hide the TV's own Continue Watching.
+            // Native rows are shared across TV viewers, just as in local mode.
+            data.showsBy[p.id] = items.length ? items : nativeWatchNext();
+          });
         }));
       }),
       api("GET", "/api/screens").then(function (j) { data.screens = j.screens || []; }),

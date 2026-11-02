@@ -41,6 +41,35 @@ class NightPreviewTests(unittest.TestCase):
     def test_layer_integrity(self):
         preview.check()
 
+    def test_connected_home_keeps_native_continue_when_bridge_is_empty(self):
+        self.check_connected_continue([], "TV sample episode")
+
+    def test_connected_home_prefers_nonempty_bridge_continue(self):
+        self.check_connected_continue([{"id": "bridge-1", "title": "Bridge sample episode"}],
+                                      "Bridge sample episode")
+
+    def check_connected_continue(self, bridge_items, expected):
+        from test_web_home import NATIVE
+        page = self.browser.new_page(viewport={"width": 1920, "height": 1080})
+        self.addCleanup(page.close)
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.add_init_script(NATIVE + "\nwindow.TVOS.watchNext = () => JSON.stringify(["
+            "{id:'native-1',title:'TV sample episode',kind:'watchnext'}]);")
+        import json
+        page.route("**/config.js", lambda route: route.fulfill(content_type="text/javascript", body=
+            'window.COUCH_CONFIG={people:[],home:{look:"night",scenes:["night"]}};'))
+        def api(route):
+            route.fulfill(content_type="application/json", body=json.dumps({"ok": True,
+                "people": [], "items": bridge_items, "screens": [], "apps": []}))
+        page.route("**/api/**", api)
+        page.route("https://**/*", lambda route: route.abort())
+        page.goto(self.url + "/tv-home/web/index.html")
+        page.locator("#grid").get_by_text("Netflix", exact=True).wait_for(state="attached")
+        page.wait_for_function("!document.getElementById('shelf-section').classList.contains('empty')", timeout=4000)
+        self.assertIn(expected, page.locator("#shelf").inner_text())
+        self.assertFalse(errors, errors)
+
     def test_icon_source_sizes_and_browser_comparison(self):
         from PIL import Image
         logo = "com.netflix.ninja.png"
