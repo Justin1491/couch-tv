@@ -1,0 +1,2 @@
+# Reproduce the interpolation and encoders used by the committed manifest.
+Pillow==13.0.0

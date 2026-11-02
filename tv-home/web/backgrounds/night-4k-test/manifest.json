@@ -1,0 +1,32 @@
+{
+  "method": "Pillow Lanczos 2x; no AI enhancement",
+  "pillow": "13.0.0",
+  "source_size": [
+    1920,
+    1080
+  ],
+  "output_size": [
+    3840,
+    2160
+  ],
+  "assets": [
+    {
+      "file": "scene-night.jpg",
+      "source_sha256": "0a896b2ba859f7310b0f7cf6d1304d444f27223b7255f09d7949313e11e866a5",
+      "output_sha256": "2bd1b31ad3d1ac1539012b9ae15c225b9b90daaa40f44013353dfd000891dea6",
+      "output_bytes": 1379874
+    },
+    {
+      "file": "scene-night-glass.jpg",
+      "source_sha256": "4a852ba319a280e69f7cc69357c6dfc2ee33084bf86d8bbec5b080a390893ce0",
+      "output_sha256": "ece2475e4339604b66522d19d203ae4aaaeef8256625cf2d92f6de684ae9304b",
+      "output_bytes": 664054
+    },
+    {
+      "file": "scene-night-fg.webp",
+      "source_sha256": "034b3525f3f405c1458304932aec05ffc9791782fdbc76b5592b60173556ae8e",
+      "output_sha256": "5bb2c78bd908d8723f9cbbd17f45f8dac01bd6ee7af362382a582ae74e75b251",
+      "output_bytes": 2921794
+    }
+  ]
+}
