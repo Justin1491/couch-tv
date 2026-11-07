@@ -468,7 +468,7 @@ export function Onboarding({ onPick, standalone, people }) {
   return (
     <div className="onboard">
       <div className="onboard-inner">
-        <img className="onboard-icon" src="/icons/icon-192.png" alt="" />
+        <img className="onboard-icon" src="/icons/cinematic-192.png" alt="" />
         <h1>{t('whos_phone')}</h1>
         <p>{t('onboard_note')}</p>
         <div className="onboard-pick">
