@@ -7,11 +7,34 @@ built and waiting for its first real LG. No ads on the home screen. Open source 
 
 ## Updates
 
+**4 November 2026: Fire TV extras, from a fork.** Thirty four people have forked couch-tv now. From
+[killy10o10](https://github.com/killy10o10/couch-tv), who runs it on a Fire TV Stick 4K (2nd gen):
+
+- **Bluetooth and Network buttons** at the top right of the home. Fire OS's long-press Home menu
+  has neither. On a Fire TV they open Amazon's own screens; any other TV gets Android's standard
+  ones. They need the "lives on the TV" app (option C): on a Fire TV they are on by default, on
+  other TVs switch them on in Home settings, quick buttons.
+- **Amazon's own YouTube app** on Fire TV is now recognised, with its logo, so it sorts and opens
+  like YouTube does everywhere else.
+- **A Fire TV Stick guide**, written on the stick itself: [docs/FIRE-TV-STICK.md](docs/FIRE-TV-STICK.md).
+
+And from [Justin1491](https://github.com/Justin1491/couch-tv): the bridge stops trying to reach a
+TV that has not been paired yet, instead of retrying in the background. The two buttons come with
+the next release after 0.4.
+
 **1 November 2026: LG TVs.** couch-tv now has an LG version, done the same way as the Samsung one:
 it goes on your LG as an app through LG's Developer Mode, and the computer at home opens it every
 time the TV is switched on. It was built from LG's own documentation and tested against a stand-in,
 so if you have an LG, you would be among the first to run it: give this repo to your agent, and
 please open an issue saying how it went. Setup and limits: [docs/LG.md](docs/LG.md).
+
+**3 November 2026: older Fire TV sticks (Fire OS 6).** Both TV apps now install on Android 7.1,
+so the Fire TV Stick 4K (1st gen) and other Fire OS 6 sticks can run them. Options A and B also
+take the Home key back on any Fire TV now, the way the "lives on the TV" app already did:
+`apply.sh` switches on a small Home button watch, and the undo switches it off. Checked on
+Android 7.1, 9 and 14 emulators with a stand-in for Amazon's home, not yet on a real Fire OS 6
+stick: if you have one, please open an issue saying how it went. It comes with the next release
+after 0.3.
 
 **30 October 2026: Fire TV sticks, older TVs, smart home and your own scenes.** Sixteen people
 have forked couch-tv so far, and six of them built something worth having. The best of it is now in
@@ -121,17 +144,18 @@ Any remote works: up and down move, right or OK opens a section, OK changes a ro
 scene, an app, a person or a quick button picks it up so up and down move it, and Back steps back
 and then closes. What you change shows when the list closes.
 
-- **Language:** English, Español, Español (México), Italiano. Until one is picked here (or in
+- **Language:** English, Español, Español (México), Italiano, Deutsch. Until one is picked here (or in
   `config.json`), the home speaks the TV's own language if it is one of these, else English.
 - **Location:** type a town or city with the TV's on-screen keyboard (or the phone remote's Type),
   pick it from the places found. It sets the weather's place and time zone. The place search is
   Open-Meteo's, free and with no key. Each place shows what it belongs to (its municipality,
   province or county, and region), so towns with the same name can be told apart; in Italian the
-  places in Italy come first.
+  places in Italy come first, in German the places in Germany.
 - **Weather:** show or hide it, °C or °F, check every 15, 30 or 60 minutes. Open-Meteo is the only
   weather provider for now.
 - **Look and scenes:** Night scenes or Classic; which scenes take turns, in what order, how many
-  seconds each; a 12 or 24 hour clock; your own photos (below).
+  seconds each; a 12 or 24 hour clock; glass panels and a video background (below); your own
+  photos (below).
 - **Apps:** every app on the TV. OK moves it between home, More apps and hidden; hold OK to change
   the order. The same order as holding OK on the dock and the phone's Arrange apps.
 - **People:** add, rename, remove and reorder who is watching.
@@ -155,9 +179,18 @@ and copies the photos you choose into the app (turned the right way up and sized
 Many Android TV and Google TV builds have no file picker; then the list says so and you add a photo
 from a web address instead (a JPEG or PNG on the internet, which the TV loads each time). The on-TV
 app (option C) only takes web addresses. Your photos take turns with the scenes and replace the
-Classic look's own. Videos are not supported: a looping video under the glass clock and the
-blurred dock is heavy work for a small TV stick, and the clock's frosted fill is cut from a still
-photo.
+Classic look's own.
+
+**Glass panels and a video background (optional, both off to start).** Under Look, **Glass
+panels** puts clear, softly blurred panels with a light edge behind the clock, Keep watching and
+the apps, so the background shows through. Blur is heavy work for an older TV, so **On, no blur**
+keeps the panels and their edges without it; a TV that cannot blur at all gets that by itself.
+**Video background** plays a short clip that loops, muted, in place of the photo, in both looks:
+**Video link** takes the address of an MP4 on the web or on a computer at home, and the switch
+turns it off again without losing the link. The photo stays until the clip plays, and comes back if
+it will not play. The video stops while an app is in front. Over a video, the Night clock is
+frosted white instead of cut from the photo. Both are heavier than the plain home, so on a small
+TV stick switch them off if the home feels slow. Thanks alonmustafa (#22).
 
 **Smart home (optional).** If you already run Home Assistant, the home can show your air
 conditioning (each room's temperature, warmer, cooler, on, off and mode), your scenes and scripts
@@ -171,8 +204,8 @@ back to it. [docs/CONFIG.md](docs/CONFIG.md) has the details.
 
 **Languages.** The TV home and the phone remote both speak English, Spanish (`es`, for Spain and
 everyone else), Mexican Spanish (`es-MX`: computadora, celular, presionar, clima and the rest) and
-Italian (`it`, with a 24 hour clock unless you pick 12 hour, and the smart home words Home
-Assistant uses in Italian). The phone has its own choice (TV menu, Language), "Same as the TV" by
+Italian (`it`) and German (`de`), both with a 24 hour clock unless you pick 12 hour, and the smart
+home words Home Assistant uses in each. The phone has its own choice (TV menu, Language), "Same as the TV" by
 default. Messages that come from the bridge itself (an error, a note about how a show opened) and
 some screen reader labels on the phone are still in English.
 
@@ -187,7 +220,8 @@ some screen reader labels on the phone are still in English.
   inside an app on the TV. See [on-tv/README.md](on-tv/README.md).
 
 > **Pick your option, then follow only its steps**
-> - **A:** steps 1, 2 and 6 below.
+> - **A:** steps 1, 2 and 6 below. With no computer at all: step 1, then "Option A with no
+>   computer" in step 6.
 > - **B:** steps 1 to 6 below.
 > - **C:** [on-tv/README.md](on-tv/README.md) (it has its own developer mode and install steps).
 
@@ -197,12 +231,12 @@ some screen reader labels on the phone are still in English.
 |---|---|---|---|
 | **Google TV** (Sony, TCL, Hisense Google TV, Philips and others) | Yes | Yes | Partial. Newer models may ask for a pairing code again after a restart |
 | **Google TV box** (Google TV Streamer, Chromecast with Google TV, Onn) | Yes | Yes | Partial, as above |
-| **Older Android TV** (Android 9 to 11) | Yes | Yes | Yes |
+| **Older Android TV** (Android 7.1 to 11) | Yes | Yes | Yes |
 | **Nvidia Shield** | Yes (not tested) | Yes | Yes (not tested) |
-| **Fire TV on Fire OS** (Fire TV Stick 4K Max, Fire TV Cube) | Partial. Workarounds only, and Amazon's home flashes up first | Partial | Yes, and it takes the Home key back ([how](on-tv/README.md#fire-tv-fire-os)) |
+| **Fire TV on Fire OS** (Fire OS 6, 7 and 8: Fire TV Stick 4K 1st gen and newer, Stick 4K Max, Cube) | Partial. Takes the Home key back, but Amazon's home flashes up first | Partial | Yes, and it takes the Home key back ([how](on-tv/README.md#fire-tv-fire-os)) |
 | **Fire TV on Vega OS** (newer Fire TV sticks) | No | No | No |
 | **Samsung** (Tizen) | App only, opened from Samsung's app row | With a computer at home: yes, as an app that opens itself, not a true home screen ([how](docs/SAMSUNG.md)) | No |
-| **LG** (webOS) | App only, opened from LG's app row, while Developer Mode lasts | With a computer at home: as an app that opens itself, like the Samsung. Built, not yet tried on a real LG ([how](docs/LG.md)) | No |
+| **LG** (webOS) | App only, opened from LG's app row, while Developer Mode lasts | With a computer at home: as an app that opens itself, like the Samsung. Built, and run on one real LG so far ([how](docs/LG.md)) | No |
 | **Roku, Apple TV, Hisense with VIDAA** | No | No | No |
 
 **Hisense, Sharp and other brands that sell more than one kind of TV:** it depends on the model,
@@ -217,9 +251,10 @@ Brand by brand (TCL, Philips, Panasonic, Sharp, Xiaomi and more, untested):
   order, the phone remote, finding and playing shows, the sleep timer. Some Google Home features and
   the YouTube button on the remote can stop working once the Google home is switched off.
 - **Fire TV (Fire OS):** the phone remote and app launching work. Amazon does not let another home
-  screen replace its own, so the "lives on the TV" app (option C) watches for Amazon's home and puts
-  couch-tv's home back on top; Amazon's home still flashes up for a moment first. It needs two
-  one-off ADB grants: [on-tv/README.md](on-tv/README.md#fire-tv-fire-os).
+  screen replace its own, so couch-tv watches for Amazon's home and puts its own home back on top;
+  Amazon's home still flashes up for a moment first. Options A and B: `apply.sh` switches the watch
+  on by itself. Option C needs two one-off ADB grants: [on-tv/README.md](on-tv/README.md#fire-tv-fire-os).
+  Fire OS 6 sticks (Android 7.1) need a release newer than 0.3.
 - **Samsung:** it does not run Android apps and it locks its home screen, so couch-tv goes on as a
   Samsung app (you install it with a free tool and your own Samsung sign-in), and the bridge opens
   it every time the TV is switched on, so it needs a computer that stays on. Samsung's own Home
@@ -280,7 +315,7 @@ needs the first's TV set up the same way (developer mode on).
 ## What you need
 
 **For every option:**
-- A **Google TV or Android TV** (Android 9 or newer) with Developer options and debugging on
+- A **Google TV or Android TV** (Android 7.1 or newer) with Developer options and debugging on
   (step 1).
 - A computer on the same Wi-Fi to set it up from: macOS or Linux with **Python 3.11 or newer**
   (`python3 --version`). Missing or older: on macOS `brew install python@3.11` or the installer
@@ -486,6 +521,31 @@ same command again. It is safe to run as often as you like.
   a day and switches it off again. With option A there is no bridge: run `apply.sh` again after an
   update (and after you change `config.json`).
 
+**Option A with no computer** (reported by
+[udhava2-stack](https://github.com/udhava2-stack), not tested by us). Apps on the TV and the phone
+do the install instead of `apply.sh`:
+
+1. Do step 1 (developer mode and USB debugging). Step 2 is not needed.
+2. Copy `couch-tv-home.apk` from the Releases page onto a USB stick and plug it into the TV.
+3. Install a file manager on the TV, for example
+   [File Manager +](https://play.google.com/store/apps/details?id=com.alphainventor.filemanager).
+   Open the APK on the USB stick and install it. The TV may ask you to allow installs from the file
+   manager first.
+4. On your phone, install
+   [TV Launcher Manager](https://play.google.com/store/apps/details?id=com.tv.launcher.manager.adb.tvboxtools).
+   It connects to the TV over Wi-Fi with ADB, so the TV asks you to allow it. Open **Setup
+   Launcher**, pick couch-tv, then restart the TV.
+
+Good to know:
+
+- Neither app is part of couch-tv and we have not checked them. TV Launcher Manager gets the same
+  ADB access to your TV that a computer would.
+- It may not switch off everything `apply.sh` does (the Google home, ambient mode, the setup
+  wizard), and the app does not get your `config.json`. Change the look and the people in
+  [Settings on the TV](#settings-on-the-tv).
+- If a Google TV update brings the Google home back, run **Setup Launcher** again.
+- To undo, use the TV-remote steps in [Undo](#undo-put-the-google-home-screen-back).
+
 ### Building the app (instead of downloading it)
 
 You need **JDK 21** and the **Android SDK** with platform 34 and build tools 34. Gradle is not
@@ -589,7 +649,7 @@ TV home (tv-home/)      --->  bridge (for shows and picks)               (Androi
 
 - Google TV and Android TV run everything. Fire TV (Fire OS) runs the on-TV app, with Amazon's
   home flashing up first. Samsung runs it as an app, with a computer that stays on, and LG the
-  same way (not yet tried on a real LG). Developer mode has to be on.
+  same way (run on one real LG so far). Developer mode has to be on.
 - A Google TV update can switch the Google home back on. Option B's bridge checks once a day and
   switches it off again; with option A, run `apply.sh` again.
 - Some apps will not open a show directly. They open the app instead. See `bridge/DEEPLINKS.md`.
@@ -607,5 +667,10 @@ TV home (tv-home/)      --->  bridge (for shows and picks)               (Androi
 - Weather: Open-Meteo.
 - The doorbell card and Home Assistant scenes on the TV started in the
   [roliusz fork](https://github.com/roliusz/couch-tv).
+- The no-computer install for option A came from
+  [udhava2-stack](https://github.com/Seagey/couch-tv/pull/14).
+- The Bluetooth and Network buttons, Amazon YouTube support and the Fire TV Stick guide came from
+  the [killy10o10 fork](https://github.com/killy10o10/couch-tv); the unpaired TV guard from the
+  [Justin1491 fork](https://github.com/Justin1491/couch-tv).
 
 MIT licence, see `LICENSE`.

@@ -442,10 +442,12 @@ is optional:
 
 | Key | What it is |
 |---|---|
-| `lang` | `en`, `es`, `es-MX` or `it`. |
+| `lang` | `en`, `es`, `es-MX`, `it` or `de`. |
 | `place` | The weather's place: `name`, `lat`, `lon` (rounded to two decimals, a town, never a house), `timezone`. |
 | `wx_show`, `wx_unit`, `wx_every` | Weather on or off, `c` or `f`, minutes between checks (15, 30 or 60). |
 | `look` | `night` or `classic`. |
+| `glass` | Glass panels: `off`, `on` or `lite` (no blur). |
+| `video`, `video_url` | The video background on or off, and its link (`http://` or `https://`, an MP4). `""` means the link was removed on the TV, and then wins over `home.video_url`. |
 | `scene_order`, `scenes_off` | Every scene in order, and the ones switched off. Ids are the five scene names and `p-<id>` for a photo. |
 | `scene_seconds`, `clock` | 5 to 3600; `12h` or `24h`. |
 | `photos` | Up to 20: `{"id", "url"}` for a photo on the web, or `{"id", "file"}` for one the TV's file picker copied into the app (`p....jpg`, kept on the TV only). |
@@ -626,6 +628,8 @@ Every title object (find result, play, playing, continue, picks) carries `poster
 URLs. Credit "Data from JustWatch" somewhere quiet (their terms).
 
 ## Change notes
+- German: `lang` in `/api/settings` and `home.language` take `de` (24 hour clock and `DE` as the
+  country when they are not set).
 - Italian: `lang` in `/api/settings` and `home.language` take `it`. `home.clock` and
   `home.language` in `/api/config` and `/tv/config.js` are now there only when `config.json` sets
   them; without them the TV home follows the TV's own language and that language's usual clock.

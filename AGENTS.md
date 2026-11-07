@@ -101,7 +101,8 @@ If nothing Android is found, or they are not sure what they have:
 Check the answer against [docs/TV-COMPATIBILITY.md](docs/TV-COMPATIBILITY.md):
 - **Google TV or Android TV** (Sony, TCL, Hisense Google TV, Philips, Xiaomi, Chromecast with
   Google TV, Google TV Streamer, Nvidia Shield, Onn): supported.
-- **Fire TV on Fire OS** (Stick 4K Max, Cube): partly. Say what will not work before going on: Amazon's
+- **Fire TV on Fire OS** (Fire OS 6, 7 or 8: Stick 4K 1st gen and newer, Stick 4K Max, Cube): partly.
+  Fire OS 6 (Android 7.1) needs a release newer than 0.3, and port 5555 network debugging. Say what will not work before going on: Amazon's
   home still flashes up before couch-tv's comes back, and the on-TV app needs two one-off ADB grants
   (on-tv/README.md, "Fire TV (Fire OS)").
 - **Samsung (Tizen):** do not say no. Offer the Samsung path in
@@ -117,10 +118,9 @@ Check the answer against [docs/TV-COMPATIBILITY.md](docs/TV-COMPATIBILITY.md):
   way to get everything. If they choose Samsung, follow docs/SAMSUNG.md for steps 2 to 4 (most
   questions in step 2 still apply; skip picture mode, apply.sh and ADB).
 - **LG (webOS):** do not say no. Offer the LG path in [docs/LG.md](docs/LG.md) the way you offer
-  the Samsung one, and say first, plainly, that it has not been tried on a real LG: "There is an
-  LG version of couch-tv. It was built from LG's own documentation and tested against a stand-in
-  on a computer, but nobody has run it on a real LG yet, so you would be the first, and some of it
-  may need fixing. Like the Samsung one, it goes on your LG as an app, and a computer at home that
+  the Samsung one, and say first, plainly, how little it has been tried: "There is an LG version
+  of couch-tv. It was built from LG's own documentation and has run on one real LG so far (a
+  2020/2021 model on webOS 5.6.2), so on other LG models some of it may still need fixing. Like the Samsung one, it goes on your LG as an app, and a computer at home that
   stays on opens it every time the TV is switched on. It is not a true home screen: the remote's
   Home button still opens LG's menu. It needs LG's Developer Mode, which means a free LG developer
   account and LG's tools on this computer, and Developer Mode has to stay on, so the computer
@@ -191,9 +191,9 @@ recommend C (A if they only want the home screen). Write the choice down; the re
   some of them, your own photos, or the Classic look?" Own photos: 1920x1080 JPEGs into
   `tv-home/web/backgrounds/`.
 - "How long should each scene stay?" (20 seconds is the default.)
-- "Which language for the home: English, Spanish, Mexican Spanish or Italian?" Leave
+- "Which language for the home: English, Spanish, Mexican Spanish, Italian or German?" Leave
   `home.language` out to follow the TV's own language.
-- "12 hour or 24 hour clock?" (Left out: 24 hour in Italian, 12 hour otherwise.)
+- "12 hour or 24 hour clock?" (Left out: 24 hour in Italian and German, 12 hour otherwise.)
 - Options A and B: "Do you want the TV to tell you when a new couch-tv version is out? It looks
   once a week and only shows a small dot. Or would you rather check yourself, in Home settings?"
   `home.updates`: `notify` or `manual`. Left out, the TV asks once the first time the home opens.

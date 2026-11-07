@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.DisplayMetrics
 import android.provider.Settings
 import android.view.Gravity
 import android.view.KeyEvent
@@ -81,8 +82,9 @@ class MainActivity : Activity() {
         hideSystemBars()
         intent?.let { readExtras(it) }
         io.execute { warmApps() }
-        if (!BuildConfig.VISUAL_TEST) askWatchNextPermission()
+        askWatchNextPermission()
         Doorbell.start(this)   // smart home (optional): nothing happens unless a doorbell is set up
+        FireWatch.ensure(this)   // Fire TV only, and only once a computer has switched it on
         // At power-on the page is often asked for before Wi-Fi is up: try again the moment it is.
         getSystemService(android.net.ConnectivityManager::class.java)?.registerDefaultNetworkCallback(
             object : android.net.ConnectivityManager.NetworkCallback() {
@@ -132,6 +134,7 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         resumed = false
+        js("window.tv && tv.pause && tv.pause()")   // the video background stops while an app is in front
     }
 
     // A recovered server is only used at an explicit Home/foreground transition.
@@ -484,14 +487,14 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- what the page can ask for
 
     inner class Native {
-        // Distinct URLs prevent the experiment from reusing cached 128px icons.
+        // New URLs prevent an upgrade from reusing the old low-density artwork.
         @JavascriptInterface
         fun iconUrl(pkg: String): String = "http://tvos.invalid/icon/$pkg" +
-            if (BuildConfig.ICON_RENDER_SCALE == 1) "" else "?render=2"
+            "?render=sharp"
 
         @JavascriptInterface
         fun bannerUrl(pkg: String): String = "http://tvos.invalid/banner/$pkg" +
-            if (BuildConfig.ICON_RENDER_SCALE == 1) "" else "?render=2"
+            "?render=sharp"
 
         @JavascriptInterface
         fun apps(): String {
@@ -673,7 +676,7 @@ class MainActivity : Activity() {
         banners[pkg]?.let { return it }
         val ri = tvApps().firstOrNull { it.activityInfo.packageName == pkg } ?: return null
         val version = try { packageManager.getPackageInfo(pkg, 0).lastUpdateTime } catch (e: Exception) { 0L }
-        val cacheVersion = if (BuildConfig.ICON_RENDER_SCALE == 1) "v3" else "v4-2x"
+        val cacheVersion = "v5-sharp"
         val file = java.io.File(java.io.File(filesDir, "banners").apply { mkdirs() }, "$pkg-$version-$cacheVersion.jpg")
         val bytes = if (file.exists()) file.readBytes() else bannerBytes(ri)?.also { file.writeBytes(it) }
         if (bytes != null) banners[pkg] = bytes
@@ -795,19 +798,26 @@ class MainActivity : Activity() {
         false
     }
 
+    /** An app's drawable at the highest density it ships (null if it has none we can read). */
+    private fun sharp(pkg: String, res: Int): android.graphics.drawable.Drawable? {
+        if (res == 0) return null
+        return try {
+            packageManager.getResourcesForApplication(pkg).getDrawableForDensity(res, DisplayMetrics.DENSITY_XXXHIGH, null)
+        } catch (e: Exception) { null }
+    }
+
     private fun bannerBytes(ri: ResolveInfo): ByteArray? {
-        val banner = ri.activityInfo.loadBanner(packageManager)
+        val banner = sharp(ri.activityInfo.packageName, ri.activityInfo.bannerResource)
+            ?: ri.activityInfo.loadBanner(packageManager)
             ?: ri.activityInfo.applicationInfo.loadBanner(packageManager)
-        val scale = BuildConfig.ICON_RENDER_SCALE
-        val bmp = Bitmap.createBitmap(640 * scale, 360 * scale, Bitmap.Config.ARGB_8888)
-        // Keep the layout in the original logical coordinates, rasterize at 2x.
-        val c = Canvas(bmp).apply { scale(scale.toFloat(), scale.toFloat()) }
+        val bmp = Bitmap.createBitmap(640, 360, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
         c.drawColor(FLAP)
         if (banner != null) {
             banner.setBounds(0, 0, 640, 360)
             banner.draw(c)
         } else {
-            iconTile(ri.loadIcon(packageManager), c)
+            iconTile(sharp(ri.activityInfo.packageName, ri.activityInfo.iconResource) ?: ri.loadIcon(packageManager), c)
         }
         return ByteArrayOutputStream().also { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it); bmp.recycle() }.toByteArray()
     }
@@ -819,10 +829,9 @@ class MainActivity : Activity() {
     private fun iconTile(icon: Drawable, c: Canvas) {
         // the icon as a plain square, without the launcher's round mask
         val n = 432
-        val scale = BuildConfig.ICON_RENDER_SCALE
-        val sq = Bitmap.createBitmap(n * scale, n * scale, Bitmap.Config.ARGB_8888)
-        val sc = Canvas(sq).apply { scale(scale.toFloat(), scale.toFloat()) }
-        if (icon is android.graphics.drawable.AdaptiveIconDrawable) {
+        val sq = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
+        val sc = Canvas(sq)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && icon is android.graphics.drawable.AdaptiveIconDrawable) {
             icon.background?.apply { setBounds(0, 0, n, n); draw(sc) }
             icon.foreground?.apply { setBounds(0, 0, n, n); draw(sc) }
         } else {
@@ -830,10 +839,10 @@ class MainActivity : Activity() {
             icon.draw(sc)
         }
         // find the logo: everything that differs from the icon's edge colour
-        val edge = sq.getPixel(2 * scale, n / 2 * scale)
+        val edge = sq.getPixel(2, n / 2)
         var l = n; var t = n; var r = 0; var b = 0
         for (y in 0 until n step 2) for (x in 0 until n step 2) {
-            val px = sq.getPixel(x * scale, y * scale)
+            val px = sq.getPixel(x, y)
             val d = Math.abs(Color.red(px) - Color.red(edge)) + Math.abs(Color.green(px) - Color.green(edge)) +
                 Math.abs(Color.blue(px) - Color.blue(edge))
             if (d > 60 && Color.alpha(px) > 128) { l = minOf(l, x); t = minOf(t, y); r = maxOf(r, x); b = maxOf(b, y) }
@@ -848,11 +857,10 @@ class MainActivity : Activity() {
         c.drawColor(edge)
         val p = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
         val rect = { a: Int, bb: Int, cc: Int, dd: Int -> android.graphics.Rect(a, bb, cc, dd) }
-        val source = { a: Int, bb: Int, cc: Int, dd: Int -> rect(a * scale, bb * scale, cc * scale, dd * scale) }
-        if (left > 0) c.drawBitmap(sq, source(1, 0, 2, n), rect(0, top, left, top + size), p)
-        if (left + size < 640) c.drawBitmap(sq, source(n - 2, 0, n - 1, n), rect(left + size, top, 640, top + size), p)
-        if (top > 0) c.drawBitmap(sq, source(0, 1, n, 2), rect(left, 0, left + size, top), p)
-        if (top + size < 360) c.drawBitmap(sq, source(0, n - 2, n, n - 1), rect(left, top + size, left + size, 360), p)
+        if (left > 0) c.drawBitmap(sq, rect(1, 0, 2, n), rect(0, top, left, top + size), p)
+        if (left + size < 640) c.drawBitmap(sq, rect(n - 2, 0, n - 1, n), rect(left + size, top, 640, top + size), p)
+        if (top > 0) c.drawBitmap(sq, rect(0, 1, n, 2), rect(left, 0, left + size, top), p)
+        if (top + size < 360) c.drawBitmap(sq, rect(0, n - 2, n, n - 1), rect(left, top + size, left + size, 360), p)
         c.drawBitmap(sq, null, rect(left, top, left + size, top + size), p)
         sq.recycle()
     }
@@ -861,11 +869,12 @@ class MainActivity : Activity() {
     private fun iconImage(pkg: String): ByteArray? {
         icons[pkg]?.let { return it }
         val ri = tvApps().firstOrNull { it.activityInfo.packageName == pkg }
-        val d = ri?.loadIcon(packageManager)
+        // At 256 px from the sharpest icon the app ships: at the TV's own xhdpi most icons are 96 px
+        // and looked soft on a big 4K screen (issue #17).
+        val d = ri?.let { sharp(pkg, it.activityInfo.iconResource) } ?: ri?.loadIcon(packageManager)
             ?: try { packageManager.getApplicationIcon(pkg) } catch (e: Exception) { return null }
-        val size = 128 * BuildConfig.ICON_RENDER_SCALE
-        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        d.setBounds(0, 0, size, size)
+        val bmp = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
+        d.setBounds(0, 0, 256, 256)
         d.draw(Canvas(bmp))
         val bytes = ByteArrayOutputStream().also { bmp.compress(Bitmap.CompressFormat.PNG, 100, it); bmp.recycle() }.toByteArray()
         icons[pkg] = bytes
@@ -890,7 +899,7 @@ class MainActivity : Activity() {
             typeface = Typeface.create("sans-serif-condensed", Typeface.BOLD)
         })
         column.addView(TextView(this).apply {
-            text = "Apps"
+            text = "The bridge isn't answering, so shows and picks are hidden. Your apps still work."
             setTextColor(CREAM_2)
             textSize = 17f
             setPadding(0, px(4), 0, px(18))
@@ -986,6 +995,7 @@ class MainActivity : Activity() {
         private const val OFFLINE_RETRY_MS = 60_000L   // looking for the bridge while the saved copy shows
         private const val OFFLINE_HOST = "home.tvos.invalid"
         private const val BUNDLED = "www/tv"   // the built-in copy, in the app's assets
+        private const val SLOW_MS = 2_500L
         private const val PICK_PHOTOS = 41
         private const val MATCH_W = ViewGroup.LayoutParams.MATCH_PARENT
         private val MATCH = FrameLayout.LayoutParams(MATCH_W, MATCH_W)

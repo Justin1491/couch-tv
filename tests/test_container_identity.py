@@ -1,11 +1,12 @@
 """Integration check against the fictitious-TV local smoke container only."""
 import json
+import os
 import subprocess
 import unittest
 
 
 class ContainerIdentityTests(unittest.TestCase):
-    container = "couch-tv-setup-check"
+    container = os.environ.get("COUCH_TEST_CONTAINER", "couch-tv-setup-check")
 
     def fingerprint(self):
         command = """import sys,hashlib,json;sys.path.insert(0,'/app/bridge');import tv;from pathlib import Path

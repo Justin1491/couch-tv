@@ -139,6 +139,8 @@ class PreviewHandler(SimpleHTTPRequestHandler):
             if script.count(original) != 1:
                 self.send_error(500, "Night scene definition changed; preview needs review")
                 return
+            # The historical Lanczos candidate has its own 4K files, without @2x names.
+            script = script.replace("var HI_RES =", "var HI_RES = false &&")
             body = script.replace(original, 'photo: "night-4k-test/scene-night", fg: true, glass: true').encode()
             content_type = "text/javascript"
         else:

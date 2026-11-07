@@ -1,5 +1,10 @@
 # Reversible Night and icon test on the TCL
 
+> Historical experiment: the isolated Android visual-test app and the `visualTest` /
+> `iconRenderScale` build switches were retired during the v0.6 integration. Normal
+> builds now use upstream’s adaptive 4K backgrounds and sharp 256px icons. The local
+> browser comparisons remain available. No installed TV app was removed in this task.
+
 The owner authorized a physical-TV test on 2026-11-01. The target is the
 owner-reported TCL 85QM850G, 85 inches. The existing authorized ADB connection
 reports Android 11, model `Smart TV Pro`, physical display surface 1920 × 1080

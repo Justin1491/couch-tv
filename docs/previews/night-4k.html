@@ -20,7 +20,7 @@
   button { background: #262a36; border: 1px solid #636879; border-radius: 8px; color: white; padding: 10px 18px; cursor: pointer; }
   button[aria-pressed="true"] { background: #a8dfcf; color: #101116; }
   .crop { height: 300px; border-radius: 12px; background-size: 3840px 2160px; background-position: -1660px -640px; background-repeat: no-repeat; }
-  .original { background-image: url('../../tv-home/web/backgrounds/scene-night.jpg'); }
+  .original { background-image: url('../../tv-home/web/backgrounds/scene-night@2x.jpg'); }
   .candidate { background-image: url('../../tv-home/web/backgrounds/night-4k-test/scene-night.jpg'); }
   .single { grid-template-columns: 1fr; }
   .single figure[hidden] { display: none; }
@@ -29,7 +29,7 @@
 <main>
   <div class="tag">Local preview only · TCL 85QM850G · 85-inch display</div>
   <h1>Same Night scene. A careful 4K test.</h1>
-  <p>The original is untouched. The candidate enlarges all three layers from 1920 × 1080 to
+  <p>The baseline uses upstream’s 4K Night assets. The historical candidate enlarges all three layers from 1920 × 1080 to
     3840 × 2160 with Lanczos resizing. It preserves the artwork and clock placement;
     it adds no AI-generated detail. Icons are unchanged in this first experiment.</p>
   <div aria-label="Comparison layout">
@@ -39,7 +39,7 @@
   </div>
   <div class="pair" id="scenes">
     <figure data-version="original">
-      <figcaption>Original · 1080p assets</figcaption>
+      <figcaption>Upstream · automatic 4K assets</figcaption>
       <div class="frame"><iframe title="Original Night dashboard" src="../../tv-home/web/index.html?mock=1&amp;reset=1&amp;scenes=night&amp;scene=night&amp;clock=24h&amp;people=0"></iframe></div>
     </figure>
     <figure data-version="candidate">
@@ -48,13 +48,12 @@
     </figure>
   </div>
   <h2>Mountain detail at 4K pixel scale</h2>
-  <p>Both crops use the same position and scale. The original is enlarged by the browser;
-    the candidate was resized in advance. Full-scene previews above are reduced to fit this page.</p>
+  <p>Both crops use the same position and scale. Both versions use 4K assets; the candidate keeps the earlier Lanczos experiment. Full-scene previews above are reduced to fit this page.</p>
   <div class="pair">
-    <figure><figcaption>Original, enlarged to fill 4K</figcaption><div class="crop original" role="img" aria-label="Original mountain detail"></div></figure>
+    <figure><figcaption>Upstream 4K Night</figcaption><div class="crop original" role="img" aria-label="Original mountain detail"></div></figure>
     <figure><figcaption>4K Lanczos resize</figcaption><div class="crop candidate" role="img" aria-label="Resized mountain detail"></div></figure>
   </div>
-  <p><a href="../../tv-home/web/backgrounds/scene-night.jpg">Open original image</a> ·
+  <p><a href="../../tv-home/web/backgrounds/scene-night@2x.jpg">Open upstream 4K image</a> ·
     <a href="../../tv-home/web/backgrounds/night-4k-test/scene-night.jpg">Open 4K image</a></p>
   <p><a href="icons-2x.html">Compare higher-resolution icons separately</a></p>
   <p>This comparison runs the real dashboard with synthetic sample data in 3840 × 2160 browser

@@ -38,6 +38,68 @@ class NightPreviewTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join()
 
+    def test_upstream_4k_selection_and_glass_preserve_the_home(self):
+        for width, dpr, natural in ((1920, 1, 1920), (1920, 2, 3840), (3840, 1, 3840)):
+            with self.subTest(width=width, dpr=dpr):
+                context = self.browser.new_context(viewport={"width": width, "height": width * 9 // 16},
+                                                   device_scale_factor=dpr)
+                try:
+                    page = context.new_page()
+                    from test_web_home import NATIVE
+                    page.add_init_script(NATIVE)
+                    errors, missing = [], []
+                    page.on("pageerror", lambda error: errors.append(str(error)))
+                    page.on("response", lambda response: missing.append(response.url) if response.status >= 400 else None)
+                    page.route("https://**/*", lambda route: route.abort())
+                    page.route("**/config.js", lambda route: route.fulfill(content_type="text/javascript", body=
+                        'window.COUCH_CONFIG={people:[],home:{look:"night",scenes:["night"],glass:"lite"}};'))
+                    page.goto(self.url + "/tv-home/web/index.html?offline=1")
+                    page.locator("#grid img").first.wait_for(state="visible")
+                    page.wait_for_function("document.querySelector('.scene.on .sbg').naturalWidth > 0 && "
+                                           "document.querySelector('.scene.on .fg').naturalWidth > 0")
+                    self.assertEqual(page.locator(".scene.on .sbg").evaluate("el => el.naturalWidth"), natural)
+                    self.assertEqual(page.locator(".scene.on .fg").evaluate("el => el.naturalWidth"), natural)
+                    self.assertTrue(page.locator("html").evaluate("el => el.classList.contains('glass-lite')"))
+                    self.assertFalse(errors, errors)
+                    self.assertFalse(missing, missing)
+                finally:
+                    context.close()
+
+    def test_video_background_native_pause_and_resume_hooks(self):
+        import base64
+        from test_web_home import NATIVE
+        page = self.browser.new_page(viewport={"width": 1920, "height": 1080})
+        self.addCleanup(page.close)
+        # Make a tiny valid clip in Chromium, so the actual media lifecycle is exercised.
+        clip = page.evaluate("""async () => {
+            const canvas = document.createElement('canvas'); canvas.width=64; canvas.height=64;
+            const stream = canvas.captureStream(10), chunks = [];
+            const recorder = new MediaRecorder(stream, {mimeType:'video/webm'});
+            const done = new Promise(resolve => { recorder.onstop = resolve; });
+            recorder.ondataavailable = event => chunks.push(event.data);
+            recorder.start(); canvas.getContext('2d').fillRect(0,0,64,64);
+            await new Promise(resolve => setTimeout(resolve, 200)); recorder.stop(); await done;
+            stream.getTracks().forEach(track => track.stop());
+            const bytes = new Uint8Array(await new Blob(chunks).arrayBuffer());
+            return btoa(String.fromCharCode(...bytes));
+        }""")
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.add_init_script(NATIVE)
+        page.route("https://**/*", lambda route: route.abort())
+        page.route("https://video.example.org/test.webm", lambda route: route.fulfill(
+            content_type="video/webm", body=base64.b64decode(clip)))
+        page.route("**/config.js", lambda route: route.fulfill(content_type="text/javascript", body=
+            'window.COUCH_CONFIG={people:[],home:{look:"night",scenes:["night"],video_url:"https://video.example.org/test.webm"}};'))
+        page.goto(self.url + "/tv-home/web/index.html?offline=1")
+        page.wait_for_function("document.documentElement.classList.contains('has-video')")
+        self.assertFalse(page.locator("#bgvid").evaluate("el => el.paused"))
+        page.evaluate("window.tv.pause()")
+        self.assertTrue(page.locator("#bgvid").evaluate("el => el.paused"))
+        page.evaluate("window.tv.resume()")
+        page.wait_for_function("!document.getElementById('bgvid').paused")
+        self.assertFalse(errors, errors)
+
     def test_layer_integrity(self):
         preview.check()
 
@@ -111,7 +173,7 @@ class NightPreviewTests(unittest.TestCase):
         self.assertEqual(urlopen(self.url + "/tv-home/web/app.js").read(), source)
         candidate = urlopen(self.url + "/candidate/tv-home/web/app.js").read()
         self.assertEqual(candidate, source.replace(b'photo: "scene-night", fg: true, glass: true',
-            b'photo: "night-4k-test/scene-night", fg: true, glass: true'))
+            b'photo: "night-4k-test/scene-night", fg: true, glass: true').replace(b"var HI_RES =", b"var HI_RES = false &&"))
         with self.assertRaises(HTTPError) as caught:
             urlopen(Request(self.url + "/config.json", method="HEAD"))
         self.assertEqual(caught.exception.code, 405)
@@ -146,7 +208,7 @@ class NightPreviewTests(unittest.TestCase):
         original, candidate = page.frames[1:]
         self.assertEqual(original.evaluate("innerWidth"), 3840)
         self.assertEqual(candidate.evaluate("innerWidth"), 3840)
-        for child, natural in ((original, 1920), (candidate, 3840)):
+        for child, natural in ((original, 3840), (candidate, 3840)):
             self.assertEqual(child.locator(".scene.on .sbg").evaluate("el => el.naturalWidth"), natural)
             self.assertEqual(child.locator(".scene.on .fg").evaluate("el => el.naturalWidth"), natural)
         geometry = """() => ['.scene.on .sbg', '.scene.on .fg', '.scene.on .gclock',

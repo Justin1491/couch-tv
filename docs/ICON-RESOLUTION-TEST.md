@@ -1,5 +1,10 @@
 # Icon rendering experiment
 
+> Historical experiment: the isolated Android visual-test app and the `visualTest` /
+> `iconRenderScale` build switches were retired during the v0.6 integration. Normal
+> builds now use upstream’s adaptive 4K backgrounds and sharp 256px icons. The local
+> browser comparisons remain available. No installed TV app was removed in this task.
+
 For the TCL 85QM850G (85 inches), the launcher has an opt-in build flag:
 `-PiconRenderScale=2`. The default is `1` and retains existing dimensions.
 No TV installation is part of this experiment.

@@ -58,10 +58,11 @@ BRIDGE = {"host": "your-computer.local", "port": 5400, "fallback_hosts": [], **(
 CLIENT_NAME = CONFIG.get("client_name", "Couch TV bridge")
 
 # The languages the TV home and the phone remote speak (tv-home/web/i18n.js, remote/src/i18n.js).
-LANGUAGES = ("en", "es", "es-MX", "it")
+LANGUAGES = ("en", "es", "es-MX", "it", "de")
 # Where shows stream (JustWatch) and what the prompts call the country: "country" in config.json.
-# Without it: the country of the home's language, where it has one of its own (Italian: IT), else AU.
-_LANGUAGE_COUNTRY = {"it": "IT"}
+# Without it: the country of the home's language, where it has one of its own (Italian: IT,
+# German: DE), else AU.
+_LANGUAGE_COUNTRY = {"it": "IT", "de": "DE"}
 _language = CONFIG["home"].get("language") if isinstance(CONFIG.get("home"), dict) else None
 COUNTRY = str(CONFIG.get("country") or _LANGUAGE_COUNTRY.get(str(_language)) or "AU").upper()
 _COUNTRY_NAMES = {
@@ -247,7 +248,7 @@ def _home(h):
     }
     # Only when config.json gives them. Without "language" the TV home speaks the TV's own language
     # (English if it is not one of LANGUAGES), and without "clock" it uses that language's usual
-    # clock (24 hour in Italian, else 12 hour). Home settings on the TV win over both.
+    # clock (24 hour in Italian and German, else 12 hour). Home settings on the TV win over both.
     clock = str(h.get("clock") or "").lower()
     if clock in ("12h", "24h"):
         out["clock"] = clock
@@ -257,6 +258,13 @@ def _home(h):
     # or manual (only "Check for updates now"). Without it the TV home asks once on screen.
     if h.get("updates") in ("notify", "manual"):
         out["updates"] = h["updates"]
+    # Glass panels (on, or lite: no blur for slower TVs) and a looping video background, a link to
+    # an MP4. Both off unless config.json or Home settings on the TV switches them on.
+    if h.get("glass") in ("off", "on", "lite"):
+        out["glass"] = h["glass"]
+    vid = h.get("video_url")
+    if isinstance(vid, str) and re.match(r"https?://", vid) and len(vid) <= 2000:
+        out["video_url"] = vid
     return out
 
 

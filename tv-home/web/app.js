@@ -27,9 +27,13 @@
   // read in readConfig() once the page starts (mock.js fills them in for previews). See docs/CONFIG.md.
   var CFG = {}, HOME = {}, TVCFG = {}, QUICK = [];
   var WXCFG = { lat: -33.8688, lon: 151.2093, place: "Sydney", timezone: "Australia/Sydney" };
-  var QUICK_ALL = ["sleep", "picture", "look", "input"];
+  var QUICK_ALL = ["sleep", "picture", "look", "input", "bluetooth", "network"];
+  var ON_TV = false;   // served by the on-TV app (config "mode"), which can open the TV's own settings screens
   // The look: ?theme= for a preview, then Home settings (or the Look button) on this TV, then home.look.
   var THEME = "night", NIGHT = true, CLOCK24 = false;
+  // Glass panels ("off", "on", or "lite": no blur, for slower TVs) and the video background, from
+  // Home settings, then home.glass and home.video_url. Both are off unless someone switches them on.
+  var GLASS = "off", VIDEO_ON = false, VIDEO_URL = "";
   // Home settings made on this TV with the gear tile (see "home settings" below). They win over
   // config.js. ST is the saved object; the rest are read from it in readConfig().
   var ST = {}, WX_SHOW = true, WX_F = false, WX_EVERY = 30, HIDDEN_TV = [];
@@ -51,7 +55,7 @@
 
   // Default order: YouTube, then Netflix, then the rest the way a household reaches for them.
   var APP_ORDER = [
-    "com.google.android.youtube.tv", "com.netflix.ninja", "au.net.abc.iview", "com.disney.disneyplus",
+    "com.google.android.youtube.tv", "com.amazon.firetv.youtube", "com.netflix.ninja", "au.net.abc.iview", "com.disney.disneyplus",
     "au.com.stan.and", "au.com.streamotion.ares.tv", "com.amazon.amazonvideo.livingroom",
     "com.sbs.ondemand.tv", "com.apple.atve.androidtv.appletv", "com.cbs.ca", "au.com.ninenow.ctv",
     "com.swm.live", "au.com.tenplay", "au.com.kayosports.tv", "au.com.foxtel.atv", "com.wbd.stream",
@@ -87,6 +91,8 @@
     gear: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
     look: '<svg viewBox="0 0 24 24"><rect x="2.5" y="4.5" width="19" height="15" rx="3"/><path d="M2.5 16l5.5-5.5 4.5 4.5 3-3 6 6"/><circle cx="16.5" cy="8.8" r="1.6"/></svg>',
     input: '<svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="2.5"/><path d="M8 21h8M12 7.5v6M9.5 11l2.5 2.5 2.5-2.5"/></svg>',
+    bluetooth: '<svg viewBox="0 0 24 24"><path d="M6.5 7.5l11 9-5.5 4.5v-18l5.5 4.5-11 9"/></svg>',
+    network: '<svg viewBox="0 0 24 24"><path d="M2.5 9a14 14 0 0 1 19 0M5.7 12.5a9.5 9.5 0 0 1 12.6 0M8.9 16a4.8 4.8 0 0 1 6.2 0"/><circle cx="12" cy="19.3" r="1"/></svg>',
     store: '<svg viewBox="0 0 24 24"><path d="M5 8h14l-1.2 11.2a2 2 0 0 1-2 1.8H8.2a2 2 0 0 1-2-1.8z"/><path d="M9 10.5V7a3 3 0 0 1 6 0v3.5"/></svg>',
     check: '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
     updown: '<svg viewBox="0 0 24 24"><path d="M8 9.5l4-4 4 4M8 14.5l4 4 4-4"/></svg>',
@@ -155,6 +161,7 @@
   function readConfig() {
     CFG = window.COUCH_CONFIG || {};
     HOME = CFG.home || {};
+    ON_TV = CFG.mode === "on-tv";
     ST = loadSettings();
     // the language: Home settings, then config.json, then the TV's own language if the home speaks it
     if (window.I18N) window.I18N.set(ST.lang || HOME.language || window.I18N.device());
@@ -173,6 +180,12 @@
     if (THEME !== "classic") THEME = "night";
     NIGHT = THEME === "night";
     document.documentElement.classList.toggle("theme-night", NIGHT);
+    GLASS = glassSetting();
+    document.documentElement.classList.toggle("glass", GLASS !== "off");
+    document.documentElement.classList.toggle("glass-lite", GLASS === "lite");
+    // a link set in Home settings wins over home.video_url; one from config.json alone means on
+    VIDEO_URL = typeof ST.video_url === "string" ? ST.video_url : typeof HOME.video_url === "string" ? HOME.video_url : "";
+    VIDEO_ON = !!VIDEO_URL && (typeof ST.video === "boolean" ? ST.video : true);
     GRID_COLS = NIGHT ? 12 : 8;
     DOCK_APPS = Math.max(1, Math.min(10, parseInt(HOME.dock_size, 10) || 10));
     if (smartOn()) DOCK_APPS = Math.min(DOCK_APPS, 9);   // the Smart home tile takes one place in the dock
@@ -194,7 +207,8 @@
     newApps = kept("tvhome.apps.new") || [];
   }
   function lookSetting() { return ST.look || kept("tvhome.look") || HOME.look || "night"; }
-  // no clock in Home settings or config.json: the one usual for the language (24 hour in Italian)
+  function glassSetting() { var g = ST.glass || HOME.glass; return g === "on" || g === "lite" ? g : "off"; }
+  // no clock in Home settings or config.json: the one usual for the language (24 hour in Italian and German)
   function clock24() { return (ST.clock || HOME.clock || (window.I18N ? window.I18N.clock() : "12h")) === "24h"; }
 
   // ---------------- helpers ----------------
@@ -262,6 +276,13 @@
     { file: "vang-vieng-sunset", place: "Vang Vieng, Laos", by: "Basile Morin" }
   ];
   var PHOTO_MS = 90000;
+
+  // A 4K screen gets the 4K copies of the built-in pictures (the same names with @2x added before
+  // the extension). The
+  // page is laid out at 1920x1080 but drawn at devicePixelRatio 2 there, so the 1080 files were
+  // stretched and looked soft (couch-tv#8, a UHD LG). Your own scenes in mine/ have no 4K copy.
+  var HI_RES = (window.devicePixelRatio || 1) * window.innerWidth >= 3000;
+  function bgPath(name, ext, builtIn) { return "backgrounds/" + name + (HI_RES && builtIn !== false ? "@2x" : "") + ext; }
   var photo = 0, photoTimer = null, bgShown = null, bgLayer = 0, bgTicket = 0;
 
   function photoForHour(h) {   // sunrise in the morning, green by day, sunsets in the evening
@@ -301,7 +322,7 @@
   function showPhoto() {
     if (NIGHT) { $("place").textContent = ""; return; }   // the scenes carry their own photos
     var list = classicPhotos(), p = list[photo % list.length];
-    setBg(p.src || "backgrounds/" + p.file + ".jpg", false);
+    setBg(p.src || bgPath(p.file, ".jpg"), false);
     $("place").textContent = (p.key ? t(p.key) : p.place) + (p.by ? "  ·  " + t("photo_by", { by: p.by }) : "");
   }
 
@@ -464,8 +485,8 @@
   function readyScene(i) {
     var s = SCENES[i], el = sceneEls[i];
     if (!el.classList.contains("ready")) {
-      el.querySelector(".sbg").src = s.src || "backgrounds/" + s.photo + ".jpg";
-      if (s.fg) el.querySelector(".fg").src = "backgrounds/" + s.photo + "-fg.webp";
+      el.querySelector(".sbg").src = s.src || bgPath(s.photo, ".jpg", !s.mine);
+      if (s.fg) el.querySelector(".fg").src = bgPath(s.photo + "-fg", ".webp", !s.mine);
       el.classList.add("ready");
     }
     drawClocks(el, s, glassShown);
@@ -495,6 +516,37 @@
     glassShown = hm;
     sceneEls.forEach(function (el, i) { if (el.classList.contains("ready")) drawClocks(el, SCENES[i], hm); });
   }
+
+  // ---------------- the video background (Home settings, Look; home.video_url) ----------------
+  // A muted clip that loops in place of the photo, in both looks. The photo stays until the clip
+  // really plays, and comes back if it fails or has not started within 20 s. It pauses while the
+  // home is not on screen (the launcher calls tv.pause, and the page's own visibility).
+  var vidTimer = null;
+  function startVideo() {
+    var v = $("bgvid"), root = document.documentElement;
+    if (!VIDEO_ON) return;
+    if (v.getAttribute("src") !== VIDEO_URL) {
+      root.classList.remove("has-video");
+      v.onplaying = function () { clearTimeout(vidTimer); root.classList.add("has-video"); };
+      v.onerror = stopVideo;
+      v.src = VIDEO_URL;
+      clearTimeout(vidTimer);
+      vidTimer = setTimeout(function () { if (!root.classList.contains("has-video")) stopVideo(); }, 20000);
+    }
+    var p = v.play();
+    if (p && p.catch) p.catch(function () {});
+  }
+  function stopVideo() {
+    var v = $("bgvid");
+    clearTimeout(vidTimer);
+    VIDEO_ON = false;
+    document.documentElement.classList.remove("has-video");
+    v.pause();
+    v.removeAttribute("src");
+    try { v.load(); } catch (e) {}
+  }
+  function pauseVideo() { var v = $("bgvid"); if (v.getAttribute("src")) v.pause(); }
+  document.addEventListener("visibilitychange", function () { if (document.hidden) pauseVideo(); else startVideo(); });
 
   function showScene(i) {
     var prev = scene;
@@ -620,6 +672,7 @@
       if (q === "picture") return !OFFLINE && picShown;
       if (q === "look") return true;
       if (q === "input") return !OFFLINE || nativeInputs();
+      if (q === "bluetooth" || q === "network") return ON_TV && !OFFLINE;
       return false;
     });
   }
@@ -654,6 +707,8 @@
         el.innerHTML = ICONS.look + "<span>" + esc(NIGHT ? t("classic_look") : t("night_look")) + "</span>";
       } else if (q === "input") {
         el.innerHTML = ICONS.input + "<span>" + esc(t("input")) + "</span>";
+      } else if (q === "bluetooth" || q === "network") {
+        el.innerHTML = ICONS[q] + "<span>" + esc(t(q)) + "</span>";
       }
     });
     if (qi >= vis.length) qi = Math.max(0, vis.length - 1);
@@ -715,12 +770,17 @@
     api("POST", "/api/key", { key: "input" })
       .catch(function (e) { if (!native()) note(e.message); });
   }
+  // The TV's Bluetooth or network settings, opened by the on-TV app (Tv.openSettingsScreen).
+  function openSettingsScreen(which) {
+    api("POST", "/api/launch", { app: which }).catch(function (e) { note(e.message); });
+  }
   function quickAction() {
     var q = quickVisible()[qi];
     if (q === "sleep") openMenu();
     else if (q === "picture") togglePicture();
     else if (q === "look") toggleLook();
     else if (q === "input") openInputs();
+    else if (q === "bluetooth" || q === "network") openSettingsScreen(q);
   }
   function refreshQuick() {
     var jobs = [];
@@ -1664,6 +1724,27 @@
     rows.push({ kind: "cycle", key: "clock", label: t("clock"), value: CLOCK24 ? t("clock_24") : t("clock_12"), act: function () {
       CLOCK24 = !CLOCK24; ST.clock = CLOCK24 ? "24h" : "12h"; saveSettings(); glassShown = ""; clock();
     } });
+    // glass panels: off, on, on with no blur (for slower TVs)
+    rows.push(head(t("glass_head")));
+    rows.push({ kind: "cycle", key: "glass", label: t("glass"), value: GLASS === "lite" ? t("glass_lite") : GLASS === "on" ? t("on") : t("off"), act: function () {
+      GLASS = GLASS === "off" ? "on" : GLASS === "on" ? "lite" : "off"; ST.glass = GLASS; saveSettings();
+    } });
+    rows.push(info("glass-note", t("glass_note", { keep: t("keep_watching") })));
+    // the video background: its switch only once there is a link
+    rows.push(head(t("video_head")));
+    if (VIDEO_URL) {
+      var vidOn = typeof ST.video === "boolean" ? ST.video : true;
+      rows.push({ kind: "toggle", key: "video", label: t("video"), value: vidOn ? t("on") : t("off"), act: function () {
+        ST.video = !vidOn; saveSettings();
+      } });
+    }
+    rows.push({ kind: "input", key: "video-url", label: t("video_url"), sub: VIDEO_URL || t("video_none"), act: function () {
+      startTyping({ label: t("video_url_type"), value: VIDEO_URL, url: true, submit: setVideoUrl });
+    } });
+    if (VIDEO_URL) rows.push({ kind: "action", key: "video-rm", label: t("video_remove"), danger: true, act: function () {
+      ST.video_url = ""; VIDEO_URL = ""; ST.video = false; saveSettings();
+    } });
+    rows.push(info("video-note", t("video_note")));
     rows.push(head(t("photos_head")));
     if (canPick()) rows.push({ kind: "action", key: "photo-pick", label: t("photos_pick"), sub: t("photos_pick_sub"), act: pickPhotos });
     else rows.push(info("photo-nopick", t("photos_no_pick"), "", t("photos_no_pick_sub")));
@@ -1709,6 +1790,33 @@
     saveSettings();
     SET.msg = n === 1 ? t("photos_added") : t("photos_added_n", { n: n });
     if (zone === "settings") renderSettings();
+  }
+  // The video background's link: checked by loading it once (muted), like a photo's address.
+  function setVideoUrl(u) {
+    u = (u || "").trim();
+    if (!u) return;
+    // a computer at home (typed as its number, or a name ending in .local) is usually plain http
+    if (!/^https?:\/\//i.test(u)) u = (/^(\d+\.){3}\d+|^[^\/]+\.local\b/i.test(u) ? "http://" : "https://") + u;
+    SET.msg = t("video_checking");
+    var v = document.createElement("video"), done = false;
+    var finish = function (good) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      v.removeAttribute("src");
+      if (good) {
+        ST.video_url = u; ST.video = true; VIDEO_URL = u;
+        saveSettings();
+        SET.msg = t("video_added");
+      } else SET.msg = t("video_bad");
+      if (zone === "settings") renderSettings();
+    };
+    var timer = setTimeout(function () { finish(false); }, 20000);
+    v.muted = true;
+    v.preload = "metadata";
+    v.onloadedmetadata = function () { finish(v.videoWidth > 0); };
+    v.onerror = function () { finish(false); };
+    v.src = u;
   }
   function addPhotoUrl(u) {
     u = (u || "").trim();
@@ -1906,6 +2014,7 @@
     if (q === "sleep" && OFFLINE) return t("quick_needs_bridge");
     if (q === "picture" && (OFFLINE || !picShown)) return t("quick_needs_picture");
     if (q === "input" && OFFLINE && !nativeInputs()) return t("quick_needs_inputs");
+    if ((q === "bluetooth" || q === "network") && (!ON_TV || OFFLINE)) return t("quick_needs_tv_app");
     return "";
   }
   function setQuick(list) { QUICK = list; ST.quick = list.slice(); saveSettings(); renderQuick(); }
@@ -2390,7 +2499,9 @@
   // the native side calls these
   // Home on the remote also re-reads the lists, so an order arranged on the phone shows straight away
   window.tv = { back: goHome, home: function () { if (zone === "settings") closeSettings(); else goHome(); refresh(); },
-    resume: function () { okReset(); refresh(); if (!OFFLINE) refreshQuick(); refreshWeather(); },
+    resume: function () { okReset(); refresh(); if (!OFFLINE) refreshQuick(); refreshWeather(); startVideo(); },
+    // an app is in front: the video background stops until the home is back
+    pause: pauseVideo,
     // the launcher's file picker has copied the chosen photos into its own storage (Home settings)
     photosAdded: function (names) { photosAdded(names); },
     // the launcher's updater has news (Updater.kt)
@@ -2419,6 +2530,7 @@
     }
     photo = photoForHour(new Date().getHours());
     showPhoto();
+    startVideo();
     photoTimer = setInterval(nextPhoto, PHOTO_MS);
     var cached = load();
     if (cached) { data.showsBy = cached.showsBy || data.showsBy; data.screens = cached.screens || []; data.order = cached.order || null; }
