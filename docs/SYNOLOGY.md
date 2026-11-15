@@ -30,8 +30,10 @@ Create a private `.env` beside the Compose file containing
 The default is loopback, so the bridge is not exposed to the LAN until an address
 is explicitly configured. Keep the existing NAS firewall restricting access to
 trusted LAN/VPN clients. Do not forward its port through the router. The upstream
-phone remote has no application password: clients allowed to reach it can control
-paired TVs. A guest network should not have access.
+phone remote allows clients that can reach it to control paired TVs unless an
+optional `bridge.pairing_key` is configured. An existing setup without a key keeps
+working. See [HOW-IT-WORKS.md](HOW-IT-WORKS.md) for upstream's pairing-key behavior.
+A guest network should not have access.
 
 ## Storage and startup
 
@@ -77,7 +79,9 @@ python bridge/pair_tv.py <tv-id> --code <fresh-code>
 Pairing updates the runtime configuration and stores certificates in the data
 volume. Restart the bridge after pairing. Before enabling ADB, review the exact
 launcher changes and [undo steps](UNINSTALL.md) with the user. Allow both the
-installation computer and the bridge before disabling the stock launcher.
+installation computer and the bridge before applying launcher changes. Current
+upstream keeps the TV's own home and setup apps enabled and uses its Home button
+watch where needed; do not restore the older disable-home behavior.
 
 Build the customized TV APK with a persistent private signing key. Install that
 build rather than an upstream release APK, which lacks these changes and is

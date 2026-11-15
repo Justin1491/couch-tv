@@ -69,7 +69,9 @@ switching the TV on.
 
 ## Before you start
 
-- The bridge running on a computer that stays on (README, option B).
+- The bridge running on a computer that stays on (README, option B). The app-only build
+  (`samsung/build.py` with no `--bridge`) needs no bridge. The bridge needs Python 3.11 or newer;
+  building the app alone ran on Python 3.9 (reported on an M1 Mac with the Mac's own Python).
 - The free **Apps2Samsung** tool: its command line, `apps2samsung-cli` (version 3, comes with the
   desktop app). It installs a `.wgt` app and signs it with **your own** Samsung certificate.
   Samsung's own Tizen Studio does the same job if you already have it.
@@ -88,6 +90,38 @@ switching the TV on.
    install the app (the bridge computer). Press OK.
 4. **Restart the TV**: hold the power button until the TV switches off and on again (a short press
    only sends it to standby or Art Mode).
+
+**2022 and newer (the One UI home):** typing 12345 on the Apps screen may do nothing. Scroll to the bottom of
+the Apps tab and open **App Settings**: the code box opens from there (reported on a 2022 Q60B, #53).
+
+**The Frame's slim remote has no number keys, and 12345 on it did nothing on a 2025 Frame.** The
+on-screen number pad on the Apps screen did not open the Developer Mode box either. What worked
+(reported by retr04ctive on a 2025 Frame, QN65LS03F, Tizen 9.0):
+
+1. Do "Tell the bridge about the TV" (further down) first: add the TV to `config.json` with `"open_on_power_on": false` (so the hook
+   does not fight you), and restart the bridge.
+2. Open **Apps** on the TV. From the computer, send the keys through the bridge, one at a time:
+   `curl -X POST http://<bridge computer's address>:5400/api/key -H 'Content-Type: application/json' -d '{"key":"1","tv":"<tv id>"}'`
+   then `2`, `3`, `4`, `5` (the bridge already knows the digit keys). Leave off `"tv"` if there is one TV.
+3. The first keys are eaten by the "Allow Couch TV bridge to connect?" prompt ("Allow the remote", below). Press
+   **Allow** on the TV, then send 1 to 5 again.
+
+**A 2025 Samsung OLED (S85F, Tizen 9.0), reported by Thesaudidrifter.** Four things differ:
+
+- On the 2025 UI, **Apps** is in the side menu, and the app store page is what takes the code.
+- Number keys sent through the bridge reached the TV (they typed into the Apps search box) but did
+  not open the Developer Mode box. Type the code by hand.
+- In the Developer Mode box, type the computer's address **without leading zeros**: type each
+  group as it is (a group of "1" is just 1) and press Right to move to the next. Padding the groups
+  with zeros (001 for 1) is saved padded, which the TV does not treat as the host, and
+  `apps2samsung-cli` stops with "IP Mismatch" or "Connection reset by peer". To check what was
+  stored, open `http://<tv address>:8001/api/v2/` and read `developerIP`.
+- `POST /api/text` does not type into that field (it does type into the Apps search box).
+
+**"Developer Mode looks right but the TV's install service is not running yet"** (the install port,
+26101, stays closed after enabling Developer Mode, a hold power restart or a one minute unplug).
+What fixed it on that Frame: Settings, Support, **Software Update**, then another one minute
+unplug of the power cable. After that `apps2samsung-cli tv <tv address>` said ready.
 
 Check from the computer:
 
@@ -116,7 +150,13 @@ apps2samsung-cli install build/samsung/CouchTV.wgt --tv <tv address>
 ```
 
 The first time, a browser opens for the Samsung account sign-in. After that the certificate is kept
-on the computer and later installs need nothing. The app appears on the TV's app row as
+on the computer and later installs need nothing.
+
+**Bridge computer with no screen or browser (a headless server or VM)?** `apps2samsung-cli cert
+--prepare` prints a sign-in URL that ends at `http://localhost:4794/signin/callback`, on the bridge
+computer. From the computer you are sitting at, run `ssh -L 4794:localhost:4794 <bridge computer>`,
+leave it open, and open the printed URL in your own browser. The callback then reaches the bridge
+computer and the certificate is made there. The app appears on the TV's app row as
 **Couch TV** and opens.
 
 ### 4. Tell the bridge about the TV
@@ -139,6 +179,10 @@ General, External Device Manager, Device Connection Manager, Device List, and al
 
 Reading the TV (power, which app is open, the volume) needs no Allow. Keys and opening apps do.
 
+Before couch-tv is installed, the bridge's `"home"` key cannot be used to bring up the prompt,
+because it opens couch-tv. Send `smart_hub` instead (Samsung's KEY_HOME). If the first attempt
+says "Connection reset by peer" on port 8002, try again and the prompt shows.
+
 ### 6. Check it
 
 - Switch the TV off and on with its own remote. Within a few seconds couch-tv opens.
@@ -149,11 +193,25 @@ Reading the TV (power, which app is open, the volume) needs no Allow. Keys and o
 
 `bridge/samsung.py` asks the TV every 2 seconds, on its own network ports, which need no pairing:
 
-- `http://<tv>:8001/api/v2/` gives the power state (`on` or `standby`).
+- `http://<tv>:8001/api/v2/` gives the power state (`on` or `standby`). This is the only thing read
+  on a timer.
 - `http://<tv>:8001/api/v2/applications/<app id>` says whether that app is on screen. Samsung
   removed the call that lists every app, so the bridge asks about each app it knows
-  (`TIZEN` in `bridge/apps.py`) every 30 minutes and remembers which are installed.
+  (`TIZEN` in `bridge/apps.py`) every 30 minutes and remembers which are installed. Which app is
+  in front is read only when something needs it: the hook, a launch waiting for its app, or a
+  title being opened.
+- The volume and mute (UPnP, port 9197) are read once when the bridge first sees the TV on, and
+  once after each volume or mute key.
 - A Frame also keeps the art channel open, which says when Art Mode goes on and off.
+
+**Why nothing else is on a timer (#53, reported on a 2022 Q60B).** Reading the volume every few
+seconds, and asking about every installed app every other tick (about ten requests every 4
+seconds), made that TV flash its volume bar and blip mute every 5 to 10 minutes. With the bridge off
+for 30 minutes there were none, and with only the power read running for 32 minutes there were
+none. What this costs: the phone remote's live "what's on" line on a Samsung (the app in front) is
+now only as fresh as the last time something asked, and it is blank when that was more than 30
+seconds ago. It was not reliable before either (some apps never report that they are on screen).
+Volume changed with the TV's own remote shows on the phone after the next volume key from the phone.
 
 When the TV goes from off (or Art Mode) to on, the bridge waits a moment, and if no app is on
 screen (the TV is on live TV, an HDMI input or Samsung's menu) it opens couch-tv with the TV's REST call
@@ -161,6 +219,15 @@ screen (the TV is on live TV, an HDMI input or Samsung's menu) it opens couch-tv
 it is left alone. Anything the phone remote or Claude just asked for also wins: the hook stays quiet
 for 20 seconds after any command, except a power press, so turning the TV on from the phone also
 lands on couch-tv. `"open_on_power_on": false` in `config.json` turns the hook off.
+
+The REST launch is tried up to three times, a second apart, because the first call just after
+power on can fail with "Server disconnected". The log then says whether couch-tv really came
+forward a few seconds later. A very quick off and on can go unseen: the TV may never report
+`standby`, so the hook has nothing to react to. A real standby (the TV leaves the network a few
+seconds after power off) is seen.
+
+**With no computer on at all:** Samsung's **Autorun Last App** setting reopens couch-tv when the TV
+comes on, if couch-tv was the last app used (reported by philehaynes on a 2023 CU8500, Tizen 9.0).
 
 Netflix and YouTube titles open through DIAL (port 8080, the protocol phones use to cast), which
 needs no pairing.
@@ -175,6 +242,20 @@ with the operation `http://samsung.com/appcontrol/operation/eden_resume` and
 bridge brings it forward first. Then it presses OK by timing (`BLIND` in `bridge/samsung.py`):
 on a fresh start once for the profile screen, then for Play. Only Netflix's timing has been checked
 on a real TV; if an app ends up on the show's page without playing, press OK.
+
+## A Sky box on an HDMI input
+
+Add the port to this TV's entry in `config.json`, then rebuild and reinstall the app:
+
+```json
+{ "id": "lounge", "name": "Lounge", "kind": "samsung", "ip": "<tv address>", "sky_hdmi": 2 }
+```
+
+A Sky tile then comes first in the dock. OK shows that input full screen, in front of couch-tv. The
+Sky remote talks to the box as usual, and Back on the Samsung remote returns to couch-tv. Turning
+the TV off and on comes back to couch-tv when Autorun Last App is on, because couch-tv is still the
+last app. Without `sky_hdmi` there is no tile. Tested on a 2023 CU8500 (Tizen 9.0) with a Sky Q Mini
+on HDMI 2, reported by philehaynes.
 
 ## Turning it on
 

@@ -18,12 +18,12 @@ for the pairing that showed it, so never reuse one from an earlier run. Makes a 
 this computer on first use (bridge/data/cert.pem), then marks the TV "paired": true in config.json.
 
 Step 2, ADB (optional, for opening shows by deep link, screenshots, picture mode, now playing):
-Developer options and USB debugging on, plus Network debugging if the TV has that switch (README
+Developer options and USB debugging on, plus Network debugging if the TV has that switch (docs/SETUP.md
 step 1), then re-run with --adb: the TV asks
 "Allow USB debugging?"; tick "Always allow from this computer" and press OK. The port is the TV's
 "adb_port" in config.json, else ADB_PORT, else 5555.
 
-Afterwards restart the bridge (see README.md).
+Afterwards restart the bridge (see docs/SETUP.md, step 5).
 """
 import asyncio
 import os
@@ -36,6 +36,9 @@ from androidtvremote2 import AndroidTVRemote
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 import config
+# A fresh copy has no bridge/data/ yet, and writing the certificate there failed with
+# FileNotFoundError (issue #23). Private to this user: it holds the pairing key.
+os.makedirs(config.DATA, mode=0o700, exist_ok=True)
 CERT, KEY = os.path.join(config.DATA, "cert.pem"), os.path.join(config.DATA, "key.pem")
 WAIT_S = 600
 
@@ -119,6 +122,7 @@ def give_code(cfg, code):
 async def pair(cfg):
     code_file, waiting, result = files(cfg["id"])
     host = resolve(cfg)
+    os.makedirs(config.DATA, exist_ok=True)  # a fresh clone has no bridge/data yet
     remote = AndroidTVRemote(config.CLIENT_NAME, CERT, KEY, host)
     await remote.async_generate_cert_if_missing()
     name, mac = await remote.async_get_name_and_mac()
@@ -184,7 +188,7 @@ async def adb_check(cfg):
         ok = await dev.connect(rsa_keys=[signer], auth_timeout_s=60)
     except Exception as e:
         print(f"ADB did not connect on port {port} ({type(e).__name__}). Is USB debugging on (and Network debugging, if the TV has it)? "
-              "TVs with only Wireless debugging: see README step 1.")
+              "TVs with only Wireless debugging: see docs/SETUP.md step 1.")
         return False
     if ok:
         print("ADB works:", (await dev.shell("getprop ro.product.model")).strip())

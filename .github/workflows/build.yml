@@ -16,6 +16,59 @@ permissions:
   contents: read
 
 jobs:
+  synology:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build the Synology image
+        run: docker build -t couch-tv-bridge:ci .
+
+      - name: Start an isolated bridge with a synthetic unpaired TV
+        run: |
+          mkdir -p "$RUNNER_TEMP/couch-seed"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          config = json.loads(Path('config.example.json').read_text())
+          config['tvs'] = [{'id': 'test', 'name': 'Test TV', 'host': 'tv.example.org', 'paired': False, 'wake_on_lan': False}]
+          config['default_tv'] = 'test'
+          config['bridge'] = {'host': '127.0.0.1', 'port': 5400}
+          Path(os.environ['RUNNER_TEMP'], 'couch-seed/config.json').write_text(json.dumps(config))
+          PY
+          docker run -d --name couch-tv-ci-check -p 127.0.0.1:15400:5400 \
+            -e BIND_HOST=0.0.0.0 -e PORT=5400 \
+            -v "$RUNNER_TEMP/couch-seed:/seed:ro" -v /config -v /data \
+            --read-only --tmpfs /tmp:size=32m,mode=1777 --cap-drop ALL \
+            --security-opt no-new-privileges couch-tv-bridge:ci
+          python - <<'PY'
+          import time, urllib.request
+          for attempt in range(30):
+              try:
+                  with urllib.request.urlopen('http://127.0.0.1:15400/api/health', timeout=1):
+                      break
+              except OSError:
+                  time.sleep(1)
+          else:
+              raise SystemExit('test bridge did not start')
+          PY
+
+      - name: Mobile icon delivery and persistent container identity
+        env:
+          COUCH_TEST_URL: http://127.0.0.1:15400/
+          COUCH_TEST_CONTAINER: couch-tv-ci-check
+        run: |
+          python -m unittest discover -s tests -p test_mobile_site.py
+          python -m unittest discover -s tests -p test_container_identity.py
+
+      - name: Stop the test bridge
+        if: always()
+        run: docker rm -fv couch-tv-ci-check
+
   build:
     runs-on: ubuntu-24.04
     steps:
@@ -35,7 +88,7 @@ jobs:
           python-version: "3.11"
 
       - name: Bridge and tools compile
-        run: python -m py_compile bridge/*.py scripts/*.py tv-home/tools/*.py
+        run: python -m py_compile bridge/*.py scripts/*.py tv-home/tools/*.py sync/sync.py
 
       - name: Bridge setup and offline weather tests
         run: |
@@ -46,7 +99,7 @@ jobs:
 
       - name: Shell scripts parse
         # each with the shell its first line names (privacy-scan.sh is bash, the rest plain sh)
-        run: for f in scripts/*.sh tv-home/tools/*.sh; do if head -1 "$f" | grep -q bash; then bash -n "$f"; else sh -n "$f"; fi; done
+        run: for f in scripts/*.sh tv-home/tools/*.sh sync/*.sh; do if head -1 "$f" | grep -q bash; then bash -n "$f"; else sh -n "$f"; fi; done
 
       - name: Android platform 34
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0" > /dev/null
@@ -65,6 +118,9 @@ jobs:
 
       - name: Launcher loading and offline cache tests
         run: tv-home/android/gradlew -p tv-home/android --no-daemon testDebugUnitTest
+
+      - name: On-TV app unit tests
+        run: tv-home/android/gradlew -p on-tv/android --no-daemon -q testDebugUnitTest
 
       - name: Signing fingerprints
         run: for f in dist/*.apk; do echo "$f"; "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs "$f" | grep -i "SHA-256"; done

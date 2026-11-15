@@ -3,6 +3,7 @@ config.json
 config/
 .serena/
 .superpowers/
+sync-delays.json
 .env
 *.pem
 *.key
@@ -44,3 +45,20 @@ platform-tools/
 # Your own home scenes (tv-home/tools/make-scene.py writes them here), and the originals
 tv-home/web/backgrounds/mine/*
 !tv-home/web/backgrounds/mine/.gitkeep
+
+# Your own app logos for the Samsung home (samsung/build.py)
+samsung/my-logos/
+
+# LG Developer Mode key for the Docker example (examples/docker)
+lg-key/
+vega/src/bridge.json
+
+# Couch TV for Apple TV: your own signing settings (team id, bundle id) and Xcode's per user files
+tvos/Config/Signing.mine.xcconfig
+xcuserdata/
+*.xcuserstate
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.cer
+*.certSigningRequest

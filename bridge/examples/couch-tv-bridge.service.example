@@ -4,6 +4,9 @@
 #   loginctl enable-linger $USER      # so it keeps running when you are logged out
 # systemd starts programs with a bare PATH, so the Claude ask (optional) needs CLAUDE_BIN: set it to
 # what `command -v claude` prints. Never add ANTHROPIC_API_KEY: the ask runs on your Claude plan.
+# Running it as a system service instead (/etc/systemd/system, with User=)? Also set
+# Environment=HOME=/home/<you>, or LG's ares-launch crashes and the daily Developer Mode Extend
+# fails with only "Node.js v20.x" as the error (seen on a Debian 13 container, PR #201).
 [Unit]
 Description=Couch TV bridge
 After=network-online.target
@@ -16,6 +19,9 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=CLAUDE_BIN=%h/.local/bin/claude
 ExecStart=%h/couch-tv/.venv/bin/python %h/couch-tv/bridge/server.py
 Restart=always
+# The bridge can take a long time to exit on SIGTERM (one Debian setup waited the default 90 s
+# before systemd killed it). Harmless, but this makes a restart quick.
+TimeoutStopSec=10
 RestartSec=5
 
 [Install]

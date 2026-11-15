@@ -31,7 +31,7 @@ object Apps {
         TvApp("sbs-on-demand", "SBS On Demand", "com.sbs.ondemand.tv", "#FFCC00", listOf("sbsondemand"), "jw",
             useWeb = Regex("(https://www\\.sbs\\.com\\.au/ondemand/[^/]+/[^/?#]+)"), cold = "always"),
         TvApp("disney-plus", "Disney+", "com.disney.disneyplus", "#113CCF", listOf("disneyplus"), "jw"),
-        TvApp("prime-video", "Prime Video", "com.amazon.amazonvideo.livingroom", "#00A8E1", listOf("amazonprimevideo", "amazon"), "jw"),
+        TvApp("prime-video", "Prime Video", "com.amazon.amazonvideo.livingroom", "#00A8E1", listOf("amazonprimevideo", "amazonprime", "amazonprimevideowithads", "amazon"), "jw"),
         TvApp("apple-tv", "Apple TV", "com.apple.atve.androidtv.appletv", "#111111", listOf("appletvplus", "itunes"), "jw"),
         TvApp("paramount-plus", "Paramount+", "com.cbs.ca", "#0064FF", listOf("paramountplus", "paramountpluspremium", "paramountplusbasicwithads"), "jw"),
         TvApp("kayo", "Kayo", "au.com.kayosports.tv", "#00E676"),
@@ -44,6 +44,8 @@ object Apps {
         TvApp("twitch", "Twitch", "tv.twitch.android.app", "#9146FF"),
         TvApp("spotify", "Spotify", "com.spotify.tv.android", "#1DB954"),
         TvApp("plex", "Plex", "com.plexapp.android", "#E5A00D"),
+        // Nuvio, a Stremio-style player. com.nuvio.app is its Play Store build.
+        TvApp("nuvio", "Nuvio", "com.nuvio.tv", "#111111", alt = listOf("com.nuvio.app")),
         TvApp("moonlight", "Moonlight", "com.limelight", "#2A2A2A"),
         TvApp("settings", "Settings", "com.android.tv.settings", "#5F6368"),
         TvApp("home", "Home", BuildConfig.APPLICATION_ID, "#000000"),

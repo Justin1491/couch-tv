@@ -41,6 +41,10 @@ class WebHomeTests(unittest.TestCase):
         self.errors = []
         self.page.on("pageerror", lambda error: self.errors.append(str(error)))
         self.page.add_init_script(NATIVE)
+        self.page.route("**/ambient-weather.js", lambda route: route.fulfill(
+            content_type="text/javascript", body=(ROOT / "tv-home/web/ambient-weather.js").read_text() +
+            "\n(function(){var set=window.AmbientWeather.setWeather;"
+            "window.AmbientWeather.setWeather=function(w,p){window.ambientReading=w;set(w,p);};})();"))
         self.page.route("**/api.open-meteo.com/**", lambda route: route.fulfill(
             content_type="application/json", body=json.dumps({"current": {
                 "temperature_2m": 24, "weather_code": 0, "is_day": 1}})))
@@ -63,6 +67,7 @@ class WebHomeTests(unittest.TestCase):
     def test_weather_survives_failed_refresh_then_expires(self):
         self.page.goto(URL + "?offline=1")
         self.page.locator(".wx").wait_for()
+        self.page.wait_for_function("window.ambientReading && window.ambientReading.temp === 24")
         self.page.route("**/api.open-meteo.com/**", lambda route: route.abort())
         self.page.reload()
         self.page.locator(".wx").wait_for()
@@ -74,6 +79,7 @@ class WebHomeTests(unittest.TestCase):
         self.page.reload()
         self.page.locator("#grid").wait_for()
         self.assertEqual(self.page.locator(".wx").count(), 0)
+        self.assertIsNone(self.page.evaluate("window.ambientReading"))
         self.assertEqual(self.page.locator("#status").inner_text(), "")
         self.assertFalse(self.errors, self.errors)
 

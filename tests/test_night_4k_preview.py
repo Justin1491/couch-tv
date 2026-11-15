@@ -110,17 +110,32 @@ class NightPreviewTests(unittest.TestCase):
         self.check_connected_continue([{"id": "bridge-1", "title": "Bridge sample episode"}],
                                       "Bridge sample episode")
 
-    def check_connected_continue(self, bridge_items, expected):
+    def test_native_fallback_honors_dismissed_shows_and_excluded_apps(self):
+        self.check_connected_continue([], "Allowed episode", native_items=[
+            {"id": "dismissed", "title": "Dismissed episode", "kind": "watchnext"},
+            {"id": "excluded", "title": "Excluded episode", "kind": "watchnext", "package": "test.excluded"},
+            {"id": "allowed", "title": "Allowed episode", "kind": "watchnext"},
+        ], home={"skip_watch_next": ["test.excluded"]}, dismissed=["dismissed"],
+            absent=["Dismissed episode", "Excluded episode"])
+
+    def test_keep_watching_off_suppresses_native_fallback(self):
+        self.check_connected_continue([], None, home={"keep_watching": False})
+
+    def check_connected_continue(self, bridge_items, expected, native_items=None, home=None,
+                                 dismissed=None, absent=()):
         from test_web_home import NATIVE
         page = self.browser.new_page(viewport={"width": 1920, "height": 1080})
         self.addCleanup(page.close)
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
-        page.add_init_script(NATIVE + "\nwindow.TVOS.watchNext = () => JSON.stringify(["
-            "{id:'native-1',title:'TV sample episode',kind:'watchnext'}]);")
         import json
+        rows = native_items if native_items is not None else [
+            {"id": "native-1", "title": "TV sample episode", "kind": "watchnext"}]
+        page.add_init_script(NATIVE + "\nwindow.TVOS.watchNext = () => JSON.stringify(" + json.dumps(rows) + ");" +
+            "localStorage.setItem('native:tvhome.dismissed_shows'," + json.dumps(json.dumps(dismissed or [])) + ");")
+        config = {"people": [], "home": {"look": "night", "scenes": ["night"], **(home or {})}}
         page.route("**/config.js", lambda route: route.fulfill(content_type="text/javascript", body=
-            'window.COUCH_CONFIG={people:[],home:{look:"night",scenes:["night"]}};'))
+            'window.COUCH_CONFIG=' + json.dumps(config) + ';'))
         def api(route):
             route.fulfill(content_type="application/json", body=json.dumps({"ok": True,
                 "people": [], "items": bridge_items, "screens": [], "apps": []}))
@@ -128,8 +143,14 @@ class NightPreviewTests(unittest.TestCase):
         page.route("https://**/*", lambda route: route.abort())
         page.goto(self.url + "/tv-home/web/index.html")
         page.locator("#grid").get_by_text("Netflix", exact=True).wait_for(state="attached")
-        page.wait_for_function("!document.getElementById('shelf-section').classList.contains('empty')", timeout=4000)
-        self.assertIn(expected, page.locator("#shelf").inner_text())
+        if expected is None:
+            self.assertEqual(page.locator("#shelf .card").count(), 0)
+            self.assertTrue(page.locator("html").evaluate("el => el.classList.contains('kw-off')"))
+        else:
+            page.wait_for_function("!document.getElementById('shelf-section').classList.contains('empty')", timeout=4000)
+            self.assertIn(expected, page.locator("#shelf").inner_text())
+        for title in absent:
+            self.assertNotIn(title, page.locator("#shelf").inner_text())
         self.assertFalse(errors, errors)
 
     def test_icon_source_sizes_and_browser_comparison(self):

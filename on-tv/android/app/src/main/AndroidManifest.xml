@@ -18,6 +18,12 @@
          draw over apps lets it open apps from the background with plain intents;
          write secure settings lets it switch wireless debugging back on after a reboot. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Keep watching: read Android's Watch Next rows ("Continue watching"), which name a play when
+         the app's own media session gives no title (Netflix sends none, Prime only its own name,
+         issue #23). Granted over the app's own ADB once it connects; Android 9 and older use the
+         TV provider's permission instead. Read only: the app never writes these rows. -->
+    <uses-permission android:name="android.permission.READ_TV_LISTINGS" />
+    <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA" />
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
 
     <!-- Fire TV home takeover without the TV's own ADB (some Fire OS builds block it): lets the
@@ -26,6 +32,26 @@
 
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+    <!-- See the TV's own home screens, so the Home button watch can tell a Home press from any other screen (#98). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+        <!-- Web links (custom cards with a url): Android 11+ hides browser packages otherwise. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="http" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+        <package android:name="com.amazon.tv.launcher" />
+        <package android:name="com.google.android.apps.tv.launcherx" />
+        <package android:name="com.google.android.tvlauncher" />
+    </queries>
 
     <application
         android:name=".App"

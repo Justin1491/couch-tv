@@ -47,8 +47,9 @@ class UnpairedTVTests(unittest.IsolatedAsyncioTestCase):
             response = await server.h_apps(make_mocked_request("GET", "/api/apps"))
             self.assertEqual(response.status, 200)
             await asyncio.sleep(0)
-            with self.assertRaises(tv.TVUnavailable):
+            with self.assertRaises(tv.TVUnavailable) as caught:
                 await server.power_on()
+            self.assertEqual(caught.exception.key, "err_not_paired_yet")
             keys.assert_not_called()
             transport.assert_not_called()
 

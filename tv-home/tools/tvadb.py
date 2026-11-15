@@ -6,12 +6,17 @@ Usage (TV_IP=<tv address> [ADB_PORT=5555] .venv/bin/python tv-home/tools/tvadb.p
   tvadb.py ping                     connect and say so (exit 1 if the TV cannot be reached)
   tvadb.py shell "<command>"        run a shell command, print the output
   tvadb.py install <file.apk>       install or update an app
+  tvadb.py put <file> <dest>        copy a file onto the TV (its folder made first), md5 checked
   tvadb.py shot <out.png>           screenshot of the TV
   tvadb.py keys KEY [KEY ...]       press remote keys (e.g. DPAD_DOWN ENTER HOME), 0.4 s apart
 
 TVADB_TRIES (3) and TVADB_TIMEOUT (120 s, for `shell`) tune the retries.
 ADB_PORT is 5555 unless set: the fixed port of "Network debugging", of USB debugging on TVs that
 open it with USB debugging alone, or of `adb tcpip 5555`.
+For paired Wireless debugging, set TV_ADB_BINARY to Google's adb executable and ADB_PORT to
+the current connection port. Pair and connect with that executable first; this mode reuses its
+transport without opening plaintext port 5555. See docs/EPSON.md. No adb-shell dependency
+is needed for this mode of tvadb.py (other tools may still require it).
 
 Every ADB call reconnects and tries again (3 tries) when the TV stops answering, which some TVs do
 for a few seconds at a time. `install` first copies the app in 64 KB parts with adb push. Some TVs
@@ -25,12 +30,15 @@ import base64
 import hashlib
 import io
 import os
+import subprocess
 import sys
+import tempfile
 import time
 
 TMP = "/data/local/tmp/tvhome"
 PART = 64 * 1024        # adb push part size
 B64_STEP = 32 * 1024    # base64 characters per shell command (a multiple of 4)
+B64_UNPACK = 64         # parts decoded per shell command: 2 MiB of base64, so a slow TV never hits the timeout
 TRIES = max(1, int(os.environ.get("TVADB_TRIES") or 3))
 SHELL_TIMEOUT = int(os.environ.get("TVADB_TIMEOUT") or 120)
 
@@ -45,6 +53,21 @@ def say(msg):
 
 
 def connect():
+    # Google's client supports paired Wireless debugging (TLS); adb_shell does not.
+    # Opt in explicitly so existing installations keep their permission/key behaviour.
+    if os.environ.get("TV_ADB_BINARY"):
+        ip = os.environ.get("TV_IP") or fail("set TV_IP to the address of the TV")
+        try:
+            port = int(os.environ.get("ADB_PORT") or "")
+            if not 1 <= port <= 65535:
+                raise ValueError
+        except ValueError:
+            fail("set ADB_PORT to the Wireless debugging connection port (1 to 65535), not the pairing port")
+        host = ip if ":" not in ip or ip.startswith("[") else f"[{ip}]"
+        dev = NativeAdb(os.environ["TV_ADB_BINARY"], f"{host}:{port}")
+        if dev.run(["get-state"]).strip() != "device":
+            raise ConnectionError("the selected TV is not connected; pair and connect it with adb first")
+        return dev
     try:
         from adb_shell.adb_device import AdbDeviceTcp
         from adb_shell.auth.sign_pythonrsa import PythonRSASigner
@@ -71,6 +94,48 @@ def connect():
             "computer allowed? Check with: .venv/bin/python scripts/check-tv.py <tv address>. "
             "See docs/UNINSTALL.md for the TV-remote-only way.") from e
     return dev
+
+
+class NativeAdb:
+    """Adapter for an already paired/connected Google adb transport.
+
+    Never changes the TV's debugging mode or disconnects other adb users.
+    TV_ADB_BINARY is an executable path, not a shell command.
+    """
+
+    def __init__(self, binary, serial):
+        self.binary, self.serial = binary, serial
+
+    def run(self, args, timeout_s=60):
+        try:
+            result = subprocess.run(
+                [self.binary, "-s", self.serial, *args],
+                stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                timeout=timeout_s, check=True,
+            )
+            return result.stdout
+        except (OSError, subprocess.SubprocessError) as e:
+            raise ConnectionError(
+                f"Google adb failed ({type(e).__name__}); check TV_ADB_BINARY and the paired "
+                "connection with adb devices. Wireless debugging ports can change after restart."
+            ) from e
+
+    def shell(self, cmd, timeout_s=60, read_timeout_s=None):
+        # -T: no terminal; -x: preserve adb_shell's combined output/exit behaviour.
+        return self.run(["shell", "-T", "-x", cmd], timeout_s)
+
+    def push(self, source, dest, transport_timeout_s=20, read_timeout_s=20):
+        # adb_shell accepts a byte stream; Google's client needs a local file.
+        with tempfile.NamedTemporaryFile(prefix="tvadb-") as part:
+            part.write(source.read())
+            part.flush()
+            return self.run(["push", part.name, dest], max(transport_timeout_s, read_timeout_s))
+
+    def pull(self, source, dest):
+        return self.run(["pull", source, os.fspath(dest)], SHELL_TIMEOUT)
+
+    def close(self):
+        pass  # the shared adb server and its paired transports belong to the caller
 
 
 class Tv:
@@ -139,21 +204,27 @@ def copy_by_push(tv, data, dest):
 
 def copy_by_base64(tv, data, dest):
     """Base64 text through plain shell commands, one file per chunk so a retried chunk is never
-    written twice, then decoded on the TV."""
+    written twice, then decoded on the TV in pieces of about 2 MB (one decode of a 48 MB app
+    outlasted the shell timeout on a slow Fire TV, issue #50)."""
     b64 = base64.b64encode(data).decode()
-    tv.shell(f"rm -rf {TMP}.b64 {dest}; mkdir -p {TMP}.b64")
+    tv.shell(f"rm -rf {TMP}.b64 {dest}; mkdir -p {TMP}.b64; : > {dest}")
     total = (len(b64) + B64_STEP - 1) // B64_STEP
     for n, i in enumerate(range(0, len(b64), B64_STEP), 1):
         tv.shell(f"echo -n '{b64[i:i + B64_STEP]}' > {TMP}.b64/{n:05d}")
         if n % 25 == 0 or n == total:
             say(f"copied {n}/{total} parts")
-    tv.shell(f"cat {TMP}.b64/* | base64 -d > {dest}; rm -rf {TMP}.b64", 120)
+    raw_piece = B64_UNPACK * B64_STEP // 4 * 3   # what one piece decodes to
+    for p in range(0, total, B64_UNPACK):
+        files = " ".join(f"{TMP}.b64/{n:05d}" for n in range(p + 1, min(p + B64_UNPACK, total) + 1))
+        # appends only when the file is exactly the size the earlier pieces make, so a retried piece is never written twice
+        tv.shell(f'[ "$(wc -c < {dest})" = {p // B64_UNPACK * raw_piece} ] && cat {files} | base64 -d >> {dest}', 120)
+    tv.shell(f"rm -rf {TMP}.b64")
 
 
-def install(tv, path):
-    data = open(path, "rb").read()
+def copy_checked(tv, data, dest, what, then):
+    """Copies data to dest on the TV with adb push, or the base64 way when push stalls, and checks
+    the copy with md5. A damaged copy is removed and stops the tool with one plain line."""
     want = hashlib.md5(data).hexdigest()
-    dest = TMP + ".apk"
     ok = False
     if os.environ.get("FORCE_B64") != "1":
         try:
@@ -169,7 +240,20 @@ def install(tv, path):
         got = md5_on_tv(tv, dest)
         if got != want:
             tv.shell(f"rm -f {dest}")
-            fail(f"the app reached the TV damaged (md5 {got or 'unknown'}, wanted {want}), not installing")
+            fail(f"{what} reached the TV damaged (md5 {got or 'unknown'}, wanted {want}), {then}")
+
+
+def put(tv, path, dest):
+    """A file onto the TV at dest (its folder made first), checked like an app: your own app icons."""
+    folder = dest.rsplit("/", 1)[0]
+    tv.shell(f"mkdir -p {folder}")
+    copy_checked(tv, open(path, "rb").read(), dest, os.path.basename(path), "not copied")
+    print(dest)
+
+
+def install(tv, path):
+    dest = TMP + ".apk"
+    copy_checked(tv, open(path, "rb").read(), dest, "the app", "not installing")
     out = tv.shell(f"pm install -r {dest}; rm -f {dest}", 180)
     print(out, end="")
     if "Success" not in out:
@@ -178,7 +262,7 @@ def install(tv, path):
 
 def main():
     if len(sys.argv) < 2:
-        fail("usage: tvadb.py ping | shell CMD | install APK | shot OUT.png | keys KEY ...")
+        fail("usage: tvadb.py ping | shell CMD | install APK | put FILE DEST | shot OUT.png | keys KEY ...")
     cmd, args = sys.argv[1], sys.argv[2:]
     try:
         tv = Tv(connect)
@@ -191,6 +275,8 @@ def main():
             print(tv.shell(args[0], SHELL_TIMEOUT), end="")
         elif cmd == "install":
             install(tv, args[0])
+        elif cmd == "put":
+            put(tv, args[0], args[1])
         elif cmd == "shot":
             tv.shell("screencap -p /sdcard/tv-shot.png")
             tv._retry("pull", lambda: tv.dev.pull("/sdcard/tv-shot.png", args[0]))

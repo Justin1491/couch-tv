@@ -4,14 +4,15 @@ Same shape as tv.TV, so the server, the phone remote and the Claude ask work unc
 in the Android package names of apps.py (Netflix is still "com.netflix.ninja" here), and apps.TIZEN
 turns them into Samsung app ids. Four channels, all on the home network:
 
-- REST on port 8001 (no pairing): power state, and whether each app is on screen.
+- REST on port 8001 (no pairing): power state, and whether an app is on screen (asked for only
+  when something needs it, never on a timer).
 - The network remote, a websocket on 8002 (the TV asks "Allow" once, then gives a token, kept in
   data/samsung-<id>-token.txt): keys, typing, and opening apps.
 - DIAL on 8080 (no pairing): Netflix and YouTube links that open a title, not just the app.
-- UPnP on 9197 (no pairing): the volume level and mute.
+- UPnP on 9197 (no pairing): the volume level and mute, read once after a volume or mute key.
 A Frame TV also gets the art channel (8002, no prompt), to tell Art Mode from watching TV.
 
-The hook: a watcher checks the TV every 2 seconds. When the TV comes on (from standby, or a Frame
+The hook: a watcher checks the TV every 2 seconds (one request, GET /api/v2/). When the TV comes on (from standby, or a Frame
 leaving Art Mode) and no app is on screen, it opens the couch-tv app (samsung/ in this repo). That
 is how a Samsung "looks for" couch-tv every time it is switched on. It is an app that opens itself,
 not a true home screen: Samsung's own Home button still opens Samsung's menu.
@@ -34,11 +35,20 @@ import aiohttp
 
 import apps
 import config
+import messages
 from tv import TVUnavailable
 
 # The couch-tv app's id on the TV (samsung/app/config.xml). "app_id" on the TV in config.json wins.
 COUCH_APP = "CouchTVApp.Home"
 HOME_PACKAGE = "app.couchtv.launcher"
+
+# What the TV last said is on screen is only believed this long: nothing refreshes it on a timer.
+VISIBLE_FRESH = 30
+
+# A TV that drops off Wi-Fi for a few seconds is not a TV that was switched off. A Samsung that is
+# switched off says PowerState "standby" before it leaves the network, so "off" is that, or gone
+# for this long (#53: a 20 second dropout opened couch-tv over a football game).
+GONE_MEANS_OFF = 120
 
 KEYS = {
     "up": "KEY_UP", "down": "KEY_DOWN", "left": "KEY_LEFT", "right": "KEY_RIGHT",
@@ -115,6 +125,9 @@ class SamsungTV:
         self.frame = False
         self.art_mode = None        # Frame only: True in Art Mode
         self.visible = None         # the Tizen id of the app on screen, None for TV/HDMI/menus
+        self._visible_at = 0.0      # when it was last read (only read when something needs it)
+        self._vol_task = None
+        self._gone_since = None     # when the TV stopped answering, None while it answers
         self.ids = {}               # Tizen id -> android-style package, for what is installed
         self._ids_checked = 0.0
         self._vol = {}
@@ -142,7 +155,9 @@ class SamsungTV:
 
     @property
     def current_package(self):
-        return self._package_of(self.visible) if self.connected else None
+        if not self.connected or time.monotonic() - self._visible_at > VISIBLE_FRESH:
+            return None
+        return self._package_of(self.visible)
 
     @property
     def volume(self):
@@ -162,7 +177,11 @@ class SamsungTV:
 
     def require(self):
         if not self.connected:
-            raise TVUnavailable(f"the {self.name.lower()} TV is not answering on the network")
+            raise TVUnavailable(
+                f"the {self.name.lower()} TV is not answering on the network",
+                key="err_driver_not_answering",
+                vars={"name": self.name.lower()},
+            )
 
     def can_deeplink(self, app):
         return app.get("id") in ("netflix", "youtube")
@@ -249,6 +268,13 @@ class SamsungTV:
         results = await asyncio.gather(*(self._app_state(t) for t in ids))
         return next((t for t, r in zip(ids, results) if r and r.get("visible")), None)
 
+    async def _front(self):
+        """Ask which app is on screen, now. One request per installed app, so only when something
+        needs the answer: a timed read of every app made some Samsungs blip their sound (#53)."""
+        self.visible = await self._read_visible()
+        self._visible_at = time.monotonic()
+        return self.visible
+
     @staticmethod
     def _soap(action, extra=""):
         return ('<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
@@ -286,6 +312,20 @@ class SamsungTV:
                 pass
         self._vol = out
 
+    def _volume_soon(self):
+        """Read the volume once, a moment after the last volume or mute key (a phone slider sends
+        many in a row). Never on a timer: the read can put the volume bar on screen."""
+        if self._vol_task is not None and not self._vol_task.done():
+            self._vol_task.cancel()
+
+        async def later():
+            await asyncio.sleep(0.6)
+            before = dict(self._vol)
+            await self._read_volume()
+            if self._vol != before:
+                self._changed()
+        self._vol_task = asyncio.create_task(later())
+
     # ---------- the watcher and the hook ----------
     async def start(self):
         self._tasks = [asyncio.create_task(self._watch())]
@@ -297,6 +337,10 @@ class SamsungTV:
             try:
                 before = (self.connected, self.power, self.art_mode, self.visible, self._vol.get("level"), self._vol.get("muted"))
                 self.connected = await self._read_device()
+                if self.connected:
+                    self._gone_since = None
+                elif self._gone_since is None:
+                    self._gone_since = time.monotonic()
                 if not self.connected and ticks % 30 == 0:
                     await self._resolve()   # it may have come back on a new address
                 if self.connected:
@@ -305,24 +349,27 @@ class SamsungTV:
                     await self.refresh_installed()
                     if self.power == "on" and self.frame and self.art_mode:
                         self.visible = None   # Art Mode: no app on screen
-                    elif self.power == "on":
-                        # one request per installed app, so every other tick (the hook reads its own)
-                        if ticks % 2 == 0:
-                            self.visible = await self._read_visible()
-                        if ticks % 3 == 0:
-                            await self._read_volume()
-                    else:
-                        self.visible = None
+                    elif self.power != "on":
+                        self.visible, self._vol_task = None, None
+                    elif self._vol_task is None:
+                        self._volume_soon()   # the one read that lets the phone show the level
+                    # Nothing else is read on a timer. Which app is in front is read when something
+                    # asks (front_package, the hook, open_title), the volume after a volume key.
                 else:
                     self.visible, self.art_mode = None, None
                     await self._ws_close()
                 on = self.is_on
                 if on and was_on is False:
+                    # a kept-alive connection from before standby can be dead: start fresh
+                    old, self._session = self._session, None
+                    if old is not None:
+                        asyncio.create_task(old.close())
                     asyncio.create_task(self._hook())
                 if on is not None:
                     was_on = on
-                elif not self.connected:
-                    was_on = False   # gone from the network counts as off
+                elif not self.connected and (was_on is None
+                                             or time.monotonic() - self._gone_since > GONE_MEANS_OFF):
+                    was_on = False   # gone from the network for a while counts as off
                 after = (self.connected, self.power, self.art_mode, self.visible, self._vol.get("level"), self._vol.get("muted"))
                 if after != before:
                     self._changed()
@@ -348,7 +395,10 @@ class SamsungTV:
             self._note("TV came on, left alone (a command is running)")
             return
         await asyncio.sleep(1.5)   # let the TV settle on whatever it opens by itself
-        front = await self._read_visible()
+        if time.monotonic() < self.quiet_until:   # a phone command landed while it settled
+            self._note("TV came on, left alone (a command is running)")
+            return
+        front = await self._front()
         if front == self.app_id:
             self._note("TV came on, couch-tv already open")
             return
@@ -356,8 +406,12 @@ class SamsungTV:
             self._note(f"TV came on in {self._package_of(front)}, left alone")
             return
         try:
-            await self._launch_tizen(self.app_id)
-            self._note("TV came on, opened couch-tv")
+            how = await self._launch_tizen(self.app_id)
+            await asyncio.sleep(3)
+            if await self._front() == self.app_id:
+                self._note(f"TV came on, opened couch-tv ({how})")
+            else:
+                self._note(f"TV came on, asked it to open couch-tv ({how}) but it is not on screen")
         except Exception as e:
             self._note(f"TV came on, could not open couch-tv: {e}")
 
@@ -432,7 +486,7 @@ class SamsungTV:
             while True:
                 msg = await asyncio.wait_for(ws.receive(), pairing_wait)
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    raise TVUnavailable("the TV closed the remote connection")
+                    raise TVUnavailable("the TV closed the remote connection", key="err_tv_closed_remote")
                 j = json.loads(msg.data)
                 if j.get("event") == "ms.channel.connect":
                     new = (j.get("data") or {}).get("token")
@@ -444,11 +498,17 @@ class SamsungTV:
                         self.log.info("the TV allowed the remote (token kept)")
                     break
                 if j.get("event") == "ms.channel.unauthorized":
-                    raise TVUnavailable("the TV said no to the remote: press Allow on the TV when it asks "
-                                        "(Settings, General, External Device Manager, Device Connection Manager)")
+                    raise TVUnavailable(
+                        "the TV said no to the remote: press Allow on the TV when it asks "
+                        "(Settings, General, External Device Manager, Device Connection Manager)",
+                        key="err_samsung_remote_refused",
+                    )
         except asyncio.TimeoutError:
             await ws.close()
-            raise TVUnavailable("the TV is waiting for someone to press Allow on its screen")
+            raise TVUnavailable(
+                "the TV is waiting for someone to press Allow on its screen",
+                key="err_samsung_remote_waiting_allow",
+            )
         except Exception:
             await ws.close()
             raise
@@ -492,7 +552,7 @@ class SamsungTV:
             return "couch-tv"
         code = resolve_key(name)
         if not code:
-            raise ValueError(f"unknown key: {name}")
+            raise messages.with_key(ValueError(f"unknown key: {name}"), "err_unknown_key", key=name)
         if hold:
             # A Frame: holding power switches it fully off (a press only goes to Art Mode).
             await self._key(code, "Press")
@@ -500,6 +560,8 @@ class SamsungTV:
             await self._key(code, "Release")
         else:
             await self._key(code)
+        if code in ("KEY_VOLUP", "KEY_VOLDOWN", "KEY_MUTE"):
+            self._volume_soon()
         return code
 
     async def text(self, text):
@@ -513,17 +575,23 @@ class SamsungTV:
         the remote's ed.apps.launch was ignored, for store apps and sideloaded ones alike, while
         the same TV took keys on that channel. The remote call stays as the fallback."""
         self.quiet_until = time.monotonic() + 20
-        try:
-            s = await self._http()
-            async with s.post(f"http://{self.ip}:8001/api/v2/applications/{quote(tizen_id)}",
-                              timeout=aiohttp.ClientTimeout(total=5)) as r:
-                if r.status == 200 and (await r.text()).strip() == "true":
-                    return
-        except Exception as e:
-            self.log.info("REST launch of %s failed: %s", tizen_id, e)
+        # Retry: just after the TV comes on, the first call can fail with "Server disconnected"
+        # (a kept-alive connection from before standby, or the REST server still starting).
+        for attempt in range(3):
+            try:
+                s = await self._http()
+                async with s.post(f"http://{self.ip}:8001/api/v2/applications/{quote(tizen_id)}",
+                                  timeout=aiohttp.ClientTimeout(total=5)) as r:
+                    if r.status == 200 and (await r.text()).strip() == "true":
+                        return "rest"
+                    break   # the TV answered and said no: go to the fallback
+            except Exception as e:
+                self.log.info("REST launch of %s failed (try %d): %s", tizen_id, attempt + 1, e)
+                await asyncio.sleep(1.0)
         await self._send({"method": "ms.channel.emit", "params": {
             "event": "ed.apps.launch", "to": "host",
             "data": {"appId": tizen_id, "action_type": "DEEP_LINK", "metaTag": meta}}})
+        return "remote"
 
     async def _dial(self, name, body):
         s = await self._http()
@@ -540,7 +608,11 @@ class SamsungTV:
         self.require()
         ids = self._candidates(package)
         if not ids:
-            raise ValueError(f"no Samsung app id known for {package}")
+            raise messages.with_key(
+                ValueError(f"no Samsung app id known for {package}"),
+                "err_samsung_no_app_id",
+                package=package,
+            )
         await self.refresh_installed()
         installed = [i for i in ids if i in self.ids or i == self.app_id]
         await self._launch_tizen((installed or ids)[0])
@@ -562,8 +634,17 @@ class SamsungTV:
         if app and app["id"] == "youtube" and youtube_id(uri):
             await self._dial("YouTube", f"v={youtube_id(uri)}")
             return "dial"
+        if "://" in uri and not pkg:
+            import custom_cards
+            link = custom_cards.web_url(uri)
+            if link:
+                await self._launch_tizen("org.tizen.browser", meta=link)
+                return "browser"
         if not pkg:
-            raise ValueError("Samsung TVs only open links for Netflix and YouTube")
+            raise messages.with_key(
+                ValueError("Samsung TVs only open links for Netflix and YouTube"),
+                "err_samsung_only_netflix_youtube",
+            )
         await self.launch_package(pkg)
         return "app"
 
@@ -604,7 +685,11 @@ class SamsungTV:
             return await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:
             self._tv_answers.pop(job["id"], None)
-            return {"ok": False, "error": "the couch-tv app on the TV did not answer"}
+            return {
+                "ok": False,
+                "error": "the couch-tv app on the TV did not answer",
+                **messages.error_fields("err_samsung_tv_app_timeout"),
+            }
 
     async def _installed_id(self, app, given):
         await self.refresh_installed()
@@ -623,7 +708,7 @@ class SamsungTV:
         state = await self._app_state(target) or {}
         cold = not state.get("running")
         # The app on the TV only runs while it is in front, so bring couch-tv forward first.
-        if self.visible != self.app_id:
+        if await self._front() != self.app_id:
             await self._launch_tizen(self.app_id)
             await asyncio.sleep(2.5)
         job = {"do": "appcontrol", "app": target, "data": data}
@@ -659,18 +744,30 @@ class SamsungTV:
     async def front_package(self):
         if not self.connected:
             return None
-        self.visible = await self._read_visible()
+        await self._front()
         return self.current_package
 
     async def wait_for_app(self, packages, timeout=8.0):
         packages = {p for p in packages if p}
-        end = time.monotonic() + timeout
+        start = time.monotonic()
+        end = start + timeout
         while time.monotonic() < end:
             front = await self.front_package()
             if front in packages:
                 return front
+            # Peacock and YouTube TV never report that they are on screen, only that they run
+            # (#53). When nothing reports visible, a candidate id running is the best answer there is.
+            if front is None and time.monotonic() - start >= 3:
+                running = await self._running_among(packages)
+                if running:
+                    return running
             await asyncio.sleep(0.7)
         return None
+
+    async def _running_among(self, packages):
+        pairs = [(tid, p) for p in sorted(packages) for tid in self._candidates(p)]
+        results = await asyncio.gather(*(self._app_state(t) for t, _ in pairs))
+        return next((p for (_, p), r in zip(pairs, results) if r and r.get("running")), None)
 
     async def installed_packages(self):
         if not self.connected:
@@ -686,10 +783,10 @@ class SamsungTV:
         return False
 
     async def adb(self, *args, **kw):
-        raise TVUnavailable("this is a Samsung TV: ADB tools are Android only")
+        raise TVUnavailable("this is a Samsung TV: ADB tools are Android only", key="err_samsung_adb_android_only")
 
     async def screenshot(self):
-        raise TVUnavailable("Samsung TVs do not give screenshots over the network")
+        raise TVUnavailable("Samsung TVs do not give screenshots over the network", key="err_samsung_no_screenshots")
 
     # ---------- power ----------
     async def port_open(self, port=8001, timeout=1.0):

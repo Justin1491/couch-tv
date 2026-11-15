@@ -144,11 +144,34 @@ class BridgeService : Service() {
         wifiLock = runCatching { wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "couchtv").apply { acquire() } }.getOrNull()
         multicast = runCatching { wm.createMulticastLock("couchtv-mdns").apply { setReferenceCounted(false); acquire() } }.getOrNull()
         startServer()
+        // Xiaomi: PatchWall opened itself whenever the screen came on (FireHome.onScreenOn checks the switch).
+        if (FireHome.isXiaomi) runCatching { registerReceiver(screenOn, android.content.IntentFilter(Intent.ACTION_SCREEN_ON)) }
         Now.start()
         Thread {
             runCatching { if (Adb.everAllowed || Adb.paired) Adb.ensure() }
+            reenableStockHome()
             FireHome.poke()   // Fire TV: keep this home on the Home key across reboots
         }.start()
+    }
+
+    /**
+     * couch-tv 0.10 and older switched off the TV's own home screens and setup wizard, which can leave
+     * a Google TV looping after a restart. Over the ADB connection this app already holds (nothing new
+     * is asked for), switch those three packages back on, once, only if installed and switched off.
+     * If ADB is not connected yet, the next start tries again.
+     */
+    private fun reenableStockHome() {
+        if (Store.bool("stock_home_reenabled") || !Adb.connected) return
+        runCatching {
+            val off = Adb.shell("pm list packages -d", 10_000).lines().map { it.removePrefix("package:").trim() }
+            for (p in listOf("com.google.android.apps.tv.launcherx", "com.google.android.tvlauncher", "com.google.android.tungsten.setupwraith")) {
+                if (p in off) {
+                    Adb.shell("pm enable $p", 10_000)
+                    Log.w("couchtv", "switched $p back on (couch-tv 0.10 and older had switched it off)")
+                }
+            }
+            Store.putBool("stock_home_reenabled", true)
+        }.onFailure { Log.w("couchtv", "stock home re-enable failed: ${it.message}") }
     }
 
     private fun startServer() {
@@ -161,7 +184,12 @@ class BridgeService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int { startServer(); return START_STICKY }
 
+    private val screenOn = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) { FireHome.onScreenOn() }
+    }
+
     override fun onDestroy() {
+        if (FireHome.isXiaomi) runCatching { unregisterReceiver(screenOn) }
         server?.stop(); server = null
         runCatching { wifiLock?.release() }; runCatching { multicast?.release() }
         super.onDestroy()
@@ -169,5 +197,9 @@ class BridgeService : Service() {
 }
 
 class BootReceiver : BroadcastReceiver() {
-    override fun onReceive(c: Context, i: Intent) { App.startService(c) }
+    override fun onReceive(c: Context, i: Intent) {
+        App.startService(c)
+        // Xiaomi with "Couch TV in PatchWall's place": after a restart too (the screen-on receiver is not running yet then).
+        if (i.action == Intent.ACTION_BOOT_COMPLETED) FireHome.onScreenOn()
+    }
 }

@@ -4,7 +4,7 @@ Written by [killy10o10](https://github.com/killy10o10/couch-tv), who runs couch-
 (`dev.couchtv.ontv`, option C) as the home screen of a
 **Fire TV Stick 4K (2nd gen, model AFTKM) on Fire OS 8.1.8.5 (Android 11)**. Everything below was
 done on that stick. Other Fire OS 7 and 8 sticks should behave the same; sticks on **Vega OS**
-cannot sideload apps at all.
+have no APKs or ADB: they use a different path ([FIRE-VEGA.md](FIRE-VEGA.md)).
 
 ![couch-tv on the Fire TV Stick](screens/firestick-home.jpg)
 
@@ -24,9 +24,16 @@ cannot sideload apps at all.
 | Survives a restart | Yes (the accessibility watcher stays on) |
 | Bluetooth button | Yes. If parental controls are on, Fire OS asks for the Prime Video PIN first |
 | Network button | Yes |
-| Phone remote | Opening apps works without ADB. Keys, typing and "what's playing" need the TV's own ADB (Connect ADB in the app) |
+| Phone remote | Opening apps works without ADB. Keys, typing and "what's playing" need the TV's own ADB (Connect ADB in the app), which current Fire OS blocks: `scripts/check-tv.py <tv address> --adb` says whether yours does, and points to option B (the computer bridge) for the full remote |
 | Keep watching | Only fills from shows started from the phone remote |
 | Amazon's YouTube app | Yes, shown and sorted as YouTube |
+
+**Keep watching with no computer (option A)** is Android's own Watch Next list, which couch-tv reads
+and nothing else. It shows only what the apps themselves put there. On Fire OS that has been seen
+to be Hotstar and not Netflix or Prime Video ([#183](https://github.com/Seagey/couch-tv/issues/183)):
+those apps may keep their "continue watching" for Amazon's home instead. That is not confirmed, and
+couch-tv has no other source for them without the bridge. With the bridge (option B), shows you
+start through couch-tv are remembered by the bridge itself.
 
 ## Install
 
@@ -48,12 +55,15 @@ network as the stick.
    ```
 5. **Open Couch TV** on the stick and press **Use as home screen**. Skip Connect ADB unless you
    want the phone remote's keys.
-6. **Two grants** so it can take the Home key back (they survive restarts):
+6. **Three grants** so it can take the Home key back (they survive restarts):
    ```sh
    adb -s <stick-ip>:5555 shell pm grant dev.couchtv.ontv android.permission.WRITE_SECURE_SETTINGS
    adb -s <stick-ip>:5555 shell appops set dev.couchtv.ontv SYSTEM_ALERT_WINDOW allow
+   adb -s <stick-ip>:5555 shell appops set dev.couchtv.ontv GET_USAGE_STATS allow
    ```
-   (On Fire OS 8.1.8.5 the second was already `allow` after install; running it does no harm.)
+   (On Fire OS 8.1.8.5 the second was already `allow` after install; running it does no harm. The
+   third is for Fire OS 6, where the accessibility watcher never connects and the app watches usage
+   events instead; on 7 and 8 it is simply not used.)
 7. **Press "Use as home screen" after the grants** (if it was already on, press it off and on
    again). The app switches its accessibility watcher on when that switch is pressed and at every
    boot, and it needs the grant to be there first. Check it took:
@@ -102,6 +112,9 @@ curl -X POST http://<stick-ip>:5400/api/pair -H 'Content-Type: application/json'
   switched on but does not always reconnect it after the app is updated (seen on 8.1.8.5). A
   restart reconnects it. To check: `adb shell dumpsys accessibility | grep "Bound services"`
   should list "Couch TV home watch".
+- **Prime Video crashes at boot if you switched it off.** With Prime Video (`com.amazon.firebat`)
+  disabled, Fire OS still starts it at boot and it crashes 2 to 3 times in the log. That is
+  Amazon's and harmless.
 - **The setup screen remembers which button had focus.** Count your D-pad presses from what is
   highlighted, not from the left: it is easy to press Forget phones by mistake.
 - **Weather defaults to Sydney** until you set a place in Home settings or through the API.

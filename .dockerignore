@@ -5,9 +5,16 @@
 !bridge/requirements.txt
 !bridge/import/
 !bridge/import/*.py
+!bridge/web/
+!bridge/web/**
 !tv-home/
 !tv-home/web/
 !tv-home/web/**
+!titan/
+!titan/index.html
+!lg/
+!lg/app/
+!lg/app/largeIcon.png
 !config.example.json
 !remote/
 !remote/package.json

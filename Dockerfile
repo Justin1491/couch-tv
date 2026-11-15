@@ -3,6 +3,7 @@ WORKDIR /src/remote
 COPY remote/package.json remote/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY remote/ ./
+COPY tv-home/web/clearicon.js /src/tv-home/web/clearicon.js
 RUN npm run build
 
 FROM python:3.11-slim-bookworm
@@ -17,6 +18,8 @@ RUN pip install --no-cache-dir -r bridge/requirements.txt \
     && mkdir /config /data && chown couch:couch /config /data
 COPY bridge/ ./bridge/
 COPY tv-home/web/ ./tv-home/web/
+COPY titan/ ./titan/
+COPY lg/app/largeIcon.png ./lg/app/largeIcon.png
 COPY config.example.json ./config.example.json
 COPY --from=remote /src/remote/dist ./remote/dist/
 USER 10001:10001
