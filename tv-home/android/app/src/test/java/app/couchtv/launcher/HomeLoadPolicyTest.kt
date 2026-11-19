@@ -21,6 +21,14 @@ class HomeLoadPolicyTest {
         assertFalse(p.expired(current))
     }
 
+    @Test fun missingOfflineRendererIsRecreatedBeforeWaitingForBridge() {
+        val p = HomeLoadPolicy()
+        assertTrue(p.needsLocalPage(standalone = false, offline = true, hasWebView = false))
+        assertFalse(p.needsLocalPage(standalone = false, offline = true, hasWebView = true))
+        assertFalse(p.needsLocalPage(standalone = false, offline = false, hasWebView = false))
+        assertTrue(p.needsLocalPage(standalone = true, offline = false, hasWebView = false))
+    }
+
     @Test fun recoveredServerIsOnlyConsumedAtHomeTransition() {
         val p = HomeLoadPolicy()
         p.found("http://server:5400")

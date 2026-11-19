@@ -26,6 +26,9 @@ class HomeLoadPolicy {
         return true
     }
 
+    fun needsLocalPage(standalone: Boolean, offline: Boolean, hasWebView: Boolean): Boolean =
+        if (offline) !hasWebView else standalone
+
     fun localShown() { loading = false; generation++ }
 
     fun found(base: String) { recovered = base; delay = 15000L }

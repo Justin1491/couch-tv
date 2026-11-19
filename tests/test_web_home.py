@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 import unittest
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 URL = os.environ.get("COUCH_TEST_URL", "http://127.0.0.1:15400/tv/")
 ROOT = Path(__file__).parents[1]
@@ -53,8 +53,11 @@ class WebHomeTests(unittest.TestCase):
         self.page.close()
 
     def test_offline_home_is_quiet_and_launches_apps_directly(self):
+        self.page.add_init_script(
+            "localStorage.setItem('native:tvhome.settings', JSON.stringify({s: {start_focus: 'apps'}}));"
+        )
         self.page.goto(URL + "?offline=1")
-        self.page.locator("#grid").get_by_text("Netflix", exact=True).wait_for(state="attached")
+        expect(self.page.locator("#grid .app.focus")).to_have_text("Netflix")
         self.assertEqual(self.page.locator("#status").inner_text(), "")
         self.assertTrue(self.page.locator("#time").inner_text())
         self.page.keyboard.press("Enter")

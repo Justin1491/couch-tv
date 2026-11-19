@@ -31,11 +31,13 @@
 # APK defaults to the one scripts/build-apk.sh builds. KEEP_SETUP is no longer needed: the setup
 # wizard always stays on.
 #
-# Privacy clean (Beta, opt in, docs/PRIVACY.md): PRIVACY=1 also switches off the known tracking, ad
+# Privacy clean (opt in, docs/PRIVACY.md): PRIVACY=1 also switches off the known tracking, ad
 # and ACR apps from privacy-list.txt that this TV has, through the same safety check and undo list
 # as EXTRA_OFF. Without PRIVACY=1 nothing about it changes.
 # Dry run: DRY_RUN=1 only lists what would be switched off and left on, and why. It installs
 # nothing, switches nothing off and writes no files. Without TV_IP it prints the privacy list.
+# Screen time (opt in): SCREEN_TIME=1 lets the home read Android's usage numbers for couch-tv Studio's
+# Screen time widget (usage access). They stay on the TV. undo.sh takes it back.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
@@ -192,8 +194,14 @@ echo "1/4  Installing the app"
 # Make couch-tv the chosen home and check the TV took it. On Google TV the Home key itself still
 # opens Google's home (it outranks the chosen one), and resolve-activity keeps naming Google's, so
 # the check asks for the chosen launcher instead; the Home button watch (step 3) does the rest.
-"$PY" "$T" shell "cmd package set-home-activity $HOME_ACT" > /dev/null
-NOW=$("$PY" "$T" shell "cmd shortcut get-default-launcher" | grep -m1 Launcher || true)
+# A TCL (Android 14) drops the chosen home for a moment after any install, so the first set right
+# after the install does not stick: set it again a few times before giving up.
+for try in 1 2 3 4 5; do
+  "$PY" "$T" shell "cmd package set-home-activity $HOME_ACT" > /dev/null
+  NOW=$("$PY" "$T" shell "cmd shortcut get-default-launcher" | grep -m1 Launcher || true)
+  case "$NOW" in *app.couchtv.launcher/*) break ;; esac
+  sleep 2
+done
 case "$NOW" in
   *app.couchtv.launcher/*) ;;
   *) echo "The TV did not take couch-tv as its home (it says: $NOW). Nothing was switched off."; exit 1 ;;
@@ -203,6 +211,11 @@ esac
 # The screensaver quick button cuts the screen timeout for a moment (its own screensaver refuses
 # apps), which needs "modify system settings".
 "$PY" "$T" shell "appops set app.couchtv.launcher WRITE_SETTINGS allow" > /dev/null 2>&1 || true
+# couch-tv Studio's Screen time widget reads Android's usage numbers: only with SCREEN_TIME=1.
+# Without it nothing changes (a switch made in the TV's own Usage access screen stays as it is).
+if [ "${SCREEN_TIME:-}" = 1 ]; then
+  "$PY" "$T" shell "appops set app.couchtv.launcher GET_USAGE_STATS allow" > /dev/null 2>&1 || true
+fi
 
 echo "2/4  Keeping the TV's own home and setup on"
 present=$("$PY" "$T" shell "pm list packages" | sed 's/package://')
@@ -280,6 +293,29 @@ if echo "$present" | grep -qx -E "com.google.android.apps.tv.launcherx|com.googl
   echo "     the Home button watch is on (the TV's own home may flash up, then couch-tv comes back)"
 fi
 
+# Remote buttons that open an app (home.app_keys in config.json, KeyWatch.kt): the TV hands such a
+# button to no app, so the accessibility service that sees keys first is switched on, only when the
+# list is not empty. Any other accessibility service already on is kept.
+if [ "$DRY" != 1 ] && "$PY" -c "import sys; sys.path.insert(0, '$ROOT/bridge'); import config; sys.exit(0 if config._home(config.CONFIG.get('home') or {}).get('app_keys') else 1)" 2>/dev/null; then
+  KEYWATCH=app.couchtv.launcher/.KeyWatch
+  "$PY" "$T" shell "pm grant app.couchtv.launcher android.permission.WRITE_SECURE_SETTINGS" > /dev/null 2>&1 || true
+  CUR=$("$PY" "$T" shell "settings get secure enabled_accessibility_services" | tr -d '\r')
+  # The force-stop above leaves a listed service showing as crashed and never rebound (issue #37, as for
+  # the Home watch): take it out of the list and put it back so Android binds it again.
+  REST=$(echo "$CUR" | tr ':' '\n' | grep -v -e KeyWatch -e '^null$' -e '^$' | paste -sd: - || true)
+  if [ -z "$REST" ]; then
+    "$PY" "$T" shell "settings delete secure enabled_accessibility_services" > /dev/null
+    NEW=$KEYWATCH
+  else
+    "$PY" "$T" shell "settings put secure enabled_accessibility_services $REST" > /dev/null
+    NEW="$REST:$KEYWATCH"
+  fi
+  sleep 2
+  "$PY" "$T" shell "settings put secure enabled_accessibility_services $NEW"
+  "$PY" "$T" shell "settings put secure accessibility_enabled 1"
+  echo "     the remote's app buttons are on (home.app_keys)"
+fi
+
 # Tell the bridge's daily guard what to keep switched off (a Google TV update can switch ambient
 # mode back on). Option A has no bridge, so no guard: run this script again after an update.
 KEEP="$ROOT/bridge/data/keep-disabled.json"
@@ -292,6 +328,25 @@ fi
 echo "4/4  Pressing Home"
 "$PY" "$T" keys HOME || true
 sleep 3
+
+# Seen twice on a Fire TV Cube (3rd gen, Fire OS 7.7): a few seconds after the force-stop and the
+# write above, enabled_accessibility_services was empty again and accessibility_enabled 0, so the
+# Home key stayed on Amazon's home until the two settings were written once more (the app's own
+# rebind, FireWatch.rebindIfUnbound, was ruled out: its write pattern alone leaves them intact).
+# Whatever clears them, a second write a little later holds, so look again and put them back.
+if [ -n "${WATCH:-}" ] && echo "$present" | grep -qx -E "com.google.android.apps.tv.launcherx|com.google.android.tvlauncher|com.amazon.tv.launcher|com.quickplay.android.bellmediaplayer"; then
+  for try in 1 2 3; do
+    sleep 5
+    CUR=$("$PY" "$T" shell "settings get secure enabled_accessibility_services" | tr -d '\r')
+    ON=$("$PY" "$T" shell "settings get secure accessibility_enabled" | tr -d '\r')
+    case ":$CUR:" in
+      *":$WATCH:"*|*":app.couchtv.launcher/app.couchtv.launcher.FireWatch:"*) [ "$ON" = 1 ] && break ;;
+    esac
+    echo "     the Home button watch had dropped off again (try $try): switching it back on"
+    REST=$(echo "$CUR" | tr ':' '\n' | grep -v -e FireWatch -e '^null$' -e '^$' | paste -sd: - || true)
+    "$PY" "$T" shell "settings put secure enabled_accessibility_services ${REST:+$REST:}$WATCH; settings put secure accessibility_enabled 1"
+  done
+fi
 
 echo "switched off (undo list): $LIST"
 cat "$LIST"

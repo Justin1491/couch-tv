@@ -729,7 +729,7 @@ async def h_restart_app(request):
         app = S.apps.BY_PACKAGE.get(front)
         if not app or app["id"] in ("home", "settings"):
             raise S.ApiError(409, "no app is open to restart", key="err_no_app_to_restart")
-    pkg = app["package"]
+    pkg = S.pkg_of(app)   # the build this TV has (Amazon's on a Fire TV)
     title = season = episode = None
     m = S.media_now
     if m and m.get("package") == pkg and m.get("title"):
@@ -771,6 +771,21 @@ async def h_restart_app(request):
                    **messages.note_fields(note_key, note_vars)}
     S.record_action(request, "restart_app", {"app": app["id"]}, True)
     return S.ok(**result)
+
+
+# ---------- quit an app (the tile menu's Quit app) ----------
+async def h_quit_app(request):
+    data = await S.body(request)
+    pkg, shown = resolve_package(data.get("package") or data.get("app") or data.get("name"))
+    if not pkg:
+        raise S.ApiError(404, f"do not know which app {shown} is", key="err_unknown_app_name", vars={"name": shown})
+    if pkg in set(NEVER_UNINSTALL) | set(S.apps.HOME_PACKAGES) | {"app.couchtv.launcher"}:   # the home stays
+        raise S.ApiError(403, f"{shown} is part of how the TV works, so it stays",
+                         key="err_app_system_required", vars={"name": shown})
+    await S.tv.adb("shell", f"am force-stop {check_package(pkg)}", timeout=15)
+    S.record_action(request, "quit_app", {"name": shown}, True)
+    return S.ok(quit=shown, package=pkg, note=f"Closed {shown}.",
+                **messages.note_fields("note_app_quit", {"name": shown}))
 
 
 # ---------- is the new episode out yet ----------
@@ -922,5 +937,6 @@ def routes(r):
     r.add_get("/api/off-after", h_off_after_get)
     r.add_post("/api/off-after", h_off_after)
     r.add_post("/api/restart-app", h_restart_app)
+    r.add_post("/api/quit-app", h_quit_app)
     r.add_get("/api/latest", h_latest)
     r.add_get("/api/both", h_both)

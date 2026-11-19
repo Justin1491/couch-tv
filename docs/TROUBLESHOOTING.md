@@ -5,6 +5,7 @@ Fixes for problems seen on real TVs, starting with a TV that goes round in a res
 - [If your TV loops after a restart](#if-your-tv-loops-after-a-restart)
 - [TCL: Home goes back to Google TV after every restart](#tcl-home-goes-back-to-google-tv-after-every-restart)
 - [If Disney+ (or another app) signs you out after the TV turns off](#if-disney-or-another-app-signs-you-out-after-the-tv-turns-off)
+- [Moving along the rows feels slow](#moving-along-the-rows-feels-slow)
 - [Something else stuck](#something-else-stuck)
 
 ## If your TV loops after a restart
@@ -48,16 +49,31 @@ later, so a broken couch-tv cannot hold the TV in a loop either. Only ambient mo
 adverts) and any ad tracker you name are switched off, and `apply.sh` refuses to switch off anything
 the TV may need to start: a home screen, a setup app, a persistent system app or part of Android.
 
+## Sony Bravia: the TV turns very slow after switching off "unused" Sony apps
+
+Seen on a Sony Bravia XBR-65X850G (Android TV 10, 2.3 GB of memory). Switching off Sony's browser engine, `com.vewd.core.service`, and its three `com.sony.dtv.browser.*` packages looks safe: they belong to Sony's web browser and web apps, which most people never open. But Sony's AirPlay app, `com.sony.dtv.airplayapp`, binds to `com.vewd.core.service` when it starts, so with the engine off AirPlay crashes and Android restarts it several times a second. The log shows `Unable to bind to com.vewd.core.service/.BrowserServiceImpl`, the CPU load climbs past 30, and poster pictures stop loading on the home.
+
+The fix is to switch them back on, then restart the home:
+
+```sh
+for p in com.vewd.core.service com.sony.dtv.browser.webappruntime com.sony.dtv.browser.webappruntimeextension com.sony.dtv.browser.webappservice; do
+  TV_IP=<your tv address> .venv/bin/python tv-home/tools/tvadb.py shell "pm enable --user 0 $p"
+done
+```
+
+couch-tv itself never switches these off (`apply.sh` and the privacy list leave them alone). If you switch off Sony apps by hand, do it one at a time, check `logcat -d -b crash` after each, and keep a list so that you can switch each one back on with `pm enable --user 0 <package>`.
+
+On the same TV these were switched off with no ill effect over an evening of use, about five hours (all with `pm disable-user --user 0`, never uninstalled, so no sign-in was lost): `tv.samba.ssm` (Samba TV), `com.sony.dtv.promos`, `com.sony.dtv.sonyselect`, `com.sony.dtv.notificationcenter`, the Sony analytics apps `com.qterics.da.product`, `com.sony.dtv.da.service` and `com.sonyericsson.idd.agent`, the shop demo and hotel mode apps (`com.sony.dtv.demosupport`, `com.sony.dtv.demosystemsupport`, `com.sony.dtv.multiscreendemo`, `com.sony.dtv.b2b.hotelmode`, `rs232csupport`, `prosettings`, `adminpassword`, `deviceadminsettings`, `importexport`), `com.google.android.feedback`, the Google bug report sender, Play Games, Play Movies and YouTube Music. This is one TV, so treat it as a report, not a rule.
+
 ## TCL: Home goes back to Google TV after every restart
 
 On a TCL Google TV (reported on a TCL Smart TV Pro, Android 14) the TV's own boot manager can stop
-the Home button watch from starting, so Home falls back to Google TV after each restart. On main, in
-the next release, couch-tv adds an empty TV input on TCL TVs only, which TCL lets start at boot. Open the app once after
+the Home button watch from starting, so Home falls back to Google TV after each restart. Since 0.13, couch-tv adds an empty TV input on TCL TVs only, which TCL lets start at boot. Open the app once after
 installing so it is switched on. Other TVs are unchanged and show no new input. This is unconfirmed
 until it is tested on a real TCL.
 
 **A fix confirmed on a real TCL (0.12, without the TV input):** from a computer, once, run
-`adb shell appops set app.couchtv.launcher AUTO_START allow`, then on the TV itself open Settings,
+`adb shell appops set app.couchtv.launcher AUTO_START allow` (on some TCL builds the op is named `APP_AUTO_START` instead, and `AUTO_START` answers "Unknown operation string"; run `adb shell appops get app.couchtv.launcher` to see which name your TV lists), then on the TV itself open Settings,
 Accessibility and switch on **Home button watch** and **Home gear button** with the remote (not over
 ADB). After a real power cut at the wall the TV went straight to couch-tv with no flash of Google
 TV, and TCL kept AUTO_START allowed. It is not yet known which of the two steps does it, so do both. If the two services are not in the Accessibility menu yet, open couch-tv once, then set AUTO_START and write `enabled_accessibility_services` and `accessibility_enabled 1` over ADB: on that TCL the services only appeared in the menu once they were actually running.
@@ -71,6 +87,21 @@ from a computer after each restart run: `cmd package set-home-activity
 app.couchtv.launcher/.MainActivity`, start the app, `appops set app.couchtv.launcher AUTO_START
 allow`, then write `enabled_accessibility_services` and `accessibility_enabled 1` again. On that TCL
 a real double press of Home also stays on Google TV; Back twice escapes.
+
+## Fire TV: Home still opens Amazon's home right after apply.sh
+
+Seen twice on a Fire TV Cube (3rd gen, Fire OS 7.7.1.7): `apply.sh` finished with "home screen now:
+couch-tv", but a few seconds later `enabled_accessibility_services` was empty and
+`accessibility_enabled` was 0 again, so the Home button watch was off and the Home key stayed on
+Amazon's home. Writing the two settings once more held, through force-stops and Home presses. The
+app's own rebind (it takes the watch out of the list and puts it back, ten seconds after it starts)
+was tried on its own over ADB and leaves both settings intact, so it is not the cause; what clears
+them is not pinned down. `apply.sh` now looks again after pressing Home and puts them back. If a
+Fire TV is still on Amazon's home after `apply.sh`, run from the repo root:
+
+```sh
+TV_IP=<tv address> .venv/bin/python tv-home/tools/tvadb.py shell "settings put secure enabled_accessibility_services app.couchtv.launcher/.FireWatch; settings put secure accessibility_enabled 1"
+```
 
 ## If Disney+ (or another app) signs you out after the TV turns off
 
@@ -89,6 +120,25 @@ When the TV turns off, the bridge closes the app completely. The next time you o
 fresh with the Wi-Fi already up, and you stay signed in. Sign in once more after adding it. Without a
 bridge (options A and C), close the app before you turn the TV off (Settings, Apps, the app, Force
 stop).
+
+## Moving along the rows feels slow
+
+If Lighter home and switching off Glass panels and the Video background did not help, the cost may not be the page at all. On some TVs the GPU cannot composite a 1080p window at 60 frames a second, so the page runs at 60 but the screen shows 30. That was the case on an XGIMI Elfin Flip Plus ([#197](https://github.com/Seagey/couch-tv/issues/197)).
+
+**Try it for a minute** (needs ADB, so option A or B; reversible):
+
+```sh
+adb shell wm size 1280x720      # the whole TV draws at 720p
+# move along the rows for a minute, then:
+adb shell wm size reset         # undo
+```
+
+If the rows turn smooth, the GPU is the limit. Keep it for couch-tv only, without changing the rest of the TV:
+
+1. Put `"render_height": 720` under `home` in `config.json` (see [CONFIG.md](CONFIG.md)).
+2. Run `tv-home/tools/apply.sh`, or restart the home.
+
+To undo it, remove the key or set it to `0`. Text and pictures are a little softer than at full size. If it helps, or does not, please say which TV and Android version on [#197](https://github.com/Seagey/couch-tv/issues/197).
 
 ## Something else stuck
 

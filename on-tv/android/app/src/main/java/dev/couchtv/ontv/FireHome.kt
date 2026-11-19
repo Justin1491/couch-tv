@@ -62,8 +62,16 @@ object FireHome {
 
     /** The WatchService saw Amazon's home come on screen. */
     fun onAmazonHome() {
+        // Recents is its own Amazon activity (issue #223). The Home screen under it reports itself
+        // for a moment as it opens, which is not a Home press, so a window just after Recents is left alone.
+        if (android.os.SystemClock.elapsedRealtime() - recentsAt < RECENTS_QUIET_MS) {
+            Log.i(TAG, "Amazon home right after Recents: left alone")
+            return
+        }
         if (wanted) jump()
     }
+    @Volatile private var recentsAt = -RECENTS_QUIET_MS
+    private const val RECENTS_QUIET_MS = 2_500L
 
     /**
      * Any other TV (a Haier, a TCL, Google TV, issue #98): the Home key can open the maker's own
@@ -121,6 +129,9 @@ object FireHome {
     private val later = android.os.Handler(android.os.Looper.getMainLooper())
     fun seen(pkg: String?, cls: String?) {
         if (pkg == null || pkg in notScreens) return
+        if (pkg == AMAZON_HOME && cls != null && cls.contains("RecentDeepLinkActivity")) {
+            recentsAt = android.os.SystemClock.elapsedRealtime()
+        }
         lastPkg = pkg
         amazonHomeInFront = isAmazonHome(pkg, cls)
     }
@@ -165,12 +176,16 @@ object FireHome {
         runCatching {
             val cr = c.contentResolver
             val me = "${c.packageName}/${WatchService::class.java.name}"
-            val cur = android.provider.Settings.Secure.getString(cr, "enabled_accessibility_services") ?: ""
-            if (me !in cur.split(':')) {
-                android.provider.Settings.Secure.putString(cr, "enabled_accessibility_services", if (cur.isEmpty()) me else "$cur:$me")
-                Log.i(TAG, "switched the home watch service on")
+            // Only couch-tv-ontv-watch.apk declares the service; the plain APK must not name it.
+            val declared = runCatching {
+                c.packageManager.getServiceInfo(android.content.ComponentName(c, WatchService::class.java), 0); true
+            }.getOrDefault(false)
+            val cur = android.provider.Settings.Secure.getString(cr, "enabled_accessibility_services")
+            FireHomeWindow.watchServices(cur, me, declared)?.let {
+                android.provider.Settings.Secure.putString(cr, "enabled_accessibility_services", it)
+                Log.i(TAG, if (declared) "switched the home watch service on" else "took out the home watch this APK does not have")
             }
-            android.provider.Settings.Secure.putInt(cr, "accessibility_enabled", 1)
+            if (declared) android.provider.Settings.Secure.putInt(cr, "accessibility_enabled", 1)
         }.onFailure { Log.w(TAG, "could not switch the watch service on: ${it.message}") }
     }
 

@@ -1,7 +1,9 @@
 package app.couchtv.launcher
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.graphics.Bitmap
@@ -79,6 +81,28 @@ class MainActivity : Activity() {
 
     private val prefs by lazy { getSharedPreferences("home", MODE_PRIVATE) }
 
+    /**
+     * `home.render_height` (config.json): draw the home this many pixels high in its own hardware layer and
+     * scale that layer up to the screen. A weak GPU (a MediaTek projector's Mali-G52) cannot composite a
+     * 1080p WebView at 60 fps but does at 720p. (FLAG_SCALED does nothing useful on Android 11: it only makes
+     * a smaller window.) The density is lowered by the same factor, so the page still lays out on the same
+     * dp canvas and only the pixels behind it are fewer. 0 or missing: the screen's own size.
+     */
+    private fun renderHeight(base: Context): Int = runCatching {
+        val cfg = base.getSharedPreferences("home", MODE_PRIVATE).getString("config", null) ?: return 0
+        JSONObject(cfg).optJSONObject("home")?.optInt("render_height", 0) ?: 0
+    }.getOrDefault(0)
+
+    override fun attachBaseContext(base: Context) {
+        val h = renderHeight(base)
+        val screen = base.resources.displayMetrics.heightPixels
+        if (h in 360 until screen) {
+            val c = Configuration(base.resources.configuration)
+            c.densityDpi = Math.round(c.densityDpi * h.toFloat() / screen)
+            super.attachBaseContext(base.createConfigurationContext(c))
+        } else super.attachBaseContext(base)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         shown = java.lang.ref.WeakReference(this)
@@ -99,10 +123,28 @@ class MainActivity : Activity() {
         runCatching { WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG) }
         CrashGuard.install(this)   // the WebView puts its own crash handler in front: ours goes first again
         root = FrameLayout(this).apply { setBackgroundColor(GROUND) }
-        setContentView(root)
+        val screenSize = android.graphics.Point().also { runCatching { @Suppress("DEPRECATION") windowManager.defaultDisplay.getRealSize(it) } }
+        val renderH = renderHeight(this)
+        if (renderH in 360 until screenSize.y) {
+            // The whole home is laid out and drawn at renderH pixels high in its own hardware layer, and that
+            // layer is scaled up to the screen: the page rasterises at the lower size, the GPU only blits it.
+            val k = screenSize.y.toFloat() / renderH
+            setContentView(root, android.view.ViewGroup.LayoutParams(Math.round(screenSize.x / k), renderH))
+            root.pivotX = 0f; root.pivotY = 0f; root.scaleX = k; root.scaleY = k
+            root.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        } else setContentView(root)
         hideSystemBars()
         intent?.let { readExtras(it) }
         io.execute { warmApps() }
+        // An app installed, removed or renamed (or the TV's language changed): the list is read again,
+        // in the background, instead of on every return to the home.
+        listenForChanges(android.content.IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED); addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_REPLACED); addAction(Intent.ACTION_PACKAGE_CHANGED)
+            addDataScheme("package")
+        })
+        listenForChanges(android.content.IntentFilter(Intent.ACTION_LOCALE_CHANGED))
+        runCatching { contentResolver.registerContentObserver(WATCH_NEXT, true, watchNextChanged) }
         askWatchNextPermission()
         Doorbell.start(this)   // smart home (optional): nothing happens unless a doorbell is set up
         FireWatch.ensure(this)   // Fire TV only, and only once a computer has switched it on
@@ -173,6 +215,8 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         resumed = true
+        // the page's timers and script were paused while another app or the screensaver was in front
+        web?.resumeTimers(); web?.onResume()
         restoreTimeout(resume = true)   // back in front: the normal screen timeout goes back (not for the first moments of a press, see ambientAt)
         hideSystemBars()
         // Back within a moment of opening a channel card: the app crashed on the way in (see
@@ -181,21 +225,24 @@ class MainActivity : Activity() {
             channelOpened = null
             if (android.os.SystemClock.elapsedRealtime() - at < CHANNEL_RETRY_MS) start(i)
         }
-        if (pageReady && offline) {
-            if (!returnToServer()) {
-                js("window.tv && tv.resume()")
-                if (!alone()) connect()
-            }
-        } else if (pageReady && !offline) {
-            js("window.tv && tv.resume()")
+        if (pageReady && offline) returnToServer()
+        if (pageReady) js("window.tv && tv.resume()")
+        if (pageReady && !offline) {
             // the computer may have gone off while the page was open: then the saved copy takes over
             val base = prefs.getString("bridge", null)
             if (base != null && hasOffline()) io.execute {
                 if (!reachable(base)) main.post { if (resumed && !offline) { showOffline(); later(OFFLINE_RETRY_MS) } }
             }
-        } else if (offline || fallback != null) connect()
-        io.execute { warmApps() }
+        } else if ((offline && !alone()) || fallback != null) connect()
+        if (appCache == null) io.execute { warmApps() }   // otherwise the package receiver below keeps the list fresh
+        io.execute { watchNextCache = readWatchNext().toString() }   // off the page's thread: TV.watchNext() answers from here
         Updater.resumed(this)   // the daily look for a new release (Home settings, Updates)
+    }
+
+    override fun onDestroy() {
+        runCatching { unregisterReceiver(packageChanged) }
+        runCatching { contentResolver.unregisterContentObserver(watchNextChanged) }
+        super.onDestroy()
     }
 
     override fun onPause() {
@@ -210,6 +257,13 @@ class MainActivity : Activity() {
         } catch (_: Exception) {}
         restoreTimeout(dream = true)   // the screensaver covered the home: timeout goes back
         js("window.tv && tv.pause && tv.pause()")   // the video background stops while an app is in front
+        // Nothing of the home can be seen now: stop the page's timers (its clock, its polls of the
+        // bridge, scene changes) and its script until onResume. On a Fire TV Cube (2 GB) the page
+        // kept polling the bridge every 3 and 5 s behind Netflix and under the screensaver, each
+        // music poll costing the TV a dumpsys. evaluateJavascript (tv.home, tv.pause) still runs.
+        // Not while the page is still loading (the TV's own home flashes up at boot): a paused load
+        // would only show the app grid.
+        if (pageReady) { web?.onPause(); web?.pauseTimers() }
     }
 
     // A recovered server is only used at an explicit Home/foreground transition.
@@ -262,6 +316,8 @@ class MainActivity : Activity() {
         // The home screen never exits on BACK; the page decides what BACK means.
         if (event.keyCode == KeyEvent.KEYCODE_BACK) {
             if (event.action == KeyEvent.ACTION_UP && pageReady) js("window.tv && tv.back()")
+            // held: a design's way out (Back held about 5 s switches it off), so the page hears the repeats
+            else if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount > 0 && pageReady) js("window.CouchDesign && CouchDesign.backHeld && CouchDesign.backHeld()")
             return true
         }
         return super.dispatchKeyEvent(event)
@@ -303,11 +359,10 @@ class MainActivity : Activity() {
     private fun alone() = prefs.getString("bridge", null) == null && BuildConfig.BRIDGES.isEmpty()
 
     private fun connect() {
-        if (probing) return
-        if (alone()) {
-            if (!offline || web == null) showOffline()
-            return
-        }
+        val standalone = alone()
+        // The renderer may be gone even while offline is still the selected source.
+        if (loading.needsLocalPage(standalone, offline, web != null)) showOffline()
+        if (standalone || probing) return
         probing = true
         // Include discovery/health time in the initial budget, even if the IO queue is busy.
         val attempt = if (!offline && !pageReady) startDeadline() else null
@@ -355,7 +410,12 @@ class MainActivity : Activity() {
 
     /** The page's WebView, or null while the TV's WebView cannot start (then the app grid shows). */
     private fun webView(): WebView? = web ?: try {
-        makeWebView().also { web = it; root.addView(it, 0, MATCH); CrashGuard.install(this) }
+        makeWebView().also {
+            web = it
+            if (resumed) it.resumeTimers()
+            root.addView(it, 0, MATCH)
+            CrashGuard.install(this)
+        }
     } catch (e: Throwable) {
         android.util.Log.w("couchtv", "WebView not ready, showing the app grid: ${e.message}")
         showFallback()
@@ -380,6 +440,7 @@ class MainActivity : Activity() {
 
     private fun makeWebView(): WebView = WebView(this).apply {
         setBackgroundColor(GROUND)
+        if (resumed) resumeTimers()   // a WebView made while the last one's pause is still in force (a renderer crash while covered)
         isFocusable = true
         isFocusableInTouchMode = true
         overScrollMode = View.OVER_SCROLL_NEVER
@@ -429,6 +490,12 @@ class MainActivity : Activity() {
                 val u = req.url
                 if (u.host == OFFLINE_HOST) return offlineFile(u.path ?: "")
                 if (u.host != "tvos.invalid") return null
+                if (u.pathSegments.firstOrNull() == "webdata") {
+                    // the web widgets' relay (WebData.kt): news feeds and share prices, by id only
+                    val (code, body) = WebData.answer(u)
+                    return WebResourceResponse("application/json", "utf-8", code, if (code == 200) "OK" else "Error",
+                        mapOf("Cache-Control" to "no-store", "Access-Control-Allow-Origin" to "*"), ByteArrayInputStream(body.toByteArray(Charsets.UTF_8)))
+                }
                 if (u.pathSegments.firstOrNull() == "photo") {
                     // the household's own photos (Home settings), copied in by the file picker
                     val f = photoFile(u.lastPathSegment ?: "") ?: return null
@@ -608,7 +675,8 @@ class MainActivity : Activity() {
             "jpg", "jpeg" -> "image/jpeg"
             "png" -> "image/png"
             "webp" -> "image/webp"
-            "mp4" -> "video/mp4"   // a scene's own clip (home.my_scenes[].video)
+            "mp4" -> "video/mp4"   // a scene's own clip (home.my_scenes[].video), a design's loop (background.video)
+            "webm" -> "video/webm"
             "svg" -> "image/svg+xml"
             "woff2" -> "font/woff2"
             else -> "application/octet-stream"
@@ -649,6 +717,10 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun launch(pkg: String): Boolean = launchPackage(pkg)
 
+        /** This launcher relays the web widgets' sources (WebData.kt, http://tvos.invalid/webdata). */
+        @JavascriptInterface
+        fun webData(): Boolean = true
+
         /** Opens an http(s) web link in the TV's browser (used by custom cards with a url). */
         @JavascriptInterface
         fun openUrl(url: String): Boolean {
@@ -669,6 +741,14 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun is24Hour(): Boolean = android.text.format.DateFormat.is24HourFormat(this@MainActivity)
 
+        /** Is the TV saving power (Android's power save mode)? A design's video background then keeps its still picture (bg-video.js). */
+        @JavascriptInterface
+        fun powerSave(): Boolean = try {
+            getSystemService(android.os.PowerManager::class.java)?.isPowerSaveMode ?: false
+        } catch (e: Exception) {
+            false
+        }
+
         /** Is couch-tv the home? "held", "google_tv" (explain the Home button watch) or "ask" (HomeRole.kt, #98). */
         @JavascriptInterface
         fun homeState(): String = HomeRole.state(this@MainActivity)
@@ -682,7 +762,7 @@ class MainActivity : Activity() {
 
         /** Android's Watch Next list (what each app says you are in the middle of), as JSON. */
         @JavascriptInterface
-        fun watchNext(): String = readWatchNext().toString()
+        fun watchNext(): String = watchNextCache ?: readWatchNext().toString().also { watchNextCache = it }   // the first ask reads; later ones answer at once
 
         /** Opens one Watch Next item (its row id) in the app that owns it. */
         @JavascriptInterface
@@ -857,6 +937,16 @@ class MainActivity : Activity() {
         /** The TV's Bluetooth or network settings, for the Input menu (falls back to all Settings). */
         @JavascriptInterface
         fun openSettingsScreen(which: String): Boolean {
+            // Google TV has no Bluetooth settings action: open its Remotes and accessories screen instead,
+            // which only opens for an app with the secure settings grant apply.sh gives.
+            if (which == "bluetooth" && !FireWatch.connected &&
+                packageManager.resolveActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS), 0) == null &&
+                checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS") == PackageManager.PERMISSION_GRANTED) {
+                val acc = Intent("android.settings.SLICE_SETTINGS")
+                    .putExtra("slice_uri", "content://com.android.tv.settings.accessories.sliceprovider/general")
+                    .putExtra("slice_title", "Remotes and accessories")
+                if (packageManager.resolveActivity(acc, 0) != null && startSettings(acc)) return true
+            }
             val actions = when (which) {
                 "bluetooth" -> listOf(Settings.ACTION_BLUETOOTH_SETTINGS)
                 "network" -> listOf(Settings.ACTION_WIFI_SETTINGS, Settings.ACTION_WIRELESS_SETTINGS)
@@ -877,6 +967,47 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun kept(key: String): String? = getSharedPreferences("page", MODE_PRIVATE).getString(key, null)
+
+        // couch-tv Studio's Batteries widget (Batteries.kt): the paired remotes and controllers and their charge
+        @JavascriptInterface
+        fun batteries(): String = Batteries.read(this@MainActivity)
+
+        // Android 12 and newer: Android's own "Nearby devices" question, once, from the widget's OK
+        @JavascriptInterface
+        fun askBatteries(): Boolean {
+            if (Batteries.allowed(this@MainActivity)) return true
+            runOnUiThread { try { requestPermissions(arrayOf(android.Manifest.permission.BLUETOOTH_CONNECT), 78) } catch (e: Exception) {} }
+            return false
+        }
+
+        // couch-tv Studio's home widgets (AtHome.kt): the things typed at home go in their own store,
+        // left out of Android's backups, never in the page's storage
+        @JavascriptInterface
+        fun keepPrivate(key: String, value: String) {
+            AtHome.prefs(this@MainActivity).edit().putString(key, value).apply()
+        }
+
+        @JavascriptInterface
+        fun keptPrivate(key: String): String? = AtHome.prefs(this@MainActivity).getString(key, null)
+
+        // the Agenda's calendar, read off the page's thread and answered through tv.calendarText
+        @JavascriptInterface
+        fun calendar(url: String, id: String) {
+            if (!Regex("[A-Za-z0-9]{1,40}").matches(id)) return
+            Thread {
+                val (ok, text) = AtHome.calendar(url)
+                main.post { js("window.tv && tv.calendarText && tv.calendarText(" + JSONObject.quote(id) + "," + ok + "," + JSONObject.quote(text) + ")") }
+            }.start()
+        }
+
+        // today's screen time (Android's usage numbers), once usage access is allowed
+        @JavascriptInterface
+        fun screenTime(): String = AtHome.screenTime(this@MainActivity) { pkg ->
+            try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() } catch (e: Exception) { pkg }
+        }
+
+        @JavascriptInterface
+        fun openUsageAccess(): Boolean = AtHome.usageAccessIntent(this@MainActivity)?.let { start(it) } ?: false
 
         // Home settings, "Your photos": the TV's own file picker, where it has one. Many Android TV
         // and Google TV builds ship without one, and then the page offers a web address instead.
@@ -953,6 +1084,7 @@ class MainActivity : Activity() {
             while (bounds.outWidth / (sample * 2) >= 1920 && bounds.outHeight / (sample * 2) >= 1080) sample *= 2
             val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
             val raw = contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) } ?: return null
+            var taken = ""
             val turn = try {
                 contentResolver.openInputStream(uri)?.use {
                     val exif = if (Build.VERSION.SDK_INT >= 24) android.media.ExifInterface(it) else {
@@ -960,6 +1092,8 @@ class MainActivity : Activity() {
                         val tmp = java.io.File.createTempFile("exif", ".jpg", cacheDir)
                         try { tmp.outputStream().use { o -> it.copyTo(o) }; android.media.ExifInterface(tmp.path) } finally { tmp.delete() }
                     }
+                    // the day it was taken goes in its name, for On this day (athome.js nameDate)
+                    taken = AtHome.takenNote(exif.getAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL) ?: exif.getAttribute(android.media.ExifInterface.TAG_DATETIME))
                     when (exif.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1)) {
                         6 -> 90f; 3 -> 180f; 8 -> 270f; else -> 0f
                     }
@@ -970,7 +1104,7 @@ class MainActivity : Activity() {
             val scale = minOf(1f, maxOf(1920f / w, 1080f / h))
             val m = android.graphics.Matrix().apply { postRotate(turn); postScale(scale, scale) }
             val bmp = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, true)
-            val name = "p" + System.currentTimeMillis().toString(36) + "-" + (1000 + (Math.random() * 9000).toInt()) + ".jpg"
+            val name = "p" + System.currentTimeMillis().toString(36) + "-" + (1000 + (Math.random() * 9000).toInt()) + taken + ".jpg"
             java.io.File(photoDir, name).outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 88, it) }
             if (bmp !== raw) bmp.recycle()
             raw.recycle()
@@ -1119,27 +1253,58 @@ class MainActivity : Activity() {
     }
 
     @Volatile private var appCache: List<Pair<ResolveInfo, String>>? = null
+    /** System broadcasts only; Android 13 and newer insist on saying whether other apps may send them (they may not). */
+    private fun listenForChanges(filter: android.content.IntentFilter) {
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(packageChanged, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+        else registerReceiver(packageChanged, filter)
+    }
+    private val packageChanged = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: android.content.Context, i: Intent) { io.execute { warmApps() } }
+    }
+    /** Android's Watch Next rows as the page last asked for them (JSON), kept up to date off the page's thread. */
+    @Volatile private var watchNextCache: String? = null
+    private val watchNextChanged = object : android.database.ContentObserver(main) {
+        override fun onChange(selfChange: Boolean) { io.execute { watchNextCache = readWatchNext().toString() } }
+    }
 
     /** The TV's apps with their labels. Cached: reading labels for 30 apps is slow on this TV. */
     private fun tvApps(): List<ResolveInfo> = appList().map { it.first }
 
-    private fun appList(): List<Pair<ResolveInfo, String>> = appCache ?: synchronized(this) {
-        appCache ?: run {
+    private fun appList(): List<Pair<ResolveInfo, String>> = appCache ?: synchronized(this) { appCache ?: buildAppList().also { appCache = it } }
+
+    /** Reads the installed apps and their labels: slow (30 apps on a Fire TV take a while), so never on the page's thread while a copy exists. */
+    private fun buildAppList(): List<Pair<ResolveInfo, String>> = run {
             val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
-            val store = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage("com.amazon.venezia")
-            (packageManager.queryIntentActivities(q, 0) + packageManager.queryIntentActivities(store, 0))
+            // Fire TV apps that declare only LAUNCHER: the Appstore and Audible (#238), plus saved order packages.
+            val launcherPkgs = mutableSetOf("com.amazon.venezia", "com.audible.application.firetv")
+            val savedOrder = runCatching {
+                val raw = getSharedPreferences("page", MODE_PRIVATE).getString("tvhome.order.tv", null)
+                raw?.let { org.json.JSONObject(it).optJSONArray("packages") }
+            }.getOrNull()
+            savedOrder?.let { order ->
+                for (i in 0 until order.length()) {
+                    val pkg = order.optString(i)
+                    if (pkg.isNotEmpty()) launcherPkgs.add(pkg)
+                }
+            }
+            val extra = launcherPkgs.flatMap {
+                packageManager.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage(it), 0)
+            }
+            (packageManager.queryIntentActivities(q, 0) + extra)
                 .filter { it.activityInfo.packageName != packageName }
                 .distinctBy { it.activityInfo.packageName }
                 .map { it to it.loadLabel(packageManager).toString() }
                 .sortedBy { it.second.lowercase() }
-                .also { appCache = it }
-        }
     }
 
     /** Builds the app list and every banner ahead of time, so the page never waits for them. */
     private fun warmApps() {
-        appCache = null
-        appList().forEach { bannerImage(it.first.activityInfo.packageName) }
+        // The fresh list replaces the old one in a single step: emptying the cache first made the page's
+        // synchronous TV.apps() wait for the whole rescan, and on a Fire TV Cube that held the page for
+        // seconds right after every return to the home (a Chromium trace showed 6 s key latency).
+        val fresh = buildAppList()
+        appCache = fresh
+        fresh.forEach { bannerImage(it.first.activityInfo.packageName) }
     }
 
     /** The app's TV banner as a JPEG: memory, then disk, then drawn fresh. */

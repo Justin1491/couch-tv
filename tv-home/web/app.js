@@ -54,8 +54,26 @@
 
   // Settings from the bridge's config.json (served as config.js, and saved with the offline copy),
   // read in readConfig() once the page starts (mock.js fills them in for previews). See docs/CONFIG.md.
-  var CFG = {}, HOME = {}, TVCFG = {}, QUICK = [];
-  var WXCFG = { lat: -33.8688, lon: 151.2093, place: "Sydney", timezone: "Australia/Sydney" };
+  var CFG = {}, HOME = {}, TVCFG = {}, QUICK = [], DESIGN_FROM_CODE = false, GATE = { on: false, design: null };
+  // A picture that fails to load falls back to what its data-err names (kids.js uses it too). One
+  // listener instead of inline onerror handlers, so the page still works under the strict Content
+  // Security Policy a couch-tv Studio design adds (designer-gate.js lockPage), which allows no inline
+  // script at all. Keep watching pictures use "kwretry" (kwArtRetry, below).
+  document.addEventListener("error", function (e) {
+    var n = e.target, k = n && n.getAttribute && n.getAttribute("data-err"), p = n && n.parentNode;
+    if (!k) return;
+    if (k === "remove") { if (p) p.removeChild(n); }
+    else if (k === "parent") { if (p && p.parentNode) p.parentNode.removeChild(p); }
+    else if (k === "np") n.className = "np-art gone";
+    else if (k === "svg" && p) { p.className = "face tool input-ic"; p.innerHTML = n.getAttribute("data-svg"); }
+    else if (k === "word" && p) { p.className = "face word"; p.textContent = n.getAttribute("data-name"); }
+    else if (k === "name" && p) p.textContent = n.getAttribute("data-n");
+    else if (k === "kwretry" && window.kwArtRetry) window.kwArtRetry(n);   // a Keep watching picture is asked for again (#274)
+  }, true);
+  // No place set yet (no config.json weather, nothing picked in Home settings, Location): no weather and
+  // no made up town. The weather tiles ask for a town instead (widgets.js noWx), never a sample place.
+  var WX_NONE = { lat: null, lon: null, place: "", timezone: "auto" };
+  var WXCFG = WX_NONE;
   var QUICK_ALL = ["sleep", "picture", "look", "soundscape", "screen_off", "headphones", "input", "bluetooth", "network", "tvsettings", "screensaver", "extend"];
   // The most personal photos this TV keeps (also MAX_PHOTOS in bridge/server.py and MainActivity.kt).
   var MAX_PHOTOS = 50;
@@ -111,6 +129,8 @@
   var WX_AMBIENT = true, WX_SUN_GRADE = true;
   // Now playing (#31), on unless switched off; the navigation sound: system, soft or off (#32)
   var NP_ON = true, KW_ON = true, SOUND_STYLE = "system", START_FOCUS = "people";
+  // Keep watching follows the app the remote is on (home.shelf_follows_app), off unless switched on
+  var SHELF_FOLLOW = false;
   // Ambient sleep soundscapes (rain, fire, waves, brown noise)
   var SOUND_TYPE = "off", SOUND_VOL = 0.5, SOUND_FADE_SLEEP = true;
   function initSoundscape() {
@@ -165,6 +185,83 @@
   var MOVING = true;
   // Lighter home (#58): no blur, no soft shadows, a photo that holds still, smaller pictures. For a slow box.
   var LIGHTER = false;
+  // Lighter home by itself on a low end TV. On a 2 GB TV (Android 11, four A55 cores) anything
+  // that moves makes every frosted panel be drawn again each frame: 60 frames a second at rest, 22 with a
+  // focused tile's sway, 47 with the blur off. When nobody has chosen (Home settings, Look, Lighter home,
+  // or home.lighter), the TV decides: navigator.deviceMemory where it is clear (1 GB or less: low end, 4 or
+  // more: not), otherwise a 1.5 s measurement of frame times with something moving, kept for a week.
+  var LOW_END = false, LOW_END_WHY = "", LOW_END_KEY = "tvhome.lowend", LOW_END_DAYS = 7;
+  function lowEndDecision(o) {
+    if (o.setting === true || o.setting === false) return { low: o.setting, why: "setting" };
+    if (typeof o.memory === "number" && o.memory > 0 && o.memory <= 1) return { low: true, why: "memory" };
+    if (typeof o.memory === "number" && o.memory >= 4) return { low: false, why: "memory" };
+    if (o.cached && typeof o.cached.low === "boolean" && o.now - o.cached.t < o.days * 86400000) return { low: o.cached.low, why: "measured" };
+    if (typeof o.medianMs === "number") return { low: o.medianMs > 22, why: "measured" };
+    return null;   // measure first
+  }
+  // frame times for 1.5 s while a screen sized, nearly clear layer fades a little (it makes every frosted
+  // panel be drawn again each frame, as a focused tile's sway does); the median frame, in ms
+  function measureFrames(done) {
+    var veil = document.createElement("div"), d = [], last = 0, end = 0;
+    veil.setAttribute("aria-hidden", "true");
+    veil.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;z-index:1;pointer-events:none;background:rgba(0,0,0,0.01);will-change:opacity";
+    document.body.appendChild(veil);
+    var a = veil.animate ? veil.animate([{ opacity: 1 }, { opacity: 0.5 }], { duration: 1500, iterations: 1 }) : null;
+    var step = function (t) {
+      if (!end) end = t + 1500;
+      if (last) d.push(t - last);
+      last = t;
+      if (t < end) { requestAnimationFrame(step); return; }
+      if (a) a.cancel();
+      veil.remove();
+      d.sort(function (x, y) { return x - y; });
+      done(d.length ? d[d.length >> 1] : 16.7);
+    };
+    requestAnimationFrame(step);
+  }
+  // decides once nobody has chosen Lighter home; turns it on, as the Home settings row does, if low end
+  function lowEnd() {
+    var chosen = typeof ST.lighter === "boolean" || typeof HOME.lighter === "boolean";
+    if (chosen || OLD_ENGINE) return;   // a choice, or an old WebView that is already Lighter
+    var cached = null;
+    try { cached = JSON.parse(localStorage.getItem(LOW_END_KEY) || "null"); } catch (e) {}
+    var o = { setting: "auto", memory: navigator.deviceMemory, cached: cached, now: Date.now(), days: LOW_END_DAYS };
+    // late: after a measurement, when the home is already drawn (redraw it as the settings row does)
+    var apply = function (r, late) {
+      LOW_END = r.low; LOW_END_WHY = r.why;
+      if (LIGHTER === LOW_END || typeof ST.lighter === "boolean") return;   // already so, or chosen meanwhile
+      LIGHTER = LOW_END;
+      document.documentElement.classList.toggle("lighter", LIGHTER);
+      if (late) { ambientSync(); movingTiles(); renderShelf(); paintFocus(); }   // else the settings code goes on to do these
+    };
+    var r = lowEndDecision(o);
+    if (r) { apply(r); return; }
+    // measure once the home has drawn, when nothing else is starting up (once, however often settings apply)
+    if (lowEnd.pending) return;
+    lowEnd.pending = true;
+    setTimeout(function () {
+      measureFrames(function (ms) {
+        o.medianMs = ms; lowEnd.pending = false;
+        var m = lowEndDecision(o);
+        try { localStorage.setItem(LOW_END_KEY, JSON.stringify({ low: m.low, t: Date.now(), ms: Math.round(ms * 10) / 10 })); } catch (e) {}
+        apply(m, true);
+      });
+    }, 4000);
+  }
+
+  // The focused tile's sway and glint play for a few seconds after the focus moves, then hold still: a
+  // running animation makes the TV draw the whole screen every frame (60 to 22 frames a second on a 2 GB
+  // TV with frosted panels), and a still home costs nothing. Any key or pointer move starts them again.
+  var SETTLE_MS = 6000, settleTimer = 0;
+  function unsettle() {
+    document.documentElement.classList.remove("settled");
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(function () { document.documentElement.classList.add("settled"); }, SETTLE_MS);
+  }
+  // pointer events came in Chrome 55: webOS 4 (Chrome 53) reports the Magic Remote as a mouse only
+  var PTR = window.PointerEvent ? "pointer" : "mouse";
+  ["keydown", PTR + "move", PTR + "down", "wheel"].forEach(function (ev) { window.addEventListener(ev, unsettle, true); });
+  unsettle();
   // WebViews before Chrome 84 (still on many Android 9 TVs) skip gap in a flex box, so icons touch
   // their words and rows touch each other. html.no-flex-gap lets app.css put margins in instead (#26).
   (function () {
@@ -227,6 +324,9 @@
   ];
   var GRID_COLS = 12, GRID_MAX = 24;
   var DOCK_APPS = 10;   // Night: apps in the dock before Settings and More apps (home.dock_size)
+  var DOCK_BANNERS = false;   // Night: the dock shows each app's wide TV banner instead of its square icon (home.dock_banners)
+  var BANNER_COLS = 6;        // wide tiles: six to a row; the rows below show one at a time, moving down
+  var BANNER_ROW_REM = 10;    // one row of banners and the gap under it (7rem tile + 3rem), for the slide
   var SETTINGS_PKG = "com.android.tv.settings";
   var HOLD_MS = 600;    // how long OK is held to pick something up
 
@@ -236,6 +336,7 @@
     picture: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" class="fill"/></svg>',
     more: '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg>',
     gear: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+    designer: '<svg viewBox="0 0 24 24"><rect x="2.5" y="4.5" width="19" height="13" rx="2.5"/><path d="M8 21h8M12 17.5V21M9 13l5.5-5.5 2 2L11 15H9z"/></svg>',
     look: '<svg viewBox="0 0 24 24"><rect x="2.5" y="4.5" width="19" height="15" rx="3"/><path d="M2.5 16l5.5-5.5 4.5 4.5 3-3 6 6"/><circle cx="16.5" cy="8.8" r="1.6"/></svg>',
     soundscape: '<svg viewBox="0 0 24 24"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>',
     screen_off: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2.5"/><path d="M8 20h8M12 16v4M3 3l18 18"/></svg>',
@@ -289,7 +390,9 @@
   }
 
   var $ = function (id) { return document.getElementById(id); };
-  var data = { shows: [], showsBy: {}, apps: [], screens: [], bridge: null };
+  // shows is the row on screen (the whole row, or one app's cards while the remote follows an app);
+  // showsBy and videosBy are the full lists per person, as the bridge (or Android's Watch Next) gave them
+  var data = { shows: [], showsBy: {}, videosBy: {}, apps: [], screens: [], bridge: null };
   // Whose Keep watching is showing. Remembered on this TV. Any number of people: none or one shows
   // no switcher, two the pill switch, three or more a round head icon that opens a list.
   // With nobody set up, everything is shown ("both" to the bridge).
@@ -333,8 +436,8 @@
     }
     return wakeOnly;
   }
-  document.addEventListener("pointerdown", function (e) { idlePhotoInput(e); }, true);
-  document.addEventListener("pointermove", function (e) {
+  document.addEventListener(PTR + "down", function (e) { idlePhotoInput(e); }, true);
+  document.addEventListener(PTR + "move", function (e) {
     if (e.movementX || e.movementY) idlePhotoInput(e);
   }, true);
   document.addEventListener("touchstart", function (e) { idlePhotoInput(e); }, { capture: true, passive: false });
@@ -343,7 +446,7 @@
     PEOPLE = (list || []).filter(function (p) { return p && p.id && p.name; });
     NOBODY = !PEOPLE.length;
     if (NOBODY) PEOPLE = [{ id: "both", name: t("everyone") }];
-    PEOPLE.forEach(function (p) { if (!data.showsBy[p.id]) data.showsBy[p.id] = []; });
+    PEOPLE.forEach(function (p) { if (!data.showsBy[p.id]) data.showsBy[p.id] = []; if (!data.videosBy[p.id]) data.videosBy[p.id] = []; });
     if (!PEOPLE.some(function (p) { return p.id === who; })) who = PEOPLE[0].id;
   }
   // An order made on this TV with no bridge to keep it (or before the bridge heard about it).
@@ -360,7 +463,21 @@
   // this TV (kept by the bridge too when there is one), then ?theme= for a preview. docs/CONFIG.md.
   function readConfig() {
     CFG = window.COUCH_CONFIG || {};
+    // couch-tv Studio is opt in (designer-gate.js): until the person at this TV turns it on, no design
+    // reaches design.js at all and the home is exactly as it was. A design got by code at this TV
+    // (design-code.js, Home settings, couch-tv Studio, Get a design) wins over one in config.json; it is
+    // always asked about first (CouchDesign.start with fromCode).
+    var GOT = typeof CouchDesignCode !== "undefined" ? CouchDesignCode.kept() : null;
+    GATE = typeof CouchDesigner !== "undefined" ? CouchDesigner.decide({ choice: CouchDesigner.readChoice(kept(CouchDesigner.KEY)),
+      cfgDesign: CFG.design, got: GOT, preview: /[?&]designer=1\b/.test(Q) || (MOCK && /[?&]design=local\b/.test(Q)) }) :
+      { on: false, design: null, fromCode: false };
+    DESIGN_FROM_CODE = !!GATE.fromCode;
+    CFG = Object.assign({}, CFG, { design: GATE.design || undefined });
+    if (!GATE.design) delete CFG.design;
     HOME = CFG.home || {};
+    // a design from couch-tv Studio (design.js, docs/CONFIG.md "Design") may carry look settings of
+    // its own (design.home): they win over home in config.json, Home settings still win over both
+    if (typeof CouchDesign !== "undefined" && CFG.design) HOME = CouchDesign.home(HOME, CFG.design, { fromCode: DESIGN_FROM_CODE });
     ON_TV = CFG.mode === "on-tv";
     ST = loadSettings();
     KEEP_PHOTO = typeof ST.keep_photo === "boolean" ? ST.keep_photo : HOME.keep_photo === true;
@@ -373,7 +490,7 @@
     if (window.I18N) window.I18N.set(ST.lang || HOME.language || window.I18N.device());
     if (CFG.weather) WXCFG = CFG.weather;
     var pl = ST.place;
-    if (pl && isFinite(pl.lat) && isFinite(pl.lon)) WXCFG = { lat: pl.lat, lon: pl.lon, place: pl.name || "", timezone: pl.timezone || "auto" };
+    if (pl && isFinite(pl.lat) && isFinite(pl.lon)) WXCFG = { lat: pl.lat, lon: pl.lon, place: [pl.name, pl.area].filter(Boolean).join(", "), timezone: pl.timezone || "auto" };
     WX_SHOW = ST.wx_show !== false;
     WX_F = (ST.wx_unit || HOME.wx_unit) === "f";   // Home settings, else home.wx_unit in config.json
     WX_EVERY = [15, 30, 60].indexOf(ST.wx_every) >= 0 ? ST.wx_every : 30;
@@ -394,9 +511,11 @@
     document.documentElement.classList.toggle("glass", GLASS !== "off");
     document.documentElement.classList.toggle("glass-lite", GLASS === "lite");
     // Lighter home: what was chosen in Home settings, else home.lighter, else on for a WebView with no
-    // CSS grid (Android 6 and older, a 1 GB box), where blur, soft shadows and drift make it crawl (#59).
+    // CSS grid (Android 6 and older, a 1 GB box), where blur, soft shadows and drift make it crawl (#59);
+    // with none of those, lowEnd() turns it on by itself on a TV it finds low end.
     LIGHTER = typeof ST.lighter === "boolean" ? ST.lighter : typeof HOME.lighter === "boolean" ? HOME.lighter : OLD_ENGINE;
     document.documentElement.classList.toggle("lighter", LIGHTER);
+    lowEnd();
     ambientSync();
     movingTiles();
     // glass app icons (#25): set in Home settings, else home.glass_icons; off unless switched on
@@ -405,6 +524,9 @@
     // the Keep watching row: Home settings win over home.keep_watching; off hides it and stops fetching it
     KW_ON = typeof ST.keep_watching === "boolean" ? ST.keep_watching : HOME.keep_watching !== false;
     document.documentElement.classList.toggle("kw-off", !KW_ON && !CARDS.length);
+    // the row follows the app the remote is on: Home settings win over home.shelf_follows_app; off unless switched on
+    SHELF_FOLLOW = typeof ST.shelf_follows_app === "boolean" ? ST.shelf_follows_app : HOME.shelf_follows_app === true;
+    if (!SHELF_FOLLOW) followPkg = null;
     // the full screen music view is off until it is switched on in Home settings or home.ambient_music
     AMBIENT_MUSIC = typeof ST.ambient_music === "boolean" ? ST.ambient_music : HOME.ambient_music === true;
     GLASS_FOCUS = (ST.glass_focus || HOME.glass_focus) === "glass" ? "glass" : "colour";
@@ -420,6 +542,8 @@
     VIDEO_ON = !!VIDEO_URL && (typeof ST.video === "boolean" ? ST.video : true);
     GRID_COLS = NIGHT ? 12 : 8;
     DOCK_APPS = Math.max(1, Math.min(10, parseInt(HOME.dock_size, 10) || 10));
+    DOCK_BANNERS = NIGHT && (typeof ST.dock_banners === "boolean" ? ST.dock_banners : HOME.dock_banners === true);
+    document.documentElement.classList.toggle("dock-banners", DOCK_BANNERS);
     initSoundscape();
     if (smartOn()) DOCK_APPS = Math.min(DOCK_APPS, 9);   // the Smart home tile takes one place in the dock
     CLOCK24 = clock24();
@@ -456,9 +580,36 @@
   function movingTiles() {
     MOVING = LIGHTER ? false : typeof ST.moving_tiles === "boolean" ? ST.moving_tiles : typeof HOME.moving_tiles === "boolean" ? HOME.moving_tiles : GLASS !== "lite";
     document.documentElement.classList.toggle("still", !MOVING);
+    // Mac-style dock (Home settings, Look; home.dock "mac"): off unless chosen, held off by Lighter home
+    DOCK_MAC = !LIGHTER && (ST.dock || HOME.dock) === "mac";
+    DATE_BARS = HOME.date_bars === true;
+    document.documentElement.classList.toggle("dock-mac", DOCK_MAC);
+    if (typeof magnify === "function") magnify();
   }
+  var DOCK_MAC = false;
+  var DATE_BARS = false;   // home.date_bars: thin vertical bars between the day, the place and the weather
   // Lighter home: ask for the 640 px size of a Keep watching picture, not the 1440 px one (a card is about 500 px wide)
   function slim(u) { return LIGHTER && typeof u === "string" ? u.replace("/s1440/", "/s640/") : u; }
+  // A Keep watching picture that does not load is asked for again a little later, up to six times
+  // (about a minute and a quarter), instead of staying broken until the row is drawn again (#274):
+  // just after a TV restart the home is up before the Wi-Fi and the apps' picture providers are.
+  // Nothing waits meanwhile. The app's art route (tvos.invalid/art/<token>) reads only the last
+  // path segment, so a query makes it a fresh request; any other address is set again as it was.
+  var ART_RETRY_MS = [1500, 3000, 6000, 12000, 20000, 30000];
+  window.kwArtRetry = function (img) {
+    var n = +(img.getAttribute("data-retry") || 0);
+    if (n >= ART_RETRY_MS.length) { img.onerror = null; return; }
+    var src = img.getAttribute("data-src") || img.getAttribute("src") || "";
+    if (!src) return;
+    img.setAttribute("data-src", src);
+    img.setAttribute("data-retry", String(n + 1));
+    setTimeout(function () {
+      // the row was drawn again meanwhile, with a new picture (not isConnected: Chrome 53, webOS 4, lacks it)
+      if (!document.documentElement.contains(img)) return;
+      if (src.indexOf("//tvos.invalid/art/") >= 0) img.src = src + "?r=" + (n + 1);
+      else { img.removeAttribute("src"); img.src = src; }
+    }, ART_RETRY_MS[n]);
+  };
   function glassSetting() { var g = ST.glass || HOME.glass; return g === "on" || g === "lite" ? g : "off"; }
   // no clock in Home settings or config.json: the TV's own setting, else the one usual for the language (24 hour in Italian, German, Turkish, French, Serbian, Polish and Brazilian Portuguese)
   // On the Android home the TV's own 12 or 24 hour setting (System, Date and time) comes before the language's usual clock (#221)
@@ -477,7 +628,7 @@
   }
   function save() {
     if (MOCK || PREVIEW || OFFLINE) return;
-    var j = JSON.stringify({ showsBy: data.showsBy, screens: data.screens, order: data.order });
+    var j = JSON.stringify({ showsBy: data.showsBy, videosBy: data.videosBy, screens: data.screens, order: data.order });
     try { localStorage.setItem(CACHE_KEY, j); } catch (e) {}
     try { if (TV && TV.keep) TV.keep(CACHE_KEY, j); } catch (e) {}
   }
@@ -626,26 +777,74 @@
   function tempText(c) { return WX_F ? Math.round(c * 9 / 5 + 32) + "°F" : c + "°"; }
   function wxText(w) { var k = WMO_KEY[w.code]; return k ? t(k) : (w.text || ""); }
 
+  function weatherPlace() {
+    var place = String((WXCFG && WXCFG.place) || "").trim();
+    var L = window.I18N, country = L && L.country ? L.country() : "";
+    var parts = place.split(/\s*,\s*/);
+    if (country && parts.length > 1 && typeof Intl !== "undefined" && Intl.DisplayNames) {
+      var names = [
+        new Intl.DisplayNames(["en"], { type: "region" }).of(country),
+        new Intl.DisplayNames([L.locale()], { type: "region" }).of(country)
+      ];
+      var last = parts[parts.length - 1].toLowerCase();
+      if (names.some(function (name) { return name && name.toLowerCase() === last; })) parts.pop();
+    }
+    return parts.join(", ");
+  }
+
+  // Every 15 s: redraw only on a new minute, and only while the home can be seen. The redraw sets
+  // two innerHTMLs and forces a few layouts (fitDate, the glass clock), which a 2 GB box felt four
+  // times a minute for a display that changes once. tv.resume() redraws straight away.
+  var clockMinute = "";
+  function clockTick() {
+    if (!active()) return;
+    var d = new Date(), minute = d.getHours() + ":" + d.getMinutes();
+    if (minute === clockMinute && !(NIGHT && !glassShown)) return;   // glassShown blank: a glass setting changed
+    clock();
+  }
   function clock() {
     var d = new Date(), h = d.getHours(), m = d.getMinutes();
+    clockMinute = h + ":" + m;
     var mm = (m < 10 ? "0" : "") + m;
-    var hm = CLOCK24 ? (h < 10 ? "0" : "") + h + ":" + mm : (h % 12 || 12) + ":" + mm;
-    $("time").innerHTML = hm + (CLOCK24 ? "" : "<small>" + esc(h < 12 ? t("am") : t("pm")) + "</small>");
+    var CD = typeof CouchDesign !== "undefined" && CouchDesign.on() ? CouchDesign : null;
+    var c24 = CD ? CD.clock24(CLOCK24) : CLOCK24;   // a design's clock format wins (design.js)
+    var hm = c24 ? (h < 10 ? "0" : "") + h + ":" + mm : (h % 12 || 12) + ":" + mm;
+    $("time").innerHTML = hm + (c24 ? "" : "<small>" + esc(h < 12 ? t("am") : t("pm")) + "</small>");
     var loc = window.I18N ? window.I18N.locale() : "en-AU";
-    var day = d.toLocaleDateString(loc, { weekday: "long", day: "numeric", month: "long" }).replace(",", "");
+    var lang = window.I18N ? window.I18N.lang() : "en";
+    var day = d.toLocaleDateString(loc, { weekday: "long", day: "numeric", month: "long" });
+    if (lang !== "ro") day = day.replace(",", "");
     day = day.charAt(0).toUpperCase() + day.slice(1);   // "lunes 27 de octubre" starts a line on screen
-    data.weather = WX_SHOW ? window.WeatherCache.read(kept("tvhome.weather"), WXCFG, Date.now()) : null;
+    if (CD) day = CD.day(d, day, loc);   // a design's date format (design.js)
+    var weatherRecord = WX_SHOW ? kept("tvhome.weather") : null;
+    var hadWeather = !!data.weather;
+    data.weather = window.WeatherCache.read(weatherRecord, WXCFG, Date.now());
+    if (CD && hadWeather && !data.weather) CD.dataChanged("weather", null);
     var w = NIGHT ? data.weather : null;
-    var weatherRecord = kept("tvhome.weather");
-    $("date").innerHTML = '<span class="dline">' + esc(day) + (w ? '<span class="wx">' + wxIcon(w) + esc(tempText(w.temp)) +
-      '<span class="ww"> ' + esc(wxText(w)) + "</span></span>" : "") + "</span>";
-    if (w) $("date").querySelector(".wx").title = "Updated " + new Date(weatherRecord.accepted).toLocaleTimeString();
+    var place = w ? weatherPlace() : "";
+    var date = $("date");
+    if (lang === "ro" && (place || w)) {
+      var weatherParts = [place, w && tempText(w.temp), w && wxText(w)].filter(Boolean);
+      date.classList.add("weather-lines");
+      date.innerHTML = '<span class="dline"><span class="date-label">' + esc(day) +
+        '</span><span class="wx">' + weatherParts.map(esc).join(" · ") + "</span></span>";
+    } else {
+      date.classList.remove("weather-lines");
+      var bar = DATE_BARS ? '<i class="vbar"></i>' : "";
+      date.innerHTML = '<span class="dline">' + esc(day) + (w ? '<span class="wx">' + bar +
+        (place ? '<span class="wx-place">' + (DATE_BARS ? esc(place) + bar : " · " + esc(place) + " · ") + "</span>" : "") + wxIcon(w) + esc(tempText(w.temp)) +
+        '<span class="ww">' + (DATE_BARS ? " " : " · ") + esc(wxText(w)) + "</span></span>" : "") +
+        // no town yet (never a made up one): say once, in the weather's place, where to pick it
+        (!w && NIGHT && WX_SHOW && !CD && !wxPlaceSet() ? '<span class="wx wx-ask">' + bar + (DATE_BARS ? "" : " · ") + esc(t("wx_ask", { home: t("gear_home"), loc: t("sec_location") })) + "</span>" : "") + "</span>";
+    }
+    if (w) date.querySelector(".wx").title = "Updated " + new Date(weatherRecord.accepted).toLocaleTimeString();
     var ic = $("idle-clock"), idate = $("idle-date"), iwx = $("idle-wx");
-    if (ic) ic.innerHTML = hm + (CLOCK24 ? "" : "<small>" + esc(h < 12 ? t("am") : t("pm")) + "</small>");
+    if (ic) ic.innerHTML = hm + (c24 ? "" : "<small>" + esc(h < 12 ? t("am") : t("pm")) + "</small>");
     if (idate) idate.textContent = day;
     if (iwx) {
       var wIdle = WX_SHOW && data.weather && data.weather.temp != null ? data.weather : null;
-      iwx.textContent = wIdle ? (tempText(wIdle.temp) + " · " + wxText(wIdle)) : "";
+      var placeIdle = wIdle ? weatherPlace() : "";
+      iwx.textContent = wIdle ? ([placeIdle, tempText(wIdle.temp), wxText(wIdle)].filter(Boolean).join(" · ")) : "";
     }
     var iov = $("idle-ambient-overlay");
     if (iov) iov.classList.toggle("quiet-hours", isQuietHours(SMART_IDLE.quiet_hours));
@@ -710,7 +909,10 @@
         below: below, dark: m.text === "dark",
         // video: true plays backgrounds/mine/scene-<id>.mp4 (muted, looping) over the photo, under
         // the cut-out and the clock, while this scene is the one on screen
-        video: m.video === true });
+        video: m.video === true,
+        // when: dawn, day, dusk or night. With Follow the sun, an own scene tagged like this joins the built-in
+        // scene for that time of day, and the home steps through the group (home.sun_rotate_minutes)
+        when: ["dawn", "day", "dusk", "night"].indexOf(m.when) >= 0 ? m.when : "" });
     });
     return out;
   }
@@ -760,13 +962,68 @@
         el.style.setProperty("--my-top", s.y * 100 + "vh");
         el.style.setProperty("--my-size", s.size * 100 + "vh");
         el.style.setProperty("--my-weight", s.weight);
-        el.querySelector(".sbg").onerror = function () { lostScene(s); };
-        var fg = el.querySelector(".fg");
-        if (fg) fg.onerror = function () { fg.style.display = "none"; };   // "cutout": true but no file: the clock stays in front
       }
+      watchImage(el.querySelector(".sbg"), s, true);
+      var fg = el.querySelector(".fg");
+      if (fg) watchImage(fg, s, false);
       box.appendChild(el);
       return el;
     });
+  }
+
+  // A scene picture that did not arrive. Your own scene: the file is not on this TV, so the scene
+  // leaves the turns (lostScene) or the clock stays in front without its cut-out. A built-in one
+  // was lost on the way (seen on a Fire TV Cube over weak Wi-Fi, where it left a black scene for
+  // the whole turn): ask again after 2, 6 and 15 s, and if the scene on screen still has no photo,
+  // move on to the next one. A picture whose src was taken away (unreadyScene) is not an error.
+  var RETRY_MS = [2000, 6000, 15000];
+  function watchImage(img, s, isPhoto) {
+    img.onerror = function () {
+      var src = img.getAttribute("src");
+      if (!src) return;
+      if (s.mine) { if (isPhoto) lostScene(s); else img.style.display = "none"; return; }
+      var tries = parseInt(img.dataset.tries || "0", 10);
+      if (tries < RETRY_MS.length) {
+        setTimeout(function () {
+          if (!img.getAttribute("src")) return;   // released meanwhile: nothing to retry
+          var base = src.replace(/([?&])retry=\d+$/, "$1").replace(/[?&]$/, "");
+          img.dataset.tries = tries + 1;
+          img.src = base + (base.indexOf("?") < 0 ? "?" : "&") + "retry=" + (tries + 1);
+        }, RETRY_MS[tries]);
+      } else if (isPhoto && SCENES[scene] === s && SCENES.length > 1) showScene(nextFrom(scene));
+    };
+    img.onload = function () { delete img.dataset.tries; };
+  }
+
+  /** The scene's photo is in and drawable. */
+  function photoIn(el) {
+    var img = el.querySelector(".sbg");
+    return !!img && img.complete && img.naturalWidth > 0;
+  }
+
+  // Resolves once the scene's photo is in (or failed, or 8 s passed): a fade only starts when there
+  // is something to fade to, instead of a black scene while the photo is still on its way.
+  function sceneLoaded(el, ms) {
+    var img = el.querySelector(".sbg");
+    if (!img || (img.complete && img.naturalWidth > 0)) return Promise.resolve();
+    return new Promise(function (done) {
+      var t = setTimeout(done, ms);
+      var fin = function () { clearTimeout(t); img.removeEventListener("load", fin); img.removeEventListener("error", fin); done(); };
+      img.addEventListener("load", fin); img.addEventListener("error", fin);
+    });
+  }
+
+  // A scene that has faded out gives its pictures back: the decoded 1920x1080 photo, the cut-out
+  // with its alpha and the clock's frosted fill are what a scene costs in GPU memory, and a scene
+  // keeping them while it waits is why a 2 GB Fire TV Cube swung 115 to 260 MB at every change.
+  // readyScene puts them back (from the browser's cache) when its turn comes near.
+  function unreadyScene(k) {
+    var el = sceneEls[k];
+    if (!el || !el.classList.contains("ready")) return;
+    el.classList.remove("ready");
+    Array.prototype.forEach.call(el.querySelectorAll("img"), function (img) { img.removeAttribute("src"); delete img.dataset.tries; });
+    Array.prototype.forEach.call(el.querySelectorAll(".gclock .fill"), function (f) { f.style.backgroundImage = ""; });
+    delete el.dataset.hm;
   }
 
   // An own scene whose photo is not on this TV (option A with an app built before the scene was
@@ -778,8 +1035,10 @@
       $("scenes").innerHTML = "";
       buildScenes();
       scene = 0;
+      switching = false; pendingScene = -1;   // a fade still waiting for a lost photo is over (its scene element is gone)
       showScene(0);
-    } else if (SCENES[scene] === s) showScene(nextFrom(scene));
+    } else if (SCENES[scene] === s && pendingScene < 0) showScene(nextFrom(scene));
+    // a lost scene a fade is waiting for: that fade moves on by itself (showScene)
   }
   function nextFrom(i) {
     for (var k = 1; k <= SCENES.length; k++) if (!SCENES[(i + k) % SCENES.length].lost) return (i + k) % SCENES.length;
@@ -790,17 +1049,26 @@
   function readyScene(i) {
     var s = SCENES[i], el = sceneEls[i];
     if (!el.classList.contains("ready")) {
-      el.querySelector(".sbg").src = s.src || bgPath(s.photo, ".jpg", !s.mine);
+      var sbg = el.querySelector(".sbg");
+      if (s.src) sbg.src = s.src;
+      else if (s.mine) {
+        // an own scene may carry a 4K copy, scene-<id>@2x.jpg (make-scene.py --4k). On a 4K screen it is
+        // tried first, and the 1080 file is used if it is not there, so scenes made before this keep working.
+        var lo = bgPath(s.photo, ".jpg", false), hi = bgPath(s.photo, ".jpg", true);
+        if (hi !== lo) sbg.onerror = function () { sbg.onerror = null; sbg.src = lo; };
+        sbg.src = hi;
+      } else sbg.src = bgPath(s.photo, ".jpg", true);
       if (s.fg) el.querySelector(".fg").src = bgPath(s.photo + "-fg", ".webp", !s.mine);
       el.classList.add("ready");
       // decoded now, while the scene waits at opacity 0, rather than when its fade starts
       Array.prototype.forEach.call(el.querySelectorAll("img"), function (img) { if (img.decode && img.src) img.decode().catch(function () {}); });
-    }
-    drawClocks(el, s, glassShown);
+      drawClocks(el, s, glassShown);
+    } else if (el.dataset.hm !== glassShown) drawClocks(el, s, glassShown);   // already drawn with this time: nothing to do
   }
 
   function drawClocks(el, s, hm) {
     if (!hm) return;
+    el.dataset.hm = hm;
     var cs = el.querySelectorAll(".gclock");
     for (var k = 0; k < cs.length; k++) {
       var c = cs[k];
@@ -819,6 +1087,9 @@
         f.style.backgroundImage = s.src ? cssUrl(s.src) : "url(backgrounds/" + s.photo + (s.glass ? "-glass" : "") + ".jpg)";
         f.style.backgroundPosition = -ex + "px " + -ey + "px";
       }
+      // a design moves and sizes the clock and may set its own background: design.js lines the
+      // glass up again from where the digits really are
+      if (typeof CouchDesign !== "undefined" && CouchDesign.on()) CouchDesign.fill(c, f, s, CLOCK_LIQUID);
     }
     if (s.water) {   // above the waterline sharp, below it the blurred reflection
       // The digits hang below the clock's box (its line height is tight), so the clips reach past
@@ -900,10 +1171,30 @@
     });
   }
 
-  function showScene(i) {
-    var prev = scene;
-    scene = i;
+  // The next scene is readied this long before its turn (today's 2 s after the fade kept two full
+  // scenes decoded for the whole turn); short turns keep the old timing.
+  var PRE_READY_MS = 3000, preReadyTimer = null, switching = false, pendingScene = -1;
+  function showScene(i, hops) {
+    if (switching) return;   // a fade is waiting for its photo: the next tick comes round
+    var prev = scene, s = SCENES[i], el = sceneEls[i];
     readyScene(i);
+    if (prev === i) { swapScene(i, prev); return; }
+    switching = true; pendingScene = i;
+    sceneLoaded(el, 8000).then(function () {
+      switching = false; pendingScene = -1;
+      if (sceneEls[i] !== el) return;   // the scenes were rebuilt meanwhile (lostScene): that showed what is left
+      if (s.lost || !photoIn(el)) {
+        // nothing to fade to: keep what is on screen and try the scene after this one (bounded, so a
+        // TV with no network does not go round and round); the retries and the next turn try again
+        hops = (hops || 0) + 1;
+        if (hops < SCENES.length) showScene(nextFrom(i), hops);
+        return;
+      }
+      swapScene(i, prev);
+    });
+  }
+  function swapScene(i, prev) {
+    scene = i;
     var date = $("date");
     date.classList.add("swap");
     setTimeout(function () {
@@ -919,13 +1210,18 @@
     }, 600);
     sceneEls[i].classList.add("on");
     if (prev !== i) sceneEls[prev].classList.remove("on");
-    // after the fade, stop drawing the old one and get the next one ready
+    // after the fade, give the other scenes' pictures back; the next one is readied just before its turn
+    var lead = SCENE_MS > 10000 ? SCENE_MS - PRE_READY_MS : 2000;
     setTimeout(function () {
-      var next = nextFrom(scene);
-      sceneEls.forEach(function (el, k) { if (k !== scene && k !== next) el.classList.remove("ready"); });
-      readyScene(next);
+      sceneEls.forEach(function (el, k) { if (k !== scene && k !== pendingScene && (lead > 2000 || k !== nextFrom(scene))) unreadyScene(k); });
       sceneVideos(true);   // the old scene's clip stops now it has faded out; this one's starts
     }, 2000);
+    clearTimeout(preReadyTimer);
+    preReadyTimer = setTimeout(function () {
+      var next = nextFrom(scene);
+      if (SUN_SYNC) { var idx = SCENES.map(function (x) { return x.id; }).indexOf(sunTargetScene()); if (idx >= 0) next = idx; }
+      if (next !== scene) readyScene(next);
+    }, lead);
   }
 
   // Night: the date line sits centred above the clock, between the people switch and the quick
@@ -969,7 +1265,30 @@
     return { alt: alt, hourAngle: hourAngle * (180 / Math.PI) };
   }
 
+  // The time of day where the TV is, from the sun's height, as the built-in picks below do: night under
+  // -6 degrees, dawn or dusk under 10 degrees (the hour angle says which), day above.
+  function sunPhase() {
+    if (!WXCFG || WXCFG.lat == null || WXCFG.lon == null || !isFinite(WXCFG.lat) || !isFinite(WXCFG.lon)) {
+      var h = new Date().getHours();
+      return h >= 5 && h < 8 ? "dawn" : h >= 8 && h < 16 ? "day" : h >= 16 && h < 19 ? "dusk" : "night";
+    }
+    var pos = solarAltitude(Number(WXCFG.lat), Number(WXCFG.lon), new Date());
+    if (pos.alt < -6) return "night";
+    if (pos.alt < 10) return pos.hourAngle < 0 ? "dawn" : "dusk";
+    return "day";
+  }
+  // Follow the sun with own scenes: the built-in scene for this time of day plus every own scene tagged
+  // with it (and not switched off) take turns, one every home.sun_rotate_minutes (25 by default). With no
+  // tagged scene this is the built-in pick alone, as it always was.
   function sunTargetScene() {
+    var base = sunTargetBuiltIn();
+    var ph = sunPhase();
+    var pool = [base].concat(SCENES.filter(function (sc) { return sc.mine && sc.when === ph; }).map(function (sc) { return sc.id; }));
+    if (pool.length < 2) return base;
+    var mins = Math.max(5, Math.min(240, parseInt(HOME.sun_rotate_minutes, 10) || 25));
+    return pool[Math.floor(Date.now() / (mins * 60000)) % pool.length];
+  }
+  function sunTargetBuiltIn() {
     var st = sceneState();
     var available = st.order.filter(function (id) { return st.off.indexOf(id) < 0; });
     var pick = function (preferred, fallback) {
@@ -1028,9 +1347,19 @@
     }
   }
 
-  // the settings screen covers the scenes, so they wait (one less thing for a small TV stick to draw)
+  // the settings screen covers the scenes, so they wait (one less thing for a small TV stick to draw).
+  // So do an app or the TV's screensaver in front (the launcher calls tv.pause, and the page's own
+  // visibility): a crossfade decodes and uploads a fresh set of 1080p layers, and on a Fire TV Cube
+  // (2 GB) the page's GPU memory was seen swinging between 115 MB and 260 MB with every change while
+  // the screensaver covered it, which is what pushes a small box into swapping.
+  var PAGE_PAUSED = false;
+  // An app or the TV's screensaver is in front: nothing on the home can be seen, so its clock,
+  // its polls and its scene changes wait (the launcher also pauses the WebView's timers, so these
+  // guards matter on TVs that do not, and for the screen-off mode, which has no pause).
+  function covered() { return PAGE_PAUSED || document.hidden; }
+  function active() { return !covered() && !screenOffActive; }
   function nextScene() {
-    if (zone !== "settings" && sceneMayChange()) {
+    if (zone !== "settings" && active() && sceneMayChange()) {
       if (SUN_SYNC) applySunSync();
       else showScene(nextFrom(scene));
     }
@@ -1063,18 +1392,24 @@
     window.AmbientWeather.setWeather(WX_SHOW ? data.weather : null, pos);
   }
 
-  // Fetch weather on the TV so outages never hide a still-fresh local reading.
+  // Read directly on the TV so the last fresh reading stays available through a bridge outage.
+  // Studio previews only use the bridge unless a test explicitly enables live weather.
+  function wxPlaceSet() { return !!(WXCFG && WXCFG.lat != null && WXCFG.lon != null && isFinite(WXCFG.lat) && isFinite(WXCFG.lon)); }
+  function wantsForecast() { return typeof CouchDesign !== "undefined" && CouchDesign.wantsForecast && CouchDesign.wantsForecast(); }
   function refreshWeather() {
-    if (!NIGHT || !WX_SHOW) {
-      data.weather = null;
-      updateAmbientWeather();
+    var fc = wantsForecast();
+    if ((!NIGHT && !fc) || !WX_SHOW || !wxPlaceSet()) {
+      clock();
       return Promise.resolve();
     }
-    clock();
-    return weatherDirect().then(function (j) {
-      var reading = window.WeatherCache.record(j.place, j.weather, Date.now());
-      if (reading) keep("tvhome.weather", reading);
+    var place = Object.assign({}, WXCFG);
+    var direct = !MOCK || /[?&]wxlive=1/.test(Q);
+    return (direct ? weatherDirect(fc, place) : api("GET", "/api/weather")).then(function (j) {
+      var now = Date.now(), record = window.WeatherCache.record(place, j, now);
+      if (!window.WeatherCache.read(record, WXCFG, now)) return;
+      keep("tvhome.weather", record);
       clock();
+      if (typeof CouchDesign !== "undefined" && CouchDesign.dataChanged) CouchDesign.dataChanged("weather", [j.temp, j.code, j.daily && j.daily.length]);
     }, function () { clock(); });
   }
 
@@ -1083,24 +1418,62 @@
     51: "wx_drizzle", 53: "wx_drizzle", 55: "wx_drizzle", 56: "wx_drizzle", 57: "wx_drizzle", 61: "wx_light_rain",
     63: "wx_rain", 65: "wx_heavy_rain", 66: "wx_rain", 67: "wx_rain", 80: "wx_showers", 81: "wx_showers",
     82: "wx_heavy_showers", 95: "wx_storms", 96: "wx_storms", 99: "wx_storms" };
-  function weatherDirect() {
-    var place = Object.assign({}, WXCFG);
+  // With a forecast widget on a design, the same one call grows (widgets/CATALOGUE.md "Data plumbing" 1):
+  // hourly, daily and the next hours of rain, still free, keyless and one request per refresh.
+  function weatherDirect(forecast, place) {
     var url = "https://api.open-meteo.com/v1/forecast?latitude=" + place.lat + "&longitude=" + place.lon +
-      "&current=temperature_2m,weather_code,is_day&timezone=" + encodeURIComponent(place.timezone || "auto") + "&forecast_days=1";
+      "&current=temperature_2m,weather_code,is_day&timezone=" + encodeURIComponent(place.timezone || "auto") +
+      (forecast ? "&hourly=temperature_2m,weather_code,uv_index,precipitation_probability&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max&minutely_15=precipitation&forecast_days=7&forecast_minutely_15=12" : "&forecast_days=1");
     return new Promise(function (resolve, reject) {
       var x = new XMLHttpRequest();
-      x.open("GET", url); x.timeout = 5000;
+      x.open("GET", url);
+      x.timeout = 5000;
       x.onerror = x.ontimeout = function () { reject(new Error("weather unavailable")); };
       x.onload = function () {
         try {
           if (x.status < 200 || x.status >= 300) throw new Error("weather unavailable");
-          var c = JSON.parse(x.responseText).current;
-          if (!c || typeof c.temperature_2m !== "number" || typeof c.weather_code !== "number") throw new Error("invalid weather");
-          resolve({ place: place, weather: { temp: Math.round(c.temperature_2m), code: Math.round(c.weather_code), text: "", is_day: !!c.is_day } });
+          resolve(JSON.parse(x.responseText));
         } catch (e) { reject(e); }
       };
       x.send();
+    }).then(function (j) {
+      var c = j.current;
+      if (!c || typeof c.temperature_2m !== "number" || typeof c.weather_code !== "number") throw new Error("invalid weather");
+      var code = Math.round(c.weather_code);
+      var out = { temp: Math.round(c.temperature_2m), code: code, text: "", is_day: !!c.is_day };
+      if (forecast) {
+        var H = j.hourly || {}, Dd = j.daily || {}, M = j.minutely_15 || {}, nowIso = (c.time || "").slice(0, 13), at = Math.max(0, (H.time || []).indexOf(nowIso + ":00"));
+        out.hourly = (H.time || []).slice(at, at + 24).map(function (t, i) { return { time: t, temp: H.temperature_2m[at + i], code: H.weather_code[at + i], uv: H.uv_index && H.uv_index[at + i], pop: H.precipitation_probability && H.precipitation_probability[at + i] }; });
+        out.daily = (Dd.time || []).map(function (t, i) { return { date: t, code: Dd.weather_code[i], hi: Dd.temperature_2m_max[i], lo: Dd.temperature_2m_min[i], sunrise: Dd.sunrise[i], sunset: Dd.sunset[i], uv: Dd.uv_index_max && Dd.uv_index_max[i] }; });
+        out.rain15 = (M.precipitation || []).slice(0, 12);
+        if (out.daily.length) { out.hi = Math.round(out.daily[0].hi); out.lo = Math.round(out.daily[0].lo); out.uv = Math.round(out.daily[0].uv || 0); }
+        if (Dd.precipitation_probability_max) out.daily.forEach(function (d, i) { d.pop = Dd.precipitation_probability_max[i]; });
+      }
+      return airAndSurf(out, place);
     });
+  }
+  // Only while an air or surf widget is on the home: Open-Meteo's free air quality and marine
+  // services for the same rounded place (widget-caps.js "air", "surf"). A failure leaves the rest.
+  function airAndSurf(out, place) {
+    var want = typeof CouchDesign !== "undefined" && CouchDesign.wantsKinds ? CouchDesign.wantsKinds(["air", "surf"]) : [];
+    if (!want.length) return out;
+    var at = "latitude=" + place.lat + "&longitude=" + place.lon + "&timezone=" + encodeURIComponent(place.timezone || "auto");
+    var nowAt = function (times) { var h = new Date(), iso = h.getFullYear() + "-" + ("0" + (h.getMonth() + 1)).slice(-2) + "-" + ("0" + h.getDate()).slice(-2) + "T" + ("0" + h.getHours()).slice(-2) + ":00"; return Math.max(0, (times || []).indexOf(iso)); };
+    var jobs = [];
+    if (want.indexOf("air") >= 0) jobs.push(fetch("https://air-quality-api.open-meteo.com/v1/air-quality?" + at + "&current=european_aqi&hourly=european_aqi&forecast_days=2")
+      .then(function (r) { return r.json(); }).then(function (j) {
+        var H = j.hourly || {}, i = nowAt(H.time);
+        if (j.current && isFinite(j.current.european_aqi)) out.air = { aqi: j.current.european_aqi, hourly: (H.european_aqi || []).slice(i, i + 12).filter(function (v) { return v != null; }) };
+      }, function () {}));
+    if (want.indexOf("surf") >= 0) jobs.push(Promise.all([
+      fetch("https://marine-api.open-meteo.com/v1/marine?" + at + "&current=wave_height,wave_period,wave_direction&hourly=wave_height&forecast_days=2").then(function (r) { return r.json(); }),
+      fetch("https://api.open-meteo.com/v1/forecast?" + at + "&current=wind_speed_10m,wind_direction_10m&forecast_days=1").then(function (r) { return r.json(); })
+    ]).then(function (j) {
+      var c = j[0].current || {}, H = j[0].hourly || {}, i = nowAt(H.time), wc = j[1].current || {};
+      out.marine = { wave: c.wave_height == null ? NaN : c.wave_height, period: c.wave_period, dir: c.wave_direction, wind: wc.wind_speed_10m, windDir: wc.wind_direction_10m,
+        hourly: (H.wave_height || []).slice(i, i + 12).filter(function (v) { return v != null; }) };
+    }, function () {}));
+    return Promise.all(jobs).then(function () { return out; });
   }
 
   function hero(it) {
@@ -1319,15 +1692,15 @@
     var el = $("np"), on = npVisible();
     el.classList.toggle("on", on);
     if (NIGHT) {
-      // the row shows while someone has a show on the go, or while a song plays
-      var anyone = KW_ON && PEOPLE.some(function (p) { return (data.showsBy[p.id] || []).length; });
+      // the row shows while someone has a show on the go (or videos under the YouTube tile), or while a song plays
+      var anyone = rowHasCards();
       $("shelf-section").classList.toggle("empty", !anyone && !on);
       $("np-slot").classList.toggle("on", on);
     }
     if (!on) { el.innerHTML = ""; return; }
     var playing = music.state === "playing";
     // the cover from the bridge (Apple's music search); none yet, or none found: a music note
-    var art = music.art ? '<img class="np-art" src="' + esc(music.art) + '" alt="" decoding="async" onerror="this.className=\'np-art gone\'">' :
+    var art = music.art ? '<img class="np-art" src="' + esc(music.art) + '" alt="" decoding="async" data-err="np">' :
       '<span class="np-art">' + ICONS.note + "</span>";
     var btns = npButtons();
     if (npI >= btns.length) npI = Math.max(0, btns.length - 1);   // a Spotify song may have one button
@@ -1337,8 +1710,28 @@
         return '<span class="nb' + (zone === "np" && i === npI ? " focus" : "") + '" role="button" aria-label="' + esc(b[1]) + '">' + ICONS[b[0]] + "</span>";
       }).join("") + "</div>";
   }
+  // ---------- Up next queue (a design's queue widget, widgets.js R.queue) ----------
+  // The next songs on the Spotify account, from the person's own Spotify sign in: the bridge's
+  // /api/music/queue (bridge/spotify_now.py), or the standalone site's own api/now?queue=1. Asked
+  // only while a queue widget is on the home and the home is in front, at most every 20 seconds.
+  // undefined: not asked yet; { ok: false }: Spotify is not connected; { ok: true, items }.
+  var QUEUE, queueAt = 0;
+  function refreshQueue() {
+    if (document.hidden || (OFFLINE && !STANDALONE) || !document.querySelector(".cd-layer .cw-k-queue")) return;
+    queueAt = Date.now();
+    var ask = STANDALONE ? fetch(window.CouchSpotify ? window.CouchSpotify.url("api/now?queue=1") : "api/now?queue=1", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      : api("GET", "/api/music/queue", null, 8000);
+    ask.then(function (j) {
+      QUEUE = j && Array.isArray(j.queue) ? { ok: true, items: j.queue.slice(0, 10) } : { ok: false };
+      if (typeof CouchDesign !== "undefined" && CouchDesign.dataChanged) CouchDesign.dataChanged("queue", QUEUE.ok ? QUEUE.items.map(function (s) { return s && s.title; }) : "off");
+    }, function () {});
+  }
+  window.CouchQueueNow = function () { return QUEUE; };
+  setInterval(function () { var age = Date.now() - queueAt; if ((QUEUE === undefined && age > 6000) || age > 20000) refreshQueue(); }, 2000);
+
   function refreshMusic() {
-    if (!NP_ON || (OFFLINE && !STANDALONE) || document.hidden) {
+    if (!NP_ON || (OFFLINE && !STANDALONE) || covered()) {
       if (music) { music = null; ambientOpen = false; renderNp(); renderAmbientMusic(); }
       return;
     }
@@ -1371,6 +1764,7 @@
       }
       renderNp();
       renderAmbientMusic();
+      if (typeof CouchDesign !== "undefined" && CouchDesign.dataChanged) CouchDesign.dataChanged("music", music ? [music.title, music.artist, music.state] : null);
       if (had !== !!music && (zone === "np" || zone === "ambient") && !music) paintFocus();
     }, function () {
       if (music) {
@@ -1571,7 +1965,10 @@
       return false;
     });
   }
-  function hasQuick() { return quickVisible().length > 0; }
+  function hasQuick() { return quickVisible().length > 0 && !designHides("quick"); }
+  // a part a design hides is out of the remote's way too: focus never lands on something you cannot see
+  function designHides(part) { return typeof CouchDesign !== "undefined" && CouchDesign.on() && CouchDesign.hides(part); }
+  function shelfReach() { return shelfEls.length > 0 && !designHides("keep_watching"); }
   function picLabel() {
     if (picBusy) return t("switching");
     var names = picModes || (TVCFG.picture_modes || []).map(function (n) { return { id: null, name: n }; });
@@ -1726,8 +2123,10 @@
       if (overlay) overlay.classList.remove("active");
       try { if (TV && TV.setScreenOff) TV.setScreenOff(false); } catch (e) {}
       paintFocus();
+      clock();   // the clock rested in the dark
     }
     sceneVideos(!screenOffActive);
+    designVideo("off", screenOffActive);
     resetIdlePhoto();
   }
   // Smart Idle & OLED-safe Ambient Clock
@@ -1778,9 +2177,12 @@
       ov.classList.remove("active");
     }
     sceneVideos(!idleAmbientActive);   // no clip decoding behind the ambient clock
+    designVideo("idle", idleAmbientActive);
   }
+  // a design's video background (design.js, bg-video.js) stops while the home is not on screen
+  function designVideo(why, held) { if (typeof CouchDesign !== "undefined" && CouchDesign.hold) CouchDesign.hold(why, held); }
   function checkSmartIdle() {
-    if (!SMART_IDLE.enabled || document.hidden || screenOffActive || idleAmbientActive) return;
+    if (!SMART_IDLE.enabled || covered() || screenOffActive || idleAmbientActive) return;
     var mins = isQuietHours(SMART_IDLE.quiet_hours) ? SMART_IDLE.quiet_hours.idle_minutes : SMART_IDLE.home_idle_minutes;
     if (!mins && !window.MOCK_SMART_IDLE_MS) return;
     var thresh = window.MOCK_SMART_IDLE_MS || (mins * 60000);
@@ -1939,6 +2341,7 @@
   function subtitle(it) {
     var parts = [];
     if (it.app && it.app.name) parts.push(it.app.name);
+    if (it.kind === "video") parts.push(t("video_card"));   // a YouTube video: no season, episode or picture
     if (it.season && it.episode) parts.push("S" + it.season + ", E" + it.episode);
     if (it.episode_title) parts.push(it.episode_title);
     return parts.join("  ·  ");
@@ -2004,20 +2407,30 @@
   // A person switch made elsewhere (the phone, another TV): when the bridge's "who" changes, show
   // that person here too.
   var bridgeWho = null;
+  // Every 3 s while the home can be seen (a phone that switched the person shows here within a
+  // moment); while the bridge does not answer the wait doubles up to 30 s. Returns the request.
+  var whoEvery = 3000;
+  function followWhoTick() {
+    if (!active()) { setTimeout(followWhoTick, 3000); return; }
+    followWho().then(function () { whoEvery = 3000; }, function () { whoEvery = Math.min(30000, whoEvery * 2); })
+      .then(function () { setTimeout(followWhoTick, whoEvery); });
+  }
   function followWho() {
-    if (NOBODY) return;
-    api("GET", "/api/who").then(function (j) {
-      var w = j && j.who;
-      if (!w || w === bridgeWho) return;
-      var first = bridgeWho === null;
-      bridgeWho = w;
-      if (first || w === who) return;   // the first answer only sets the baseline
-      if (!PEOPLE.some(function (p) { return p.id === w; })) return;
-      who = w; s = 0;
-      try { localStorage.setItem("tvhome.who", who); } catch (e) {}
-      renderShelf();
-      kidSync();
-    }, function () {});
+    if (NOBODY) return Promise.resolve();
+    return api("GET", "/api/who").then(function (j) {
+      try {
+        var w = j && j.who;
+        if (!w || w === bridgeWho) return;
+        var first = bridgeWho === null;
+        bridgeWho = w;
+        if (first || w === who) return;   // the first answer only sets the baseline
+        if (!PEOPLE.some(function (p) { return p.id === w; })) return;
+        who = w; s = 0;
+        try { localStorage.setItem("tvhome.who", who); } catch (e) {}
+        renderShelf();
+        kidSync();
+      } catch (e) { console.error(e); }   // a drawing error is not a bridge failure: no backoff
+    });
   }
 
   // ---------------- kids mode (kids.js, docs/CONFIG.md "Kids mode") ----------------
@@ -2101,17 +2514,77 @@
 
   // Keep watching shows up to ten per person; the row slides along under the remote.
   var KEEP_MAX = 10;
+
+  // ---------------- the row follows the app the remote is on (home.shelf_follows_app) ----------------
+  // followPkg is the package of the app tile the remote is on, or null for the whole row. While it is
+  // set, the row shows only that app's cards (under the YouTube tile, also that person's videos from the
+  // bridge) under a "Recently on <app>" heading. An app with nothing on the go changes nothing: the
+  // whole row stays, so the row never empties or flickers as the remote runs along the dock.
+  var followPkg = null, shelfShown = "";
+  function pkgOf(it) { return (it.app && it.app.package) || it.package || ""; }
+  function fullShows() { return KW_ON ? (data.showsBy[who] || []).slice(0, KEEP_MAX) : []; }
+  // one app's cards: its shows from the row, then its videos (only YouTube has any), each newest first
+  function showsFor(pkg) {
+    return fullShows().filter(function (it) { return pkgOf(it) === pkg; })
+      .concat((data.videosBy[who] || []).filter(function (it) { return pkgOf(it) === pkg; })).slice(0, KEEP_MAX);
+  }
+  // the list on screen: the followed app's cards when it has some, else the whole row
+  function visibleShows() {
+    if (!followPkg) return fullShows();
+    var mine = showsFor(followPkg);
+    return mine.length ? mine : fullShows();
+  }
+  // the app the heading names, or null while the whole row shows
+  function followName() {
+    if (!followPkg) return null;
+    var mine = showsFor(followPkg);
+    if (!mine.length) return null;
+    var a = (data.apps || []).filter(function (x) { return x.package === followPkg; })[0];
+    return a ? a.name : (mine[0].app && mine[0].app.name) || followPkg;
+  }
+  // what the row would show now, as one string: the heading and the ids of the cards
+  function shelfKey() { return (followName() || "") + "\n" + visibleShows().map(function (it) { return it.id; }).join("\n"); }
+  // Which app the row follows right now: the app tile the remote is on (not More apps, Settings, an input, a
+  // Screen or a tool), kept while the remote has gone up from it into the row or holds OK on a card there;
+  // anywhere else (another tile, the people, the quick buttons, Now playing, a menu) the whole row comes
+  // back. Called from paintFocus on every press, so the row is drawn again only when its cards would change.
+  function followSync() {
+    var want = null;
+    if (SHELF_FOLLOW && KW_ON && !kidsOn() && !lift) {
+      if (zone === "grid") { var a = gridItems[g]; want = a && (a.kind === "app" || !a.kind) && a.package ? a.package : null; }
+      else if (zone === "shelf" || zone === "shelfmenu") want = followPkg;
+    }
+    if (want === followPkg) return false;
+    followPkg = want;
+    if (shelfKey() === shelfShown) return false;   // the same cards under the same heading: nothing to redraw
+    renderShelf();
+    s = Math.max(0, Math.min(s, shelfEls.length - 1));   // the row may have fewer cards now
+    // the track still sits where the longer row was scrolled to, and only a press in the row moves it:
+    // a shorter row drawn under it would start off screen, under the heading, until the remote came back up
+    scrollShelf();
+    return true;
+  }
+  // The row has something to show: the cards on screen now (one app's, or someone's videos under the
+  // YouTube tile, which showsBy never holds) or someone's shows. renderShelf and renderNp hide the row on
+  // this, so a person whose only history is YouTube videos still sees their "Recently on YouTube".
+  function rowHasCards() {
+    return KW_ON && (data.shows.length > 0 || PEOPLE.some(function (p) { return (data.showsBy[p.id] || []).length > 0; }));
+  }
+
   function renderShelf() {
     var track = $("shelf");
-    data.shows = KW_ON ? (data.showsBy[who] || []).slice(0, KEEP_MAX) : [];
-    var anyone = KW_ON && PEOPLE.some(function (p) { return (data.showsBy[p.id] || []).length; });
+    data.shows = KW_ON ? visibleShows() : [];   // the whole row, or one app's cards while the remote follows it
+    if (typeof CouchDesign !== "undefined" && CouchDesign.dataChanged) CouchDesign.dataChanged("shows", [who, data.shows.map(function (x) { return x.title + (x.progress || ""); })]);
+    var anyone = rowHasCards();
     // nobody has anything on the go: no empty box, the photo has the space (unless Now playing
     // is up at night). The people switcher stays: with nothing yet (Netflix tells Android nothing on
     // some TVs, issue #23) it is the only way to say who is watching before anything is played.
     $("shelf-section").classList.toggle("empty", !anyone && !(NIGHT && npVisible()) && !CARDS.length);
     // custom cards keep the row (and its heading) even with Keep watching switched off
     document.documentElement.classList.toggle("kw-off", !KW_ON && !CARDS.length);
-    $("shelf-title").textContent = t(data.shows.length || !CARDS.length ? "keep_watching" : "custom_cards");
+    var following = followName();
+    $("shelf-title").textContent = following ? t("recently_on", { app: following }) : t(data.shows.length || !CARDS.length ? "keep_watching" : "custom_cards");
+    shelfShown = shelfKey();
     renderPeople();
     if (!KW_ON) { track.innerHTML = ""; shelfEls = []; addCards(track); return; }   // row switched off: only the custom cards, if any
     if (!data.shows.length) {
@@ -2125,10 +2598,10 @@
       // lock screen notifications: glass cards, three in view, the row slides past the third
       track.innerHTML = data.shows.map(function (it) {
         var art = slim(it.backdrop || it.poster), pkg = it.app && it.app.package;
-        var ep = it.season && it.episode ? "S" + it.season + " E" + it.episode : (it.episode_title || "");
+        var ep = it.kind === "video" ? t("video_card") : it.season && it.episode ? "S" + it.season + " E" + it.episode : (it.episode_title || "");
         return '<div class="tile ncard">' +
-          (art ? '<img class="thumb" src="' + esc(art) + '" alt="" decoding="async">' : '<span class="thumb none"></span>') +
-          '<div class="t"><div class="nap">' + (pkg && iconUrl(pkg) ? '<img src="' + esc(iconUrl(pkg)) + '" alt="" onerror="this.remove()">' : "") +
+          (art ? '<img class="thumb" src="' + esc(art) + '" alt="" decoding="async" data-err="kwretry">' : '<span class="thumb none"></span>') +
+          '<div class="t"><div class="nap">' + (pkg && iconUrl(pkg) ? '<img src="' + esc(iconUrl(pkg)) + '" alt="" data-err="remove">' : "") +
           esc(it.app ? it.app.name : "") + "</div><b>" + esc(it.title) + "</b>" + (ep ? "<i>" + esc(ep) + "</i>" : "") +
           (it.progress ? '<span class="nbar"><i style="width:' + Math.round(it.progress * 100) + '%"></i></span>' : "") + "</div></div>";
       }).join("");
@@ -2139,10 +2612,10 @@
     track.innerHTML = data.shows.map(function (it) {
       var art = slim(it.backdrop || it.poster);
       var pkg = it.app && it.app.package;
-      var badge = pkg && iconUrl(pkg) ? '<span class="badge"><img src="' + esc(iconUrl(pkg)) + '" alt="" onerror="this.parentNode.remove()"></span>' : "";
+      var badge = pkg && iconUrl(pkg) ? '<span class="badge"><img src="' + esc(iconUrl(pkg)) + '" alt="" data-err="parent"></span>' : "";
       var bar = it.progress ? '<span class="bar"><i style="width:' + Math.round(it.progress * 100) + '%"></i></span>' : "";
       return '<div class="tile show"><div class="face">' +
-        (art ? '<img src="' + esc(art) + '" alt="" decoding="async">' : '<span class="no-art">' + esc(it.title) + "</span>") +
+        (art ? '<img src="' + esc(art) + '" alt="" decoding="async" data-err="kwretry">' : '<span class="no-art">' + esc(it.title) + "</span>") +
         badge + bar + '</div><div class="caption"><b>' + esc(it.title) + "</b><span>" + esc(subtitle(it)) + "</span></div></div>";
     }).join("");
     shelfEls = Array.prototype.slice.call(track.children);
@@ -2256,14 +2729,14 @@
   // config.json has a home_assistant section with rooms or scenes. Otherwise nothing changes.
   function smartOn() { return !!(window.smartHome && window.smartHome.available()); }
   function smartItem() { return { kind: "smart", name: t("smart_home"), package: "smart:home" }; }
-  // LG's own Developer Mode app, as a dock tile: it opens the app itself, so the Extend button and
+  // LG's own Developer Mode app, in More apps: it opens the app itself, so the Extend button and
   // the remaining days are there to use by hand (the quick button does the Extend for you).
   function devOn() { return devCan() && TVCFG.extend_devmode !== false; }
   function devItem() { return { kind: "devmode", name: t("dev_app"), package: "com.palmdts.devmode" }; }
   function toolItems() {
     var list = [];
     if (smartOn()) list.push(smartItem());
-    if (devOn()) list.push(devItem());
+    if (devOn() && expanded) list.push(devItem());
     list.push(gearItem());
     return list;
   }
@@ -2352,8 +2825,13 @@
   function dockList() {
     var arr = arrangeItems();
     var list = expanded ? arr.items.slice() : arr.items.slice(0, arr.line);
+    // a design's own dock: its apps in its order, without the ones it hides (design.js)
+    if (!expanded && typeof CouchDesign !== "undefined" && CouchDesign.on()) list = CouchDesign.dock(arr.items, list, DOCK_APPS);
     list = list.concat(toolItems());
     if (!expanded && !(STANDALONE && !data.apps.length)) list.push(moreItem());   // standalone: no app list behind it
+    // apps a design put out on the screen come after Settings and More apps, so Right along the dock
+    // reaches those two before it leaves the dock (design.js)
+    if (!expanded && typeof CouchDesign !== "undefined" && CouchDesign.on() && CouchDesign.order) list = CouchDesign.order(list);
     return list;
   }
 
@@ -2423,6 +2901,10 @@
   function openAppMenu(a) {
     amApp = a; amI = 0;
     amItems = [{ act: "move", label: t("ctx_move") }, { act: "hide", label: t("ctx_hide") }];
+    // Restart and Quit sit above Uninstall. They need the computer's bridge: it force stops the app over ADB.
+    // The TV's own call for it only asks Android, which ignores it for most apps (tried on an Android 11
+    // projector), so with no bridge the items are left out rather than offered and doing nothing.
+    if (bridgeCanStop(a)) amItems.push({ act: "restart", label: t("ctx_restart") }, { act: "quit", label: t("ctx_quit") });
     if (TV && TV.uninstall) amItems.push({ act: "uninstall", label: t("ctx_uninstall") });
     if (TV && TV.appInfo) amItems.push({ act: "info", label: t("ctx_info") });
     zone = "appmenu";
@@ -2449,6 +2931,26 @@
     hintFlash = "";
     if (zone === "appmenu") zone = "grid";
   }
+  // Quit app / Restart app: the bridge force stops the app (restart also opens it again on what was playing).
+  // Restart says what it is doing at once, since it takes a few seconds; Quit says so when it is done.
+  function bridgeCanStop(a) {
+    return !OFFLINE && !PREVIEW && a.package && a.package !== "app.couchtv.launcher" && data.bridge !== false;
+  }
+  function stopApp(a, path, body, doneKey, failKey, early) {
+    if (early) flash(t(doneKey, { name: a.name }));
+    api("POST", path, body, 30000).then(function () {
+      if (!early) flash(t(doneKey, { name: a.name }));
+    }).catch(function (e) {
+      // /api/restart-app only knows the apps the bridge lists: quit any other one and open it again here
+      if (early && e && e.key === "err_unknown_app" && TV && TV.launch) {
+        api("POST", "/api/quit-app", { package: a.package }, 30000).then(function () {
+          setTimeout(function () { try { TV.launch(a.package); } catch (x) {} }, 600);
+        }).catch(function (e2) { flash(t(failKey, { name: a.name }) + (e2 && e2.message ? ": " + e2.message : "")); });
+        return;
+      }
+      flash(t(failKey, { name: a.name }) + (e && e.message ? ": " + e.message : ""));
+    });
+  }
   function doAppMenu() {
     var it = amItems[amI], a = amApp;
     closeAppMenu();
@@ -2466,6 +2968,8 @@
       flash(t("ctx_hidden"));
       return;
     }
+    if (it.act === "quit") { stopApp(a, "/api/quit-app", { package: a.package }, "ctx_quit_done", "ctx_quit_failed"); paintFocus(); return; }
+    if (it.act === "restart") { stopApp(a, "/api/restart-app", { app: a.package }, "ctx_restarting", "ctx_restart_failed", true); paintFocus(); return; }
     if (it.act === "uninstall") { try { TV.uninstall(a.package); } catch (e) {} paintFocus(); return; }
     if (it.act === "info") { try { TV.appInfo(a.package); } catch (e) {} paintFocus(); return; }
     paintFocus();
@@ -2519,7 +3023,7 @@
     try {
       if (TV && TV.dismissWatchNext) TV.dismissWatchNext(id, pkg, title);
     } catch (e) {}
-    if (!OFFLINE && data.bridge !== false && it.source === "bridge") api("POST", "/api/continue/hide", { id: id }).catch(function () {});   // the phone's list too
+    if (!OFFLINE && data.bridge !== false && (it.source === "bridge" || it.source === "plex")) api("POST", "/api/continue/hide", { id: id, who: NOBODY ? "both" : who }).catch(function () {});   // the phone's list too
 
     var dismissed = kept("tvhome.dismissed_shows") || [];
     var sig = pkg + "|" + title;
@@ -2529,16 +3033,15 @@
 
     var card = shelfEls[s];
     var finishRemoval = function () {
+      var keepIt = function (showItem) {
+        var sId = String(showItem.id || "");
+        var sSig = pkgOf(showItem) + "|" + (showItem.title || "");
+        return sId !== id && sSig !== sig;
+      };
       PEOPLE.forEach(function (p) {
-        if (data.showsBy[p.id]) {
-          data.showsBy[p.id] = data.showsBy[p.id].filter(function (showItem) {
-            var sId = String(showItem.id || "");
-            var sSig = ((showItem.app && showItem.app.package) || showItem.package || "") + "|" + (showItem.title || "");
-            return sId !== id && sSig !== sig;
-          });
-        }
+        if (data.showsBy[p.id]) data.showsBy[p.id] = data.showsBy[p.id].filter(keepIt);
+        if (data.videosBy[p.id]) data.videosBy[p.id] = data.videosBy[p.id].filter(keepIt);
       });
-      data.shows = (data.showsBy[who] || []).slice(0, KEEP_MAX);
       renderShelf();
       if (!shelfEls.length) {
         $("shelf-section").classList.add("empty");
@@ -2658,7 +3161,7 @@
   function inputFace(it) {
     var drawn = ICONS[it.icon] || ICONS.hdmi || ICONS.input;
     if (it.image) {
-      return '<div class="face input-img"><img src="' + esc(it.image) + '" alt="" decoding="async" onerror="this.parentNode.className=\'face tool input-ic\';this.parentNode.innerHTML=this.getAttribute(\'data-svg\')" data-svg="' + esc(drawn) + '"></div>';
+      return '<div class="face input-img"><img src="' + esc(it.image) + '" alt="" decoding="async" data-err="svg" data-svg="' + esc(drawn) + '"></div>';
     }
     return '<div class="face tool input-ic ic-' + esc(it.icon || "hdmi") + '">' + drawn + "</div>";
   }
@@ -2671,11 +3174,28 @@
     else if (it.kind === "gear") face = '<div class="face tool">' + ICONS.gear + "</div>";
     else if (it.kind === "devmode") face = '<div class="face tool">' + ICONS.devmode + "</div>";
     else if (it.kind === "smart") face = '<div class="face tool">' + window.smartHome.icon + "</div>";
-    else if (iconUrl(it.package)) face = '<div class="face"><img src="' + esc(iconUrl(it.package)) + '" alt="" decoding="async" onerror="this.parentNode.className=\'face word\';this.parentNode.textContent=this.getAttribute(\'data-name\')" data-name="' + esc(it.name) + '"></div>';
+    else if (DOCK_BANNERS && it.banner) face = '<div class="face banner"><img src="' + esc(it.banner) + '" alt="" decoding="async" data-err="word" data-name="' + esc(it.name) + '"></div>';
+    else if (iconUrl(it.package)) face = '<div class="face"><img src="' + esc(iconUrl(it.package)) + '" alt="" decoding="async" data-err="word" data-name="' + esc(it.name) + '"></div>';
     else face = '<div class="face word">' + esc(it.name) + "</div>";
     var cls = "tile app dock-ic" + (it.kind === "input" ? " input-ic ic-" + esc(it.icon || "hdmi") : "") + (lift && it.package === lift.pkg ? " lifted" : "");
-    return '<div class="' + cls + '">' + face + dotHTML(it) + '<div class="label">' + esc(it.name) + "</div></div>";
+    // the name sits in a span: with the Mac-style dock it is a small bubble above the icon (app.css)
+    return '<div class="' + cls + '" data-pkg="' + esc(it.package || it.kind || "") + '">' + face + dotHTML(it) + '<div class="label"><span>' + esc(it.name) + "</span></div></div>";
   }
+
+  // home.dock_banners: the dock shows one row of six; the rows under it sit below the screen and slide
+  // up a row at a time as the focus moves down into them (Keep watching fades out meanwhile).
+  function slideDock() {
+    var apps = $("apps-section") || $("grid").parentNode, el = document.documentElement;
+    var rows = DOCK_BANNERS && !expanded ? Math.ceil(gridEls.length / GRID_COLS) : 1;
+    var row = rows > 1 && (zone === "grid" || zone === "gear" || zone === "appmenu") ? Math.floor(g / GRID_COLS) : 0;
+    el.classList.toggle("dock-down", row > 0);
+    if (rows <= 1) { apps.style.bottom = ""; apps.style.transform = ""; return; }
+    apps.style.bottom = (2.875 - (rows - 1) * BANNER_ROW_REM) + "rem";
+    apps.style.transform = "translateX(-50%) translateY(" + (-row * BANNER_ROW_REM) + "rem)";
+  }
+
+  // The Night dock tile's width in rem: a square icon, or a 16:9 TV banner as tall as the icon.
+  function dockTileRem() { return DOCK_BANNERS ? 12.5 : 7; }
 
   function appHTML(it) {
     if (NIGHT) return dockHTML(it);
@@ -2695,7 +3215,7 @@
   // The small blue dot: an app not opened yet, or (on the gear tile) a new couch-tv release.
   function dotHTML(it) {
     if (isNew(it.package)) return '<i class="dot" aria-label="' + esc(t("new_app")) + '"></i>';
-    if (it.kind === "gear" && updReady()) return '<i class="dot" aria-label="' + esc(t("upd_gear", { v: UPD.latest })) + '"></i>';
+    if (it.kind === "gear" && updReady()) return '<i class="dot" aria-label="' + esc(t("upd_gear", { v: UPD.latest, c: UPD.current || "" })) + '"></i>';
     return "";
   }
 
@@ -2703,10 +3223,16 @@
     document.documentElement.classList.toggle("expanded", expanded);
     document.documentElement.classList.toggle("lifting", !!lift);
     gridItems = gridList();
+    // before anyone has pressed a key, a design's dock starts on its first app (or More apps), not Settings
+    if (!touched && !expanded && zone === "grid" && g === 0 && typeof CouchDesign !== "undefined" && CouchDesign.on() && CouchDesign.startIndex) g = CouchDesign.startIndex(gridItems);
     if (NIGHT) {
       // the dock is as wide as what is in it; More apps uses all twelve columns
-      GRID_COLS = expanded ? 12 : Math.max(1, Math.min(12, gridItems.length));
-      $("grid").style.gridTemplateColumns = "repeat(" + GRID_COLS + ", 7rem)";
+      // wide banner tiles: six to a row; the dock shows its first row and the rest wait below the screen
+      GRID_COLS = DOCK_BANNERS ? Math.max(1, Math.min(BANNER_COLS, gridItems.length))
+        : expanded ? 12 : Math.max(1, Math.min(12, gridItems.length));
+      // a design's dock can be a column, a grid or a wrapped row: the remote follows its shape (design.js)
+      if (!expanded && typeof CouchDesign !== "undefined" && CouchDesign.on()) GRID_COLS = CouchDesign.cols(GRID_COLS, gridItems.length);
+      $("grid").style.gridTemplateColumns = "repeat(" + GRID_COLS + ", " + dockTileRem() + "rem)";
     }
     $("grid").innerHTML = gridItems.map(appHTML).join("");
     gridEls = Array.prototype.slice.call($("grid").children);
@@ -2716,7 +3242,7 @@
       // row of eight fits it. app.css needs to know which tiles end a row and which sit in the last
       // one, to leave the gap off there. Plain rem here, not a custom property:
       // WebViews this old may not have those either.
-      if (NIGHT) $("grid").style.width = (GRID_COLS * 7 + (GRID_COLS - 1) * 1.625 + 3.5) + "rem";
+      if (NIGHT) $("grid").style.width = (GRID_COLS * dockTileRem() + (GRID_COLS - 1) * 1.625 + 3.5) + "rem";
       var lastRow = Math.floor((gridEls.length - 1) / GRID_COLS) * GRID_COLS;
       gridEls.forEach(function (el, i) {
         if (i % GRID_COLS === GRID_COLS - 1) el.classList.add("end-col");
@@ -2768,16 +3294,78 @@
 
   function shelfOn() { return !$("shelf-section").classList.contains("empty"); }
   // the switcher shows for two or more people, also while nobody has anything yet (issue #23)
-  function peopleOn() { return peopleCount() >= 2; }
+  function peopleOn() { return peopleCount() >= 2 && !designHides("people"); }
   function toPeople() { zone = "people"; pi = whoIndex(); }
 
+  // ---------------- the Mac-style dock ----------------
+  // The focused app and its neighbours grow in a wave, measured off a real Mac dock (a little smaller
+  // for a TV): the focused one most, then 1, 2 and 3 apps away. The row slides so the dock stays
+  // centred, the tray grows the same on both sides, and a dock too wide for the screen shrinks as a
+  // whole, as a Mac's does, so the wave keeps its shape.
+  var MAG = [1.55, 1.45, 1.25, 1.05];
+  function magnify() {
+    var root = document.documentElement, grid = $("grid");
+    if (!grid) return;
+    gridEls.forEach(function (el) { if (el) el.style.transform = ""; });
+    var tray = function (d) {
+      grid.style.paddingLeft = grid.style.paddingRight = d ? "calc(1.75rem + " + d.toFixed(1) + "px)" : "";
+      grid.style.marginLeft = grid.style.marginRight = d ? (-d).toFixed(1) + "px" : "";   // the icons stay where they sit
+    };
+    tray(0);
+    if (!DOCK_MAC || !NIGHT || root.classList.contains("expanded")) return;
+    var fe = grid.querySelector(".app.focus, .app.lifted");
+    if (!fe) return;
+    var top = fe.offsetTop, row = gridEls.filter(function (el) { return el && el.offsetTop === top; });
+    var fi = row.indexOf(fe), w = fe.offsetWidth;
+    var sc = function (i) { var k = Math.abs(i - fi); return k < MAG.length ? MAG[k] : 1; };
+    var ex = function (i) { return w * (sc(i) - 1); };
+    var rtl = root.dir === "rtl";
+    var before = ex(fi) / 2, after = ex(fi) / 2;   // how far the first and last icons reach past where they sit
+    row.forEach(function (el, i) { if (i < fi) before += ex(i); else if (i > fi) after += ex(i); });
+    var shift = (before - after) / 2;   // the whole row slides so the dock stays centred
+    // measured from the icons, not the tray: the tray's own padding may still be on its way
+    var first = row[0], last = row[row.length - 1];
+    var pad = 1.75 * (parseFloat(getComputedStyle(root).fontSize) || 16);
+    var W = last.offsetLeft + last.offsetWidth - first.offsetLeft + 2 * pad;
+    var f = Math.min(1, window.innerWidth * 0.97 / (W + before + after));
+    var mid = (first.offsetLeft + last.offsetLeft + last.offsetWidth) / 2;
+    row.forEach(function (el, i) {
+      var x = 0;
+      if (i !== fi) {
+        var dir = i > fi ? 1 : -1;
+        x = ex(fi) / 2;
+        for (var j = fi + dir; j !== i; j += dir) x += ex(j);
+        x = (x + ex(i) / 2) * dir;
+      }
+      x = (x + shift) * (rtl ? -1 : 1);
+      var c = el.offsetLeft + el.offsetWidth / 2 - mid;   // where it sits, from the dock's middle
+      x = f * (c + x) - c;
+      el.style.transform = "translateX(" + x.toFixed(1) + "px) scale(" + (f * sc(i)).toFixed(3) + ")";
+    });
+    tray((f * (W + before + after) - W) / 2);
+  }
+  // OK on a dock app: pressed in while held, one hop as it opens (app.css)
+  function pressTile(on) {
+    Array.prototype.forEach.call($("grid").querySelectorAll(".app.pressed"), function (el) { el.classList.remove("pressed"); });
+    if (on && DOCK_MAC && NIGHT && zone === "grid" && gridEls[g]) gridEls[g].classList.add("pressed");
+  }
+  function hopTile() {
+    var el = DOCK_MAC && NIGHT && zone === "grid" && gridEls[g];
+    if (!el || !el.classList.contains("app")) return;
+    el.classList.remove("hop"); void el.offsetWidth; el.classList.add("hop");
+    setTimeout(function () { el.classList.remove("hop"); }, 560);
+  }
+
   function paintFocus() {
+    if (DOCK_MAC) setTimeout(magnify, 0);   // after this paint has put the focus class where it belongs
     saveFocusSoon();
+    followSync();   // the row follows the app tile the remote is on (home.shelf_follows_app)
     if (zone === "settings") { renderSettings(); return; }
     if (zone === "smart") { window.smartHome.paint(); return; }
     if (zone === "ambient") { renderAmbientMusic(); return; }
     clearFocus();
     renderHint();
+    slideDock();
     if (npVisible()) renderNp();   // its buttons carry the focus only while zone is "np"
     if (zone === "gear") { if (gridEls[g]) gridEls[g].classList.add("focus"); renderGear(); return; }
     if (zone === "appmenu") { if (gridEls[g]) gridEls[g].classList.add("focus"); renderAppMenu(); return; }
@@ -2787,7 +3375,7 @@
     if (zone === "inputs") { if (quickEls[qi]) quickEls[qi].classList.add("focus"); renderInputMenu(); return; }
     if (zone === "pmenu") { renderPop(); $("people").classList.add("focus"); return; }
     if (zone === "np") {
-      if (!npReach()) { zone = shelfEls.length ? "shelf" : "grid"; paintFocus(); return; }
+      if (!npReach()) { zone = shelfReach() ? "shelf" : "grid"; paintFocus(); return; }
       renderNp();
       hero(null);
       $("place").style.visibility = "";
@@ -2874,7 +3462,7 @@
       return;
     }
     // Night with More apps open: the cards step aside, so up and down skip them
-    var cards = NIGHT && expanded ? [] : shelfEls;
+    var cards = (NIGHT && expanded) || designHides("keep_watching") ? [] : shelfEls;
     if (zone === "menu") {
       if (dx || dy) menuI = Math.max(0, Math.min(SLEEP_CHOICES.length - 1, menuI + (dy || dx)));
       paintFocus();
@@ -2934,6 +3522,7 @@
       } else if (dy > 0) zone = NIGHT && npReach() ? "np" : cards.length ? "shelf" : "grid";
     } else if (zone === "shelf") {
       if (dx < 0 && s === 0 && NIGHT && npReach()) { zone = "np"; npI = Math.max(0, npButtons().length - 1); }
+      else if (dx < 0 && s === 0 && !expanded && GRID_COLS === 1 && gridEls.length > 1) { zone = "grid"; g = 0; }   // back onto a side rail
       else if (dx) s = Math.max(0, Math.min(shelfEls.length - 1, s + dx));
       else if (dy < 0) { if (peopleOn()) toPeople(); else if (!NIGHT && npReach()) zone = "np"; else if (hasQuick()) { zone = "quick"; qi = 0; } }
       else if (dy > 0 && gridEls.length) {
@@ -2944,9 +3533,22 @@
       }
     } else {
       var row = Math.floor(g / GRID_COLS), lastRow = Math.floor((gridEls.length - 1) / GRID_COLS);
-      if (dx) {
-        var nx = g + dx;
-        if (nx >= 0 && nx < gridEls.length && Math.floor(nx / GRID_COLS) === row) g = nx;
+      if (dx && !expanded && GRID_COLS === 1 && gridEls.length > 1) {
+        // a dock that is one column (a design's side rail): left and right step off it, to the
+        // shows or the people, the way up and down step off a row
+        if (cards.length) zone = "shelf";
+        else if (peopleOn()) toPeople();
+        else if (hasQuick()) { zone = "quick"; qi = 0; }
+      } else if (dx && gridEls.length) {
+        // More apps: left/right run through every app line by line and wrap from the last to
+        // the first; the dock (one row): they wrap within the row (#167).
+        var n = gridEls.length;
+        if (expanded) g = (g + dx + n) % n;
+        else {
+          var first = row * GRID_COLS, last = Math.min(n, first + GRID_COLS) - 1;
+          var nx = g + dx;
+          g = nx > last ? first : nx < first ? last : nx;
+        }
       } else if (dy < 0 && row === 0) {
         if (cards.length) zone = "shelf";
         else if (npReach()) {
@@ -2979,6 +3581,65 @@
     paintFocus();
   }
 
+  // ---------------- going round at the ends ----------------
+  // A single press of an arrow at the end of a row or a list goes round to the other end: left on the
+  // first app lands on More apps, down on the last row of a Home settings list lands on its first row.
+  // It happens when the key is let go, and only for a press that did one thing: holding an arrow still
+  // runs to the end and stops there, even when it starts at the end. Some remotes send a held arrow
+  // as more key downs that are not marked as repeats, so every key down of the same arrow before it
+  // is let go counts as the same press (arrowPress), and a press longer than HOLD_MS never goes round.
+  var wrapPending = null, arrowPress = null;
+  // is this key down the arrow of the press still going (held), rather than a new press?
+  function arrowAgain(p, dir, now, repeat) { return !!(repeat || (p && p.dir === dir && now - p.last < 1000)); }
+  function navState() {
+    return [zone, g, s, pi, qi, npI, menuI, pmi, gi, amI, smI, ai, inI, ambI, expanded, !!lift, plift,
+      SET.col, SET.sec, SET.ri, !!SET.lift, !!SET.sub].join("|");
+  }
+  // where a list of n entries goes round to: forwards to the first, backwards to the last
+  function wrapIndex(n, d) { return d > 0 ? 0 : Math.max(0, n - 1); }
+  function wrapRound(dx, dy) {
+    if (document.documentElement.dir === "rtl") dx = -dx;
+    if (lift || plift || SET.lift) return;   // carrying something: the ends stay the ends
+    if (zone === "smart" || zone === "ambient") return;   // they keep their own focus
+    var d = dy || dx;
+    if (zone === "settings") {
+      if (!dy) return;   // left and right change a value or the column
+      if (SET.col === "secs") {
+        var n = wrapIndex(SECS.length, dy);
+        if (n !== SET.sec) { SET.sec = n; SET.sub = null; SET.msg = ""; SET.keyFocus = null; SET.ri = 0; }
+      } else {
+        var rows = rowsNow(), r = stepRow(rows, dy > 0 ? -1 : rows.length, dy);
+        if (r >= 0 && r < rows.length) { SET.ri = r; SET.keyFocus = rows[r].key; }
+      }
+      renderSettings();
+      return;
+    }
+    if (zone === "gear") { if (dy) { gi = wrapIndex(2, dy); renderGear(); } return; }
+    if (zone === "appmenu") { if (dy) { amI = wrapIndex(amItems.length, dy); renderAppMenu(); } return; }
+    if (zone === "shelfmenu") { if (dy) { smI = wrapIndex(smItems.length, dy); renderShelfMenu(); } return; }
+    if (zone === "updask") { if (dy) { ai = wrapIndex(2, dy); renderAsk(); } return; }
+    if (zone === "inputs") { if (dy) { inI = wrapIndex(inItems.length, dy); renderInputMenu(); } return; }
+    if (zone === "pmenu") { if (dy) { pmi = wrapIndex(PEOPLE.length, dy); renderPop(); } return; }
+    if (zone === "menu") { menuI = wrapIndex(SLEEP_CHOICES.length, d); paintFocus(); return; }
+    if (zone === "grid") {
+      if (dx) {   // along the row: the first app and the last tile (More apps) meet
+        var first = Math.floor(g / GRID_COLS) * GRID_COLS;
+        g = dx > 0 ? first : Math.min(first + GRID_COLS, gridEls.length) - 1;
+      } else if (dy > 0) {   // down from the very bottom: back to the top of the home
+        if (peopleOn()) toPeople();
+        else if (hasQuick()) { zone = "quick"; qi = 0; }
+        else if (shelfReach() && !(NIGHT && expanded)) { zone = "shelf"; s = 0; }
+        else g = g % GRID_COLS;
+      }
+    } else if (zone === "shelf") {
+      if (dx) s = wrapIndex(shelfEls.length, dx);
+      else if (dy < 0 && gridEls.length) { zone = "grid"; g = 0; }   // nothing above the cards: round to the apps
+    } else if (zone === "people" || zone === "quick" || zone === "np") {
+      if (dy < 0 && gridEls.length) { zone = "grid"; g = 0; }      // up from the very top: round to the apps
+    }
+    paintFocus();
+  }
+
   // Start on the chosen place (home.start_focus): people (default, as before), keep_watching or apps (#211).
   function startFocus() {
     s = 0; g = 0;
@@ -2988,10 +3649,14 @@
       zone = "grid";
     } else if (START_FOCUS === "people") {
       if (peopleOn()) toPeople();
-      else zone = shelfEls.length ? "shelf" : "grid";
+      else zone = shelfReach() ? "shelf" : "grid";
     } else {
-      zone = shelfEls.length ? "shelf" : "grid";
+      zone = shelfReach() ? "shelf" : "grid";
     }
+    // a design whose dock starts with Settings (it hides the dock, say): start on the first app, or
+    // More apps, never Settings (design.js)
+    // a design always starts on its first app (or More apps), on every load: not People, not Settings
+    if (zone !== "ambient" && typeof CouchDesign !== "undefined" && CouchDesign.on() && CouchDesign.startIndex && gridItems) { zone = "grid"; g = CouchDesign.startIndex(gridItems); }
   }
 
   // Remember the focused row and tile (#166, thanks IshMehta), so a home that Android dropped while
@@ -3017,7 +3682,9 @@
     clearTimeout(focusSaveTimer); focusSaveTimer = 0;
     if (!focusRestored && !touched) return;   // a page not drawn yet must not overwrite what it is about to restore
     if (zone !== "shelf" && zone !== "grid") return;   // menus and settings are not worth coming back to
-    try { localStorage.setItem(FOCUS_KEY, JSON.stringify({ t: Date.now(), zone: zone, s: s, g: g, key: zone === "grid" ? gridKey(gridItems[g]) : "" })); } catch (e) {}
+    // a card's place in the row only means something with the same row: "pkg" is the app the row was
+    // following (home.shelf_follows_app), "" for the whole row
+    try { localStorage.setItem(FOCUS_KEY, JSON.stringify({ t: Date.now(), zone: zone, s: s, g: g, key: zone === "grid" ? gridKey(gridItems[g]) : "", pkg: zone === "shelf" && followPkg ? followPkg : "" })); } catch (e) {}
   }
   function saveFocusSoon() { if (!focusSaveTimer) focusSaveTimer = setTimeout(saveFocusNow, 500); }
   function forgetFocus() { clearTimeout(focusSaveTimer); focusSaveTimer = 0; try { localStorage.removeItem(FOCUS_KEY); } catch (e) {} }
@@ -3025,10 +3692,21 @@
   function restoreFocus() {
     if (focusRestored) return false;
     focusRestored = true;
+    // a design starts on its first app every time, it does not resume the last tile (Settings included)
+    if (typeof CouchDesign !== "undefined" && CouchDesign.on()) return false;
     var saved = null;
     try { saved = JSON.parse(localStorage.getItem(FOCUS_KEY) || "null"); } catch (e) {}
-    var f = pickFocus(saved, Date.now(), shelfEls.length, gridItems.map(gridKey));
-    if (!f) return false;
+    // the remote was left in a "Recently on <app>" row: draw that row again before the card is looked up,
+    // so the outline lands on the card it left and not on the same place in the whole row
+    var pkg = saved && typeof saved === "object" && saved.zone === "shelf" && typeof saved.pkg === "string" ? saved.pkg : "";
+    if (pkg && !SHELF_FOLLOW) return false;   // the setting went off since: that place means nothing now
+    var wholeRow = function () { followPkg = null; renderShelf(); return false; };   // as a fresh start has it
+    if (pkg) {
+      followPkg = pkg; renderShelf();
+      if (!followName()) return wholeRow();   // that app has nothing on the go any more
+    }
+    var f = pickFocus(saved, Date.now(), shelfReach() ? shelfEls.length : 0, gridItems.map(gridKey));
+    if (!f) return pkg ? wholeRow() : false;
     zone = f.zone; s = f.s; g = f.g;
     return true;
   }
@@ -3188,7 +3866,7 @@
   }
   function renderGear() {
     var pop = $("gear-pop");
-    var items = [[ICONS.sliders, t("gear_home"), updReady() ? t("upd_gear", { v: UPD.latest }) : t("gear_home_sub")],
+    var items = [[ICONS.sliders, t("gear_home"), updReady() ? t("upd_gear", { v: UPD.latest, c: UPD.current || "" }) : t("gear_home_sub")],
       [ICONS.gear, t("gear_tv"), t("gear_tv_sub")]];
     pop.innerHTML = items.map(function (it, i) {
       return '<div class="grow' + (i === gi ? " focus" : "") + '" role="menuitem"><i>' + it[0] + "</i><span><b>" + esc(it[1]) +
@@ -3228,11 +3906,11 @@
   // also on the computer (/api/settings), so the phone and the TV agree.
   var ST_KEY = "tvhome.settings";
   var SECS = [["language", "globe"], ["location", "pin"], ["weather", "cloud"], ["look", "look"],
-    ["apps", "apps"], ["people", "person"], ["quick", "bolt"], ["about", "info"]];
+    ["apps", "apps"], ["people", "person"], ["quick", "bolt"], ["designer", "designer"], ["about", "info"]];
   var SET = { col: "secs", sec: 0, ri: 0, keyFocus: null, sub: null, lift: null, confirm: null, dirty: false, typing: null,
     msg: "", geo: { q: "", list: null, busy: false, err: false } };
   var REPO_URL = "github.com/Seagey/couch-tv";
-  var WX_DEFAULT = { lat: -33.8688, lon: 151.2093, place: "Sydney", timezone: "Australia/Sydney" };
+  var WX_DEFAULT = WX_NONE;
   var pushTimer = null;
 
   function loadSettings() {
@@ -3312,8 +3990,10 @@
   }
 
   // ---- rows ----
+  // couch-tv Studio is a name, the same in every language
+  function secName(id) { return id === "designer" ? "couch-tv Studio" : t("sec_" + id); }
   function rowsNow() { return SET.sub ? SET.sub.rows() : sectionRows(SECS[SET.sec][0]); }
-  function focusable(r) { return !!r && r.kind !== "head" && r.kind !== "info"; }
+  function focusable(r) { return !!r && r.kind !== "head" && r.kind !== "info" && r.kind !== "code"; }
   function firstRow(rows) { for (var i = 0; i < rows.length; i++) if (focusable(rows[i])) return i; return -1; }
   function stepRow(rows, i, d) { for (var j = i + d; j >= 0 && j < rows.length; j += d) if (focusable(rows[j])) return j; return i; }
   function indexOfKey(rows, k) { for (var i = 0; i < rows.length; i++) if (rows[i].key === k) return i; return -1; }
@@ -3326,6 +4006,7 @@
     if (id === "location") return locationRows();
     if (id === "weather") return weatherRows();
     if (id === "look") return lookRows();
+    if (id === "designer") return designerRows();
     if (id === "apps") return appsRows();
     if (id === "people") return peopleRows();
     if (id === "quick") return quickRows();
@@ -3441,8 +4122,8 @@
     if (go) run(); else geoTimer = setTimeout(run, 500);
   }
   function choosePlace(p) {
-    ST.place = { name: p.name, lat: p.lat, lon: p.lon, timezone: p.timezone };
-    WXCFG = { lat: p.lat, lon: p.lon, place: p.name, timezone: p.timezone };
+    ST.place = { name: p.name, area: p.area || "", lat: p.lat, lon: p.lon, timezone: p.timezone };
+    WXCFG = { lat: p.lat, lon: p.lon, place: [p.name, p.area].filter(Boolean).join(", "), timezone: p.timezone };
     saveSettings();
     SET.msg = t("loc_set", { place: p.name });
     data.weather = null;
@@ -3478,6 +4159,132 @@
   }
 
   // ---- look, scenes and the household's own photos ----
+  // Get a design (design-code.js): from config.json's design store, else couch-tv Studio's own. The TV asks
+  // that one server for the code typed here; nothing connects to the TV. English only for now (needs i18n).
+  function designCodeRows(rows) {
+    if (typeof CouchDesignCode === "undefined" || !CouchDesignCode.base()) return;
+    rows.push({ kind: "input", key: "design-get", label: "Get a design", sub: "Type the code couch-tv Studio shows you", act: function () {
+      typeDesignCode("");
+    } });
+    if (DESIGN_FROM_CODE) rows.push({ kind: "action", key: "design-forget", label: "Remove the design I got", sub: "Back to the home as it was", act: function () {
+      CouchDesignCode.forget(); SET.dirty = true; SET.msg = "Removed. The home goes back to how it was when you close Home settings.";
+    } });
+  }
+  // A design code typed with the remote: a TV's on-screen keyboard can drop a letter typed fast (a TCL,
+  // 19 Nov 2026). While typing, the line under the box shows the code as ABCDE-FGHJK and how many of
+  // the 10 letters are in; OK then shows it big on a Check page before anything is sent. Case, spaces
+  // and the dash do not matter.
+  function typeDesignCode(value) {
+    startTyping({ label: "Type the code from couch-tv Studio (like ABCDE-FGHJK). The dash is not needed.", value: value || "", code: true,
+      live: showCodeSoFar, submit: checkDesignCode });
+    showCodeSoFar(value || "");
+  }
+  function showCodeSoFar(v) {
+    var c = CouchDesignCode.checkCode ? CouchDesignCode.checkCode(v) : null, el = $("set-type-check");
+    if (!el || !c) return;
+    el.textContent = !c.count ? "" : c.ok ? c.shown + "   all 10 letters" : c.shown + "   " + Math.min(c.count, 99) + " of 10 letters";
+  }
+  function checkDesignCode(typed) {
+    var c = CouchDesignCode.checkCode ? CouchDesignCode.checkCode(typed) : { ok: true, code: typed, shown: typed };
+    SET.sub = { back: "design-get", crumb: "couch-tv Studio", title: function () { return "Check the code"; },
+      rows: function () { return codeCheckRows(c, typed); } };
+    SET.col = "rows"; SET.keyFocus = c.ok ? "code-get" : "code-again"; SET.ri = 0;
+    SET.msg = "";
+  }
+  function codeCheckRows(c, typed) {
+    var rows = [{ kind: "code", key: "code-shown", label: c.shown || " ", sub: c.ok ? "Is this the code on your phone? Check each letter." : c.msg }];
+    if (c.ok) rows.push({ kind: "action", key: "code-get", label: "Yes, get this design", sub: "The TV asks you about it before it changes anything", act: function () {
+      SET.sub = null; SET.keyFocus = "design-get"; getDesignByCode(c.code);
+    } });
+    rows.push({ kind: "action", key: "code-again", label: "Type it again", sub: c.ok ? "Fix a letter" : "What you typed stays in the box, so you can fix it", act: function () {
+      SET.sub = null; SET.keyFocus = "design-get"; typeDesignCode(c.ok ? c.shown : String(typed || "").trim());
+    } });
+    return rows;
+  }
+  function getDesignByCode(typed) {
+    SET.msg = "Getting the design...";
+    renderSettings();
+    CouchDesignCode.get(typed).then(function () {
+      setDesigner(true);   // typing a code is asking for couch-tv Studio: it is on from now
+      SET.msg = "Got it. Your TV asks you about it now.";
+      renderSettings();
+      setTimeout(restart, 600);   // it starts again and shows "Use this design?" first
+    }, function (e) {
+      SET.msg = (e && e.message) || "That design could not be used.";
+      if (zone === "settings") renderSettings();
+    });
+  }
+  // ---- couch-tv Studio (designer-gate.js): opt in, and one step back to the classic home ----
+  // English only for now, like the rows above (needs i18n). The section's name is the product's.
+  function setDesigner(on) {
+    keep(CouchDesigner.KEY, on ? "on" : "off");
+    // on again: designs switched off with Back held (design.js) come back too
+    if (on) try { localStorage.removeItem("couchtv.design.off"); } catch (e) {}
+    SET.dirty = true;
+  }
+  function designerRows() {
+    if (typeof CouchDesigner === "undefined") return [info("dz-none", "couch-tv Studio", "", "Not in this version of the home.")];
+    // the choice kept just now wins over GATE, which is only worked out when the home starts
+    var rows = [], on = !!GATE.preview || CouchDesigner.shownOn(kept(CouchDesigner.KEY), GATE.on, typeof CouchDesign !== "undefined" && CouchDesign.on());
+    if (!on) {
+      rows.push(info("dz-off", "couch-tv Studio", "Off", "Design your home on your phone, then send it to this TV. While it is off, your home stays exactly as it is."));
+      rows.push({ kind: "action", key: "dz-turn-on", label: "Turn on couch-tv Studio", sub: "Nothing changes until you choose a design", act: function () {
+        setDesigner(true); SET.msg = "couch-tv Studio is on. Get a design below, or close Home settings.";
+      } });
+    } else {
+      rows.push({ kind: "action", key: "dz-classic", label: "Back to my classic home", sub: "Turns couch-tv Studio off in one step. Your design is kept for later.", act: function () {
+        setDesigner(false); SET.msg = "couch-tv Studio is off. Your classic home comes back when you close Home settings.";
+      } });
+      // a design switched off with Back held, or not chosen yet: it comes back here
+      if (CFG.design && typeof CouchDesign !== "undefined" && CouchDesign.settingsRow) rows.push(CouchDesign.settingsRow(restart));
+      commuteRows(rows);
+    }
+    if (window.smartHome && window.smartHome.setup && window.smartHome.setup.can()) rows.push({ kind: "nav", key: "dz-smart", label: "Smart home",
+      sub: window.smartHome.setup.status().set ? "Connected. Change what shows, or add a device" : "Connect Home Assistant: your aircon, lights, cameras, speakers and more", act: openSmartSetup });
+    if (on && AH) rows.push({ kind: "nav", key: "dz-athome", label: "At home", sub: "A note, lists, guest Wi-Fi, a house guide, your calendar and screen time, for your widgets", act: openAtHome });
+    designCodeRows(rows);
+    rows.push({ kind: "action", key: "dz-share", label: "Open this home in couch-tv Studio", sub: "Change it on your phone or computer. Names, photos, places, keys and calendar links stay on this TV.", act: shareHome });
+    return rows;
+  }
+  // The home as it is now, for Share this home (share-home.js keeps only what a design is made of)
+  function homeSnapshot() {
+    var arr = arrangeItems();
+    return {
+      scenes: SCENES.map(function (x) { return x.id; }), builtIn: BUILT_IN.map(function (x) { return x.id; }),
+      scene_seconds: SCENE_MS / 1000, clock24: CLOCK24, clock_style: CLOCK_LIQUID ? "liquid" : undefined,
+      glass: GLASS, glass_icons: GLASS_ICONS, glass_amount: GLASS_AMT, ambient_weather: WX_AMBIENT, ambient_sun_grade: WX_SUN_GRADE,
+      lighter: LIGHTER, keep_watching: KW_ON, now_playing: NP_ON, dock_size: DOCK_APPS, dock_style: DOCK_MAC ? "mac" : "classic", moving_tiles: MOVING,
+      dock: arr.items.slice(0, arr.line).filter(function (it) { return !it.kind || it.kind === "app"; }).map(function (it) { return it.package; }),
+      design: CFG.design && typeof CouchDesign !== "undefined" && CouchDesign.on() ? CFG.design : null
+    };
+  }
+  // everything private this TV knows, so a share holding any of it is stopped
+  function privateWords() {
+    var w = PEOPLE.map(function (p) { return p.name; }).concat((CFG.people || []).map(function (p) { return p && (p.name || p); }));
+    var pl = ST.place || {};
+    w.push(WXCFG && WXCFG.place, pl.name, pl.area, CFG.weather && CFG.weather.place);
+    // where the household drives to (the Commute widget's place, kept on this TV)
+    var cm = kept("tvhome.commute"); if (cm && cm.name) w.push(String(cm.name));
+    try { w.push(location.hostname); } catch (e) {}
+    w = w.concat(ahPrivateWords());
+    return w.filter(function (x) { return typeof x === "string" && x.length >= 3 && !/^(home\.tvos\.invalid|localhost|127\.0\.0\.1)$/.test(x); });
+  }
+  function shareHome() {
+    if (typeof CouchShare === "undefined") return;
+    var r = CouchShare.prepare(homeSnapshot(), privateWords(), typeof CouchDesign !== "undefined" ? CouchDesign : null);
+    if (r.error) { SET.msg = r.error; renderSettings(); return; }
+    var base = typeof CouchDesignCode !== "undefined" ? CouchDesignCode.base() : "";
+    SET.msg = "Getting a code for couch-tv Studio...";
+    renderSettings();
+    CouchShare.send(base, r.design).then(function (res) {
+      SET.msg = "";
+      if (zone === "settings") renderSettings();
+      CouchShare.show(res);
+    }, function (e) {
+      SET.msg = (e && e.message) || "That did not work. Try again.";
+      if (zone === "settings") renderSettings();
+    });
+  }
   var SECS_STEPS = [10, 15, 20, 30, 45, 60, 120];
   function lookRows() {
     var look = lookSetting(), st = sceneState(), rows = [head(t("look_head"))];
@@ -3595,6 +4402,11 @@
       if (LIGHTER) return;   // held still while Lighter home is on
       MOVING = !MOVING; ST.moving_tiles = MOVING; saveSettings(); movingTiles();
     } });
+    // the Mac-style dock: the focused app and its neighbours grow in a wave, its name in a bubble above it
+    if (NIGHT) rows.push({ kind: "toggle", key: "dock-mac", label: t("dock_mac"), value: DOCK_MAC ? t("on") : t("off"), act: function () {
+      if (LIGHTER) return;   // held off while Lighter home is on
+      ST.dock = DOCK_MAC ? "classic" : "mac"; saveSettings(); movingTiles();
+    } });
     // a slow box (#58): no blur, no soft shadows, a still photo and smaller pictures, all in one switch
     // the whole Keep watching row, heading and all (home.keep_watching): off closes the gap and stops fetching it
     rows.push({ kind: "toggle", key: "keep-watching", label: t("keep_show"), value: KW_ON ? t("on") : t("off"), act: function () {
@@ -3602,6 +4414,11 @@
       document.documentElement.classList.toggle("kw-off", !KW_ON && !CARDS.length);
       if (!KW_ON) { data.shows = []; shelfEls = []; s = 0; }
       renderShelf(); renderNp();
+    } });
+    // the row follows the app the remote is on (home.shelf_follows_app): only that app's cards, as "Recently on <app>"
+    rows.push({ kind: "toggle", key: "shelf-follows-app", label: t("shelf_follow"), sub: t("shelf_follow_sub"), value: SHELF_FOLLOW ? t("on") : t("off"), act: function () {
+      SHELF_FOLLOW = !SHELF_FOLLOW; ST.shelf_follows_app = SHELF_FOLLOW; saveSettings();
+      if (!SHELF_FOLLOW && followPkg) { followPkg = null; renderShelf(); }   // the whole row again, straight away
     } });
     rows.push({ kind: "cycle", key: "start-focus", label: t("start_focus"), sub: t("start_focus_sub"),
       value: t("start_focus_" + START_FOCUS), act: function () {
@@ -3967,15 +4784,19 @@
   function aboutRows() {
     var ver = "";
     try { ver = TV && TV.version ? TV.version() : ""; } catch (e) {}
-    var run = ALONE ? "run_alone" : OFFLINE ? "run_off" : data.bridge === false ? "run_quiet" : "run_bridge";
+    // the on-TV app (couch-tv-ontv.apk, put on with just a phone) serves this page from the TV itself:
+    // there is no computer, so it never says "With the computer" (a TCL beginner test, 19 Nov 2026)
+    var run = ALONE || ON_TV ? "run_alone" : OFFLINE ? "run_off" : data.bridge === false ? "run_quiet" : "run_bridge";
     var hs = homeState(), homeRows = [];
     if (hs === "ask") homeRows.push({ kind: "action", key: "make-home", label: t("home_row"), sub: t("home_row_sub"), act: requestHome });
     else if (hs === "google_tv") homeRows.push(info("make-home", t("home_row"), "", t("home_google_tv")));
+    var u = updRead();
+    if (u && u.supported) homeRows.push({ kind: "action", key: "upd-about", label: UPD_ROW, sub: updLine(u), act: openUpdate });
     return homeRows.concat([
       info("ver", t("about_version"), ver || t("about_web")),
       info("code", t("about_code"), REPO_URL),
       info("run", t("about_running"), t(run)),
-      info("kept", t("about_kept"), t(OFFLINE || data.bridge === false ? "kept_tv" : "kept_both")),
+      info("kept", t("about_kept"), t(OFFLINE || ON_TV || data.bridge === false ? "kept_tv" : "kept_both")),
       { kind: "action", key: "restart", label: t("about_restart"), sub: t("about_restart_sub"), act: restartHome },
       { kind: "action", key: "reset", label: t("about_reset"), sub: t("about_reset_sub"), danger: true, confirmText: t("confirm_reset"),
         act: resetSettings }
@@ -4001,7 +4822,9 @@
     try { if (u) UPD = JSON.parse(u.state()); } catch (e) {}
     return UPD;
   }
-  function updReady() { return !!(UPD && UPD.available); }
+  // A newer release is out: one this TV can install, or one a copy built on another computer can't
+  // take (refused), which still gets the dot and the line so the household hears about it.
+  function updReady() { return !!(UPD && (UPD.available || UPD.refused)); }
   // the launcher's news: a check finished, a download moved on, the installer answered
   function updChanged(s) {
     var was = updReady();
@@ -4014,7 +4837,7 @@
   function updTell() {
     if (!updReady() || kept("tvhome.update.told") === UPD.latest) return;
     keep("tvhome.update.told", UPD.latest);
-    status(t("upd_told", { v: UPD.latest }));
+    status(t("upd_told", { v: UPD.latest, c: UPD.current || "" }));
   }
   // Asked once: tell the household about new versions, or leave it to "Check for updates now"? Until
   // they answer nothing is checked by itself, so frequent releases never nag anyone who did not ask.
@@ -4113,10 +4936,37 @@
     var when = new Date(u.checked).toLocaleString(loc, { day: "numeric", month: "long", hour: "numeric", minute: "2-digit", hour12: !CLOCK24 });
     return t("upd_last", { when: when });
   }
+  // Home settings, About, Update couch-tv: the version line, and OK opens the update page (the same rows
+  // as Updates). Nobody on a phone only install was ever told about a new version (a TCL beginner on
+  // 0.13.3, 19 Nov 2026), so it is where people look first. English only for now (needs i18n).
+  var UPD_ROW = "Update couch-tv";
+  function updLine(u) {
+    if (u.busy === "checking") return t("upd_checking");
+    if (u.available || u.refused) return t("upd_gear", { v: u.latest, c: u.current || "" });
+    if (u.checked) return t("about_version") + " " + (u.current || "") + ". " + t("upd_latest");
+    return t("about_version") + " " + (u.current || "") + ". " + t("upd_never");
+  }
+  function openUpdate() {
+    SET.sub = { back: "upd-about", crumb: t("sec_about"), title: function () { return UPD_ROW; }, rows: updateRows };
+    SET.keyFocus = null; SET.ri = 0;
+    var u = updRead();
+    if (u && !u.checked && !u.busy) upd().check();   // never looked yet: look now
+  }
+  // An app that cannot install an update itself (the on-TV app from a phone: Android's installer needs a
+  // permission that brings back Play Protect's block, so it is left out). The app hands the steps over
+  // in u.steps; they are shown one per row, numbered, with the Downloader code big in the first.
+  function manualRows(u) {
+    var steps = Array.isArray(u.steps) ? u.steps : [];
+    return steps.slice(0, 8).map(function (s, i) { return info("upd-step" + i, (i + 1) + ".", "", String(s).slice(0, 300)); });
+  }
   function updateRows() {
     var u = updRead() || {}, busy = u.busy || "";
     var rows = [info("upd-ver", t("about_version"), u.current || "")];
-    if (u.available) {
+    if (u.latest) rows.push(info("upd-newest", t("upd_newest"), u.latest));   // both numbers side by side
+    if (u.available && u.manual) {
+      rows.push(info("upd-how", UPD_ROW, "", t("upd_gear", { v: u.latest, c: u.current || "" }) + ". " + (u.how || "")));
+      rows = rows.concat(manualRows(u));
+    } else if (u.available) {
       rows.push({ kind: "action", key: "upd-install", label: t("upd_install", { v: u.latest }),
         sub: busy === "downloading" ? t("upd_downloading", { p: u.progress || 0 }) : busy === "installing" ? t("upd_confirm") : u.title || "",
         act: function () { if (!busy) upd().install(); } });
@@ -4153,13 +5003,23 @@
     SET.typing = spec;
     var inp = $("set-input");
     $("set-type-label").textContent = spec.label;
+    var chk = $("set-type-check"); if (chk) chk.textContent = "";
     inp.value = spec.value || "";
     inp.type = spec.url ? "url" : "text";
     inp.setAttribute("enterkeyhint", spec.search ? "search" : "done");
-    inp.setAttribute("autocapitalize", spec.url ? "off" : "words");
+    inp.setAttribute("autocapitalize", spec.url ? "off" : spec.code ? "characters" : "words");
+    if (spec.code) { inp.setAttribute("autocorrect", "off"); inp.setAttribute("spellcheck", "false"); }
+    else { inp.removeAttribute("autocorrect"); inp.removeAttribute("spellcheck"); }
     $("set-type").classList.add("on");
     renderSettings();
     try { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); } catch (e) {}
+  }
+  function typeIn(s) {
+    if (!SET.typing || zone !== "settings" || typeof s !== "string") return false;
+    var inp = $("set-input"), at = typeof inp.selectionStart === "number" ? inp.selectionStart : inp.value.length, end = typeof inp.selectionEnd === "number" ? inp.selectionEnd : at;
+    inp.value = (inp.value.slice(0, at) + s.replace(/[\r\n]+/g, " ") + inp.value.slice(end)).slice(0, 2000);
+    try { inp.focus(); inp.setSelectionRange(at + s.length, at + s.length); } catch (e) {}
+    return true;
   }
   function stopTyping() {
     SET.typing = null;
@@ -4195,7 +5055,7 @@
     SET.col = "rows"; SET.ri = i; SET.keyFocus = rows[i].key;
   }
   function leaveRows() {
-    if (SET.sub) { SET.keyFocus = SET.sub.back; SET.sub = null; return; }
+    if (SET.sub) { SET.keyFocus = SET.sub.back; SET.sub = SET.sub.up || null; return; }
     SET.col = "secs"; SET.keyFocus = null;
   }
   function setMove(dx, dy) {
@@ -4264,13 +5124,17 @@
   // ---- drawing it ----
   function rowHTML(r, i) {
     if (r.kind === "head") return '<div class="shead">' + esc(r.label) + "</div>";
+    // a design code shown big, one box per letter, so a missing or wrong letter stands out
+    if (r.kind === "code") return '<div class="scode" aria-label="' + esc(r.label) + '"><span class="scode-big">' +
+      String(r.label).split("").map(function (ch) { return ch === "-" ? '<i class="dash">-</i>' : "<i>" + esc(ch) + "</i>"; }).join("") +
+      "</span>" + (r.sub ? "<small>" + esc(r.sub) + "</small>" : "") + "</div>";
     var f = SET.col === "rows" && i === SET.ri, lifted = SET.lift === r.key;
     var cls = "srow k-" + r.kind + (f ? " focus" : "") + (lifted ? " lifted" : "") + (r.danger ? " danger" : "");
     var lead = "";
     if (r.avatar) lead = avatarHTML(r.avatar);
-    else if (r.icon && iconUrl(r.icon)) lead = '<img class="sicon" src="' + esc(iconUrl(r.icon)) + '" alt="" onerror="this.remove()">';
+    else if (r.icon && iconUrl(r.icon)) lead = '<img class="sicon" src="' + esc(iconUrl(r.icon)) + '" alt="" data-err="remove">';
     else if (r.kind === "item") lead = '<span class="sicon none">' + (r.icon.indexOf("screen:") === 0 ? ICONS.screen : esc((r.label || "?").charAt(0).toUpperCase())) + "</span>";
-    else if (r.thumb) lead = '<img class="sthumb" src="' + esc(r.thumb) + '" alt="" decoding="async" onerror="this.remove()">';
+    else if (r.thumb) lead = '<img class="sthumb" src="' + esc(r.thumb) + '" alt="" decoding="async" data-err="remove">';
     var label = SET.confirm === r.key ? r.confirmText || t("confirm_remove") : r.label;
     var tail = "";
     if (lifted) tail = '<i class="smark">' + ICONS.updown + "</i>";
@@ -4302,10 +5166,10 @@
     $("set-title").textContent = t("set_title");
     $("set-secs").innerHTML = SECS.map(function (sc, i) {
       var cls = "ssec" + (i === SET.sec ? (SET.col === "secs" ? " focus" : " on") : "");
-      return '<div class="' + cls + '"><i>' + ICONS[sc[1]] + "</i><span>" + esc(t("sec_" + sc[0])) + "</span></div>";
+      return '<div class="' + cls + '"><i>' + ICONS[sc[1]] + "</i><span>" + esc(secName(sc[0])) + "</span></div>";
     }).join("");
     $("set-crumb").textContent = SET.sub ? SET.sub.crumb : "";
-    $("set-head").textContent = SET.sub ? SET.sub.title() : t("sec_" + SECS[SET.sec][0]);
+    $("set-head").textContent = SET.sub ? SET.sub.title() : secName(SECS[SET.sec][0]);
     var box = $("set-rows");
     // Rebuilding the rows drops the list back to the top on some TV engines (a 2020 Samsung,
     // Tizen 5.5), and the smooth scroll below then ran from the top down to the row: every move
@@ -4361,7 +5225,7 @@
   // Works for remotes that repeat the key while it is held and for ones that only send the press
   // and, later, the release. One press is one action: a pick-up never also opens the app.
   var okDown = false, okHeld = false, okTimer = null;
-  function okReset() { okDown = false; okHeld = false; clearTimeout(okTimer); }
+  function okReset() { okDown = false; okHeld = false; clearTimeout(okTimer); pressTile(false); }
 
   // A short navigation click on every arrow and OK, like the TV's own launcher.
   var AC = null, SOUND = true;
@@ -4603,14 +5467,31 @@
     if (typingKey(e)) return;   // typing a place or a name: the keys belong to the text box
     if (isOk(e)) {
       e.preventDefault();
-      if (e.repeat || okDown) return;   // a held key repeating: the timer is already running
+      // a held key repeating: Android's long press. The hold happens now (an ADB long press sends the
+      // repeat at once and lets go straight after), so the key up never opens the focused app.
+      if (e.repeat || okDown) {
+        if (e.repeat && okDown && !okHeld) { clearTimeout(okTimer); okHeld = true; pressTile(false); if (!hold()) activate(); ensureFocus(); resetIdlePhoto(); }
+        return;
+      }
       okDown = true; okHeld = false;
       blip(0, 0);
-      okTimer = setTimeout(function () { okHeld = true; if (!hold()) activate(); ensureFocus(); resetIdlePhoto(); }, HOLD_MS);
+      pressTile(true);
+      okTimer = setTimeout(function () { okHeld = true; pressTile(false); if (!hold()) activate(); ensureFocus(); resetIdlePhoto(); }, HOLD_MS);
       return;
     }
     var arrow = arrowOf(e);
-    if (arrow) { blip(arrow[0], arrow[1]); move(arrow[0], arrow[1]); }
+    if (arrow) {
+      blip(arrow[0], arrow[1]);
+      // the same arrow again before it was let go is the key being held, marked as a repeat or not
+      var dir = arrow[0] + "," + arrow[1], now = Date.now();
+      var again = arrowAgain(arrowPress, dir, now, e.repeat);
+      if (again && arrowPress) arrowPress.last = now;
+      else arrowPress = { dir: dir, at: now, last: now };
+      // the first key down of a press that moved nothing is at an end: it goes round when let go
+      var before = again ? null : navState();
+      move(arrow[0], arrow[1]);
+      wrapPending = before !== null && navState() === before ? { dx: arrow[0], dy: arrow[1] } : null;
+    }
     else if (isBack(e)) goHome();
     else if (isSettings(e)) { if (!e.repeat) settingsKey(); }   // the remote's own Settings/gear key
     else if (isMenu(e)) { if (!e.repeat) hold(); }   // optional: many remotes have no Menu key
@@ -4626,16 +5507,30 @@
       return;
     }
     if (kidsOn()) { if (isOk(e)) e.preventDefault(); okReset(); return; }
+    var arrow = arrowOf(e);
+    if (arrow) {   // the end of a single press at an end: go round (a held key cleared wrapPending)
+      var w = wrapPending, p = arrowPress;
+      wrapPending = null; arrowPress = null;
+      var quick = p && Date.now() - p.at <= HOLD_MS;
+      if (w && quick && w.dx === arrow[0] && w.dy === arrow[1] && !isTyping()) {
+        e.preventDefault();
+        wrapRound(w.dx, w.dy);
+        ensureFocus();
+        resetIdlePhoto();
+      }
+      return;
+    }
     if (!isOk(e) || isTyping()) return;
     e.preventDefault();
     if (!okDown) return;
     var held = okHeld;
     okReset();
-    if (!held) activate();
+    if (!held) { hopTile(); activate(); }
     ensureFocus();
     resetIdlePhoto();
   });
   window.addEventListener("blur", okReset);
+  window.addEventListener("blur", function () { wrapPending = null; arrowPress = null; });   // a key let go elsewhere
 
   // ---------------- data ----------------
   function nativeApps() {
@@ -4720,9 +5615,17 @@
     return api("POST", "/api/watch-next", { rows: rows });
   }
 
+  // On Fire OS a return to the home asks for this twice within a moment (the Home button watch's
+  // tv.home, then the launcher's tv.resume); the second ask gets the first's result.
+  var refreshAt = 0, refreshing = null;
   function refresh() {
     // never reshuffle under something being moved, or under the settings screen
     if (lift || zone === "pmenu" || zone === "settings" || zone === "gear" || zone === "smart" || zone === "updask") return Promise.resolve();
+    if (refreshing && Date.now() - refreshAt < 1500) return refreshing;
+    refreshAt = Date.now();
+    return refreshing = refreshNow();
+  }
+  function refreshNow() {
     if (OFFLINE) {
       // only the TV's own apps, in the order last saved; no shows, no Screens
       if (TV) data.apps = sortApps(nativeApps() || []);
@@ -4757,8 +5660,11 @@
               var sig = pkg + "|" + (it.title || "");
               return dismissed.indexOf(id) === -1 && dismissed.indexOf(sig) === -1;
             });
-            // Keep the native fallback when bridge history is empty, honoring hidden shows.
             data.showsBy[p.id] = items.length ? items.slice(0, KEEP_MAX) : nativeWatchNext();
+            // that person's YouTube videos, shown under the YouTube tile alone (home.shelf_follows_app)
+            data.videosBy[p.id] = (j.videos || []).filter(function (it) {
+              return dismissed.indexOf(String(it.id || "")) === -1 && dismissed.indexOf(pkgOf(it) + "|" + (it.title || "")) === -1;
+            }).slice(0, KEEP_MAX);
           });
         }));
       }),
@@ -4776,7 +5682,9 @@
       // play an app gave no title for (Netflix sends none, Prime only its own name, issue #23).
       KW_ON ? sendWatchNext() : Promise.resolve(),
       // kids mode: the shelves as the phone left them (kids.js)
-      window.KidsMode ? window.KidsMode.refresh() : Promise.resolve()
+      window.KidsMode ? window.KidsMode.refresh() : Promise.resolve(),
+      // the guest's name, if the phone remote changed it
+      guestSync()
     ];
     return Promise.all(jobs.map(function (p) { return p.then(function () { return true; }, function () { return false; }); }))
       .then(function (ok) {
@@ -4801,9 +5709,617 @@
       });
   }
 
+  // ---------------- at home: what couch-tv Studio's home widgets show (athome.js) ----------------
+  // The family note, lists, guest Wi-Fi, house guide, calendar link and screen time goal, typed in Home
+  // settings, couch-tv Studio, At home. Kept on this TV only: the launcher's private store on the
+  // Android home (TVOS.keepPrivate: left out of Android's backups), else this page's own storage. Never
+  // in ST (the copy of Home settings the bridge keeps), never in a design or Share this home.
+  var AH = (function () {
+    if (typeof CouchAtHome === "undefined") return null;
+    var io = TV && TV.keepPrivate && TV.keptPrivate
+      ? { get: function (k) { return TV.keptPrivate(PFX + k); }, set: function (k, v) { TV.keepPrivate(PFX + k, v); } }
+      : { get: function (k) { try { return localStorage.getItem(PFX + k); } catch (e) { return null; } }, set: function (k, v) { try { localStorage.setItem(PFX + k, v); } catch (e) {} } };
+    return { io: io, store: CouchAtHome.store(io) };
+  })();
+  var AH_KINDS = ["note", "list", "wifi", "guide", "agenda", "memory", "screentime"];
+  function ahWants(kind) { return typeof CouchDesign !== "undefined" && CouchDesign.wantsKinds && CouchDesign.wantsKinds([kind]).length > 0; }
+  function ahChanged() { if (typeof CouchDesign !== "undefined" && CouchDesign.dataChanged) CouchDesign.dataChanged("athome", Date.now()); }
+  function ahRead(key) { try { var v = AH.io.get(key); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+  function ahWrite(key, v) { try { AH.io.set(key, JSON.stringify(v)); } catch (e) {} }
+
+  // the calendar: read every 15 minutes while an Agenda is on the home. The launcher reads it (no
+  // computer); a TV whose home a computer runs asks that computer (POST /api/calendar on the bridge);
+  // the home as a website can only read a calendar that lets web pages read it. Today and the next
+  // seven days are kept (titles and times only), so the widget has them after a restart.
+  var CAL = { at: 0, events: null, err: "", busy: false, url: "" }, CAL_WAIT = {}, CAL_MS = 15 * 60000;
+  function calCan() { return TV && TV.calendar ? "tv" : !OFFLINE && !STANDALONE ? "bridge" : "web"; }
+  function calFetch(url) {
+    return new Promise(function (resolve, reject) {
+      if (MOCK && window.MOCK_ICS != null) { setTimeout(function () { resolve(String(window.MOCK_ICS)); }, 50); return; }
+      if (TV && TV.calendar) {
+        var id = "c" + Date.now().toString(36) + Math.floor(Math.random() * 1000);
+        CAL_WAIT[id] = { resolve: resolve, reject: reject };
+        setTimeout(function () { if (CAL_WAIT[id]) { delete CAL_WAIT[id]; reject(new Error("timeout")); } }, 40000);
+        try { TV.calendar(url, id); } catch (e) { delete CAL_WAIT[id]; reject(e); }
+        return;
+      }
+      if (!OFFLINE && !MOCK) { api("POST", "/api/calendar", { url: url }, 40000).then(function (j) { if (j && typeof j.text === "string") resolve(j.text); else reject(new Error((j && j.error) || "no calendar")); }, reject); return; }
+      var x = new XMLHttpRequest();
+      x.open("GET", url);
+      x.timeout = 30000;
+      x.onload = function () { if (x.status >= 200 && x.status < 300) resolve(x.responseText || ""); else reject(new Error("http " + x.status)); };
+      x.onerror = x.ontimeout = function () { reject(new Error("blocked")); };
+      x.send();
+    });
+  }
+  // the launcher's answer (MainActivity.calendar): ok, and the calendar's words or why not
+  function calendarText(id, ok, text) {
+    var w = CAL_WAIT[id];
+    if (!w) return;
+    delete CAL_WAIT[id];
+    if (ok) w.resolve(String(text || "")); else w.reject(new Error(String(text || "failed")));
+  }
+  function calWindow() { var d = new Date(); var from = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); return { from: from, to: from + 8 * 86400000 }; }
+  function calRefresh(force) {
+    if (!AH) return;
+    var url = (AH.store.get().cal || {}).url || "";
+    if (!url) { CAL = { at: 0, events: null, err: "", busy: false, url: "" }; ahWrite("tvhome.athome.cal", null); return; }
+    if (CAL.url !== url) { CAL.url = url; CAL.events = null; CAL.at = 0; CAL.err = ""; var kept0 = ahRead("tvhome.athome.cal"); if (kept0 && kept0.host === CouchAtHome.calHost(url) && Array.isArray(kept0.events)) { CAL.events = kept0.events; CAL.at = kept0.at || 0; } }
+    if (CAL.busy || (!force && Date.now() - CAL.at < CAL_MS && CAL.events)) return;
+    CAL.busy = true;
+    calFetch(url).then(function (text) {
+      CAL.busy = false;
+      if (!CouchAtHome.isIcs(text)) { CAL.err = "That link is not a calendar. Check it is the private address (iCal format) of the calendar."; ahChanged(); return; }
+      var win = calWindow();
+      CAL.events = CouchAtHome.parseIcs(text, win.from, win.to, 60);
+      CAL.at = Date.now(); CAL.err = "";
+      ahWrite("tvhome.athome.cal", { host: CouchAtHome.calHost(url), at: CAL.at, events: CAL.events });
+      ahChanged();
+      if (zone === "settings") renderSettings();
+    }, function (e) {
+      CAL.busy = false;
+      var why = String((e && e.message) || "");
+      CAL.err = /blocked/.test(why) ? "This TV cannot read that calendar by itself. It needs the couch-tv TV home or a computer at home." : /http 40[134]/.test(why) ? "The calendar said no. Check the link is the private address and still works." : "The calendar did not answer. couch-tv tries again soon.";
+      CAL.at = Date.now() - CAL_MS + 2 * 60000;   // try again in two minutes
+      ahChanged();
+      if (zone === "settings") renderSettings();
+    });
+  }
+
+  // guests: the bookings calendar (Airbnb, Booking.com, VRBO, or the Agenda's own calendar), read the
+  // same way as the Agenda's and as often, for the Welcome widget's guest name and check out time.
+  // Five weeks back (a long stay that started a while ago) and two months on are kept, on this TV only.
+  var STAY = { at: 0, events: null, err: "", busy: false, url: "" };
+  function stayLink(r) { r = r || AH.store.get(); return (r.stay && r.stay.url) || (r.cal && r.cal.url) || ""; }
+  function stayRefresh(force) {
+    if (!AH) return;
+    var url = stayLink();
+    if (!url) { STAY = { at: 0, events: null, err: "", busy: false, url: "" }; ahWrite("tvhome.athome.stay", null); return; }
+    if (STAY.url !== url) { STAY.url = url; STAY.events = null; STAY.at = 0; STAY.err = ""; var kept0 = ahRead("tvhome.athome.stay"); if (kept0 && kept0.host === CouchAtHome.calHost(url) && Array.isArray(kept0.events)) { STAY.events = kept0.events; STAY.at = kept0.at || 0; } }
+    if (STAY.busy || (!force && Date.now() - STAY.at < CAL_MS && STAY.events)) return;
+    STAY.busy = true;
+    // guest names from the booking emails a home computer reads (bridge/bookings.py, as guest-tv does):
+    // only with a bridge; with none, Airbnb guests' names are typed once in At home
+    if (!OFFLINE && !MOCK && !PREVIEW) api("GET", "/api/stay-names", null, 30000).then(function (j) {
+      STAY.mail = j && j.on && Array.isArray(j.names) ? j.names.slice(0, 60) : null; STAY.mailOn = !!(j && j.on); ahChanged();
+    }, function () {});
+    calFetch(url).then(function (text) {
+      STAY.busy = false;
+      if (!CouchAtHome.isIcs(text)) { STAY.err = "That link is not a calendar. Check it is the calendar's private address (iCal or .ics)."; ahChanged(); return; }
+      var d = new Date(), from = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - 35 * 86400000;
+      STAY.events = CouchAtHome.parseIcs(text, from, from + 100 * 86400000, 200);
+      STAY.at = Date.now(); STAY.err = "";
+      ahWrite("tvhome.athome.stay", { host: CouchAtHome.calHost(url), at: STAY.at, events: STAY.events });
+      ahChanged();
+      if (zone === "settings") renderSettings();
+    }, function (e) {
+      STAY.busy = false;
+      var why = String((e && e.message) || "");
+      STAY.err = /blocked/.test(why) ? "This TV cannot read that calendar by itself. It needs the couch-tv TV home or a computer at home." : /http 40[134]/.test(why) ? "The calendar said no. Check the link is the private address and still works." : "The calendar did not answer. couch-tv tries again soon.";
+      STAY.at = Date.now() - CAL_MS + 2 * 60000;
+      ahChanged();
+      if (zone === "settings") renderSettings();
+    });
+  }
+  // where the house is in a stay now: CouchAtHome.stayNow with the times and names kept on this TV
+  function stayView(r) {
+    r = r || AH.store.get();
+    var url = stayLink(r), s = r.stay || {};
+    if (!url || !STAY.events) return null;
+    return CouchAtHome.stayNow(STAY.events, Date.now(), { checkin: s.checkin, checkout: s.checkout, names: s.names, mail: STAY.mail, host: CouchAtHome.calHost(url), family: !s.url });
+  }
+
+  // when each photo was taken: the launcher notes it in the file name when a photo is added ("-t" and
+  // the date, from the photo's own EXIF block); a photo by web address has its date read from its own
+  // bytes once (if its host lets the TV read them) or from a date in its name. Kept on this TV.
+  var DATES = null, DATES_BUSY = false;
+  function photoDates() {
+    if (!DATES) DATES = ahRead("tvhome.athome.dates") || {};
+    return (Array.isArray(ST.photos) ? ST.photos : []).filter(function (p) { return p && (p.file || p.url); }).map(function (p) {
+      var src = photoSrc(p), d = CouchAtHome.nameDate(p.file || p.url), k = DATES[src];
+      if (!d && k) { var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(k); if (m) d = { y: +m[1], m: +m[2], d: +m[3] }; }
+      return { src: src, date: d, url: !p.file && !d && k === undefined ? p.url : "" };
+    });
+  }
+  function photoDatesRead() {
+    if (DATES_BUSY || !AH) return;
+    var todo = photoDates().filter(function (p) { return p.url && /^https?:\/\//i.test(p.url); });
+    if (!todo.length) return;
+    DATES_BUSY = true;
+    var next = function (i) {
+      if (i >= todo.length || i >= 50) { DATES_BUSY = false; ahWrite("tvhome.athome.dates", DATES); ahChanged(); return; }
+      var x = new XMLHttpRequest(), done = function (d) { DATES[todo[i].src] = d ? d.y + "-" + ("0" + d.m).slice(-2) + "-" + ("0" + d.d).slice(-2) : ""; next(i + 1); };
+      try {
+        x.open("GET", todo[i].url); x.responseType = "arraybuffer"; x.timeout = 20000;
+        x.onload = function () { var d = null; try { d = x.status === 200 ? CouchAtHome.exifDate(new Uint8Array(x.response)) : null; } catch (e) {} done(d); };
+        x.onerror = x.ontimeout = function () { done(null); };
+        x.send();
+      } catch (e) { done(null); }
+    };
+    next(0);
+  }
+
+  // screen time today: the launcher reads Android's own usage numbers, once one permission is allowed
+  var SCR = { at: 0, v: null };
+  function screenNow() {
+    if (!TV) return { ok: false, why: "tv" };
+    if (!TV.screenTime) return { ok: false, why: ON_TV ? "ontv" : "update" };
+    if (!SCR.v || Date.now() - SCR.at > 60000) { SCR.at = Date.now(); try { SCR.v = JSON.parse(TV.screenTime()); } catch (e) { SCR.v = { ok: false, why: "error" }; } }
+    return SCR.v || { ok: false, why: "error" };
+  }
+
+  // what the widgets get (design.js hooks.data): only what is set, never a pretend value
+  function homeView() {
+    if (!AH) return null;
+    var r = AH.store.get(), out = { note: r.note || null, lists: r.lists || [], wifi: null, guide: r.guide || [], goal: (r.screen || {}).goal || 0, guest: (r.guest && r.guest.name) || "" };
+    if (r.wifi) out.wifi = { ssid: r.wifi.ssid, pass: r.wifi.pass, sec: r.wifi.sec, hidden: r.wifi.hidden, qr: CouchAtHome.wifiQr(r.wifi) };
+    // a calendar link with nothing read yet: read it now, not at the next minute
+    if (r.cal && !CAL.events && !CAL.busy && !CAL.err && ahWants("agenda")) setTimeout(function () { calRefresh(false); }, 0);
+    out.cal = { set: !!r.cal, events: CAL.events, err: CAL.err, at: CAL.at, can: calCan() };
+    // the Welcome widget's guest (name source "calendar" in a design): the stay now, from this TV's link
+    if (stayLink(r) && !STAY.events && !STAY.busy && !STAY.err && ahWants("welcome")) setTimeout(function () { stayRefresh(false); }, 0);
+    out.stay = { set: !!stayLink(r), view: stayView(r), err: STAY.err, at: STAY.at, can: calCan() };
+    var ps = photoDates();
+    out.memory = { photos: ps.length, dated: ps.filter(function (p) { return p.date; }).length, today: CouchAtHome.onThisDay(ps, new Date()) };
+    out.screen = ahWants("screentime") ? screenNow() : { ok: false, why: "off" };
+    return out;
+  }
+  // every minute: a new day, a new calendar read, today's screen time
+  function ahTick() {
+    if (!AH || typeof CouchDesign === "undefined" || !CouchDesign.on || !CouchDesign.on()) return;
+    if (ahWants("agenda")) calRefresh(false);
+    if (ahWants("welcome")) { stayRefresh(false); var sv = stayView(); CouchDesign.dataChanged("stay", sv ? [sv.phase, sv.guest, sv.checkout] : null); }
+    if (ahWants("memory")) photoDatesRead();
+    if (ahWants("screentime")) { var s = screenNow(); CouchDesign.dataChanged("screentime", [s.ok, s.minutes]); }
+    // a new day: today's events, On this day's photos (the page drew the first day when it started)
+    var day = new Date().toDateString();
+    if (day !== AH_DAY) { AH_DAY = day; CouchDesign.dataChanged("athome-day", day); }
+  }
+  var AH_DAY = new Date().toDateString();
+  // OK on a list item (widget-detail.js, the List layer): tick it
+  function ahAct(what, arg) {
+    if (!AH || what !== "tick") return false;
+    var m = /^(\d+):(\d+)$/.exec(String(arg || ""));
+    if (m && AH.store.tick(+m[1], +m[2])) ahChanged();
+    return true;
+  }
+  // the guest's name now: typed on this TV (At home, Guests) or on the phone remote (More, Guest's name).
+  // With the on-TV app or a computer at home the newest of the two wins, so both show the same name.
+  function guestSet(name) {
+    var at = Date.now();
+    ahEdit(function (x) { var n = CouchAtHome.guestFull(name); if (n) x.guest = { name: n, at: at }; else x.guest = { name: "", at: at }; });
+    ahWrite("tvhome.athome.guestat", at);
+    if (!OFFLINE && !MOCK && !PREVIEW) api("POST", "/api/guest", { name: CouchAtHome.guestFull(name) }).then(function () {}, function () {});
+  }
+  function guestSync() {
+    if (!AH || OFFLINE || MOCK || PREVIEW) return Promise.resolve();
+    return api("GET", "/api/guest").then(function (j) {
+      var g = j && j.guest, mine = ahRead("tvhome.athome.guestat") || 0, local = (AH.store.get().guest || {}).name || "";
+      if (!g) return;
+      // a bookings link sent from the phone remote: into this TV's own store, then cleared on the phone's side
+      var su = g.stay_url ? CouchAtHome.calUrl(g.stay_url) : "";
+      if (su) {
+        STAY.err = ""; STAY.at = 0;
+        ahEdit(function (x) { x.stay = x.stay || {}; x.stay.url = su; }, "Got it. The bookings link from the phone is on this TV now.");
+        api("POST", "/api/guest", { stay_url: "" }).then(function () {}, function () {});
+        stayRefresh(true);
+      }
+      if ((+g.at || 0) > mine) {
+        var n = CouchAtHome.guestFull(g.name || "");
+        ahWrite("tvhome.athome.guestat", +g.at);
+        if (n !== local) { AH.store.edit(function (x) { x.guest = { name: n, at: +g.at }; }); ahChanged(); }
+      } else if (mine > (+g.at || 0)) api("POST", "/api/guest", { name: local }).then(function () {}, function () {});
+    }, function () {});
+  }
+  // anything private typed here stops a Share this home that somehow holds it
+  function ahPrivateWords() {
+    if (!AH) return [];
+    var r = AH.store.get(), w = [];
+    if (r.wifi) w.push(r.wifi.ssid, r.wifi.pass);
+    if (r.note) w.push(r.note.text);
+    if (r.guest && r.guest.name) w.push(r.guest.name);
+    if (r.cal) w.push(r.cal.url);
+    if (r.stay) { if (r.stay.url) w.push(r.stay.url); Object.keys(r.stay.names || {}).forEach(function (k) { w.push(r.stay.names[k]); }); }
+    (r.guide || []).forEach(function (g) { w.push(g.text); });
+    return w;
+  }
+
+  // Home settings, couch-tv Studio, At home: one page with the note, lists, Wi-Fi, guide, calendar and
+  // screen time; a list and a guide entry each open their own page. English only for now, like the
+  // rest of the couch-tv Studio section (needs i18n).
+  var AH_INTRO = "Words for your couch-tv Studio widgets. They stay on this TV: never in a design, Share this home or couch-tv Studio. Typing is quicker with Type on the TV in the phone remote.";
+  function ahEdit(fn, msg) { AH.store.edit(fn); ahChanged(); if (msg) SET.msg = msg; }
+  function ahType(label, value, submit, url) { startTyping({ label: label, value: value || "", url: !!url, submit: submit }); }
+  function openAtHome() {
+    SET.sub = { back: "dz-athome", crumb: "couch-tv Studio", title: function () { return "At home"; }, rows: atHomeRows };
+    SET.keyFocus = null; SET.ri = 0;
+  }
+  function atHomeRows() {
+    if (!AH) return [info("ah-none", "At home", "", "Not in this version of the home.")];
+    var r = AH.store.get(), rows = [info("ah-intro", "", "", AH_INTRO)], L = CouchAtHome.LIM;
+    // the family note
+    rows.push(head("Family note"));
+    rows.push({ kind: "input", key: "ah-note", label: r.note ? "Change the note" : "Write a note", sub: r.note ? r.note.text : "Shows on the Family note widget", act: function () {
+      ahType("Type the note", r.note && r.note.text, function (v) { ahEdit(function (x) { x.note = { text: v, from: x.note ? x.note.from : "", at: Date.now() }; }, String(v || "").trim() ? "The note is on the home." : ""); });
+    } });
+    if (r.note) {
+      rows.push({ kind: "input", key: "ah-note-from", label: "From", value: r.note.from || "No name", act: function () {
+        ahType("Who is it from? (a name, or leave it empty)", r.note.from, function (v) { ahEdit(function (x) { if (x.note) x.note.from = v; }); });
+      } });
+      rows.push({ kind: "action", key: "ah-note-clear", label: "Clear the note", danger: true, act: function () { ahEdit(function (x) { delete x.note; }, "The note is cleared."); } });
+    }
+    // lists
+    rows.push(head("Lists"));
+    (r.lists || []).forEach(function (l, li) {
+      var left = l.items.filter(function (it) { return !it.done; }).length;
+      rows.push({ kind: "nav", key: "ah-list:" + li, label: l.name, value: left ? left + " to do" : l.items.length ? "All done" : "Empty", act: function () { openList(li); } });
+    });
+    if ((r.lists || []).length < L.lists) rows.push({ kind: "input", key: "ah-list-add", label: "Add a list", sub: "Like Shopping or To do. Up to " + L.lists + " lists.", act: function () {
+      ahType("Name the list", "", function (v) {
+        var before = (AH.store.get().lists || []).length;
+        ahEdit(function (x) { x.lists = (x.lists || []).concat([{ name: v, items: [] }]); });
+        if ((AH.store.get().lists || []).length > before) openList(before);
+      });
+    } });
+    // guest Wi-Fi
+    rows.push(head("Guest Wi-Fi"));
+    var w = r.wifi;
+    rows.push({ kind: "input", key: "ah-wifi-name", label: "Network name", value: w ? w.ssid : "Not set", act: function () {
+      ahType("Type the guest network's name, exactly as it shows on a phone", w && w.ssid, function (v) { ahEdit(function (x) { if (!String(v || "").trim()) { delete x.wifi; return; } x.wifi = x.wifi || { sec: "WPA", pass: "" }; x.wifi.ssid = v; }); });
+    } });
+    if (w) {
+      if (w.sec !== "nopass") rows.push({ kind: "input", key: "ah-wifi-pass", label: "Password", value: w.pass ? w.pass : "Not set", act: function () {
+        ahType("Type the guest network's password", w.pass, function (v) { ahEdit(function (x) { if (x.wifi) x.wifi.pass = v; }); });
+      } });
+      var SECW = { WPA: "WPA, WPA2 or WPA3 (most)", WEP: "WEP (old)", nopass: "No password" };
+      rows.push({ kind: "cycle", key: "ah-wifi-sec", label: "Security", value: SECW[w.sec], act: function () {
+        ahEdit(function (x) { var s = CouchAtHome.SEC; if (x.wifi) x.wifi.sec = s[(s.indexOf(x.wifi.sec) + 1) % s.length]; });
+      } });
+      rows.push({ kind: "toggle", key: "ah-wifi-hidden", label: "Hidden network", value: w.hidden ? t("on") : t("off"), act: function () { ahEdit(function (x) { if (x.wifi) x.wifi.hidden = !x.wifi.hidden; }); } });
+      rows.push({ kind: "action", key: "ah-wifi-clear", label: "Remove the Wi-Fi details", danger: true, act: function () { ahEdit(function (x) { delete x.wifi; }, "The Wi-Fi details are removed."); } });
+    }
+    // the house guide
+    rows.push(head("House guide"));
+    (r.guide || []).forEach(function (g, gi) { rows.push({ kind: "nav", key: "ah-guide:" + gi, label: g.title, sub: g.text, act: function () { openGuide(gi); },
+      move: function (d) { ahEdit(function (x) { var a = x.guide || [], j = gi + d; if (j < 0 || j >= a.length) return; var tmp = a[gi]; a[gi] = a[j]; a[j] = tmp; }); SET.lift = "ah-guide:" + (gi + d); } }); });
+    if ((r.guide || []).length < L.guide) rows.push({ kind: "input", key: "ah-guide-add", label: "Add to the guide", sub: "A heading, like Check out, Bins or Around here, then its words", act: function () {
+      ahType("Type the heading", "", function (v) {
+        var before = (AH.store.get().guide || []).length;
+        ahEdit(function (x) { x.guide = (x.guide || []).concat([{ title: v, text: "" }]); });
+        if ((AH.store.get().guide || []).length > before) { openGuide(before); typeGuideWords(before); }
+      });
+    } });
+    // the calendar
+    rows.push(head("Calendar"));
+    var host = r.cal ? CouchAtHome.calHost(r.cal.url) : "";
+    rows.push({ kind: "input", key: "ah-cal", label: r.cal ? "Change the calendar link" : "Add a calendar link", value: host || "",
+      sub: r.cal ? (CAL.err || (CAL.events ? CAL.events.length + " events this week, read at " + timeStr(new Date(CAL.at)) : CAL.busy ? "Reading it..." : "Read when an Agenda widget is on the home")) : "The private address of a Google, Apple or Outlook calendar. Keep it private: it opens your calendar.",
+      act: function () {
+        ahType("Paste or type the calendar's private address (it starts with https)", "", function (v) {
+          var u = CouchAtHome.calUrl(v);
+          if (!u) { SET.msg = "That is not a calendar link. It starts with https://, or is a calendar app's own link."; return; }
+          CAL.err = ""; CAL.at = 0;   // a new link starts clean: no old "did not answer" under "Got it"
+          ahEdit(function (x) { x.cal = { url: u }; }, "Got it. Reading the calendar now.");
+          calRefresh(true);
+        }, true);
+      } });
+    if (r.cal) {
+      rows.push({ kind: "action", key: "ah-cal-now", label: "Read the calendar now", act: function () { calRefresh(true); SET.msg = "Reading the calendar..."; } });
+      rows.push({ kind: "action", key: "ah-cal-clear", label: "Remove the calendar link", danger: true, act: function () { ahEdit(function (x) { delete x.cal; }, "The calendar link is removed from this TV."); calRefresh(true); } });
+    }
+    // guests: the bookings calendar for the Welcome widget's name and times
+    rows.push(head("Guests"));
+    var gname = (r.guest && r.guest.name) || "";
+    rows.push({ kind: "input", key: "ah-guest", label: "Guest's name", value: gname || "No name",
+      sub: gname ? "The Welcome widget says: Welcome, " + gname + ". Leave it empty to show just Welcome." : "Type who is staying, like Sarah or the Nguyen family. Empty, the Welcome widget says just Welcome. The phone remote can change it too (More, Guest's name).",
+      act: function () { ahType("The guest's name (leave it empty to show just Welcome)", gname, function (v) { guestSet(v); SET.msg = CouchAtHome.guestFull(v) ? "The Welcome widget now greets " + CouchAtHome.guestFull(v) + "." : "The Welcome widget now says just Welcome."; }); } });
+    var sr = r.stay || {}, shost = sr.url ? CouchAtHome.calHost(sr.url) : "", sv = stayView(r);
+    rows.push({ kind: "input", key: "ah-stay", label: sr.url ? "Change the bookings link" : "Add a bookings calendar link", value: shost || (r.cal ? "Using the Agenda's" : ""),
+      sub: sr.url || r.cal ? (STAY.err || (STAY.events ? (sv && sv.phase !== "between" ? (sv.guest || "A guest") + " is booked now" : sv && sv.next ? "Next stay starts " + shortDay(sv.next.from) : "No stays in the next two months") + ", read at " + timeStr(new Date(STAY.at)) : STAY.busy ? "Reading it..." : "Read when a Welcome widget with guest names is on the home"))
+        : "Airbnb, Booking.com or VRBO's calendar link (export or sync calendar). The Welcome widget greets each guest and shows check out. Keep it private.",
+      act: function () {
+        ahType("Paste or type the bookings calendar's private address. Long links are easier from the phone remote: More, Type on the TV", "", function (v) {
+          var u = CouchAtHome.calUrl(v);
+          if (!u) { SET.msg = "That is not a calendar link. It starts with https://, or is a calendar app's own link."; return; }
+          STAY.err = ""; STAY.at = 0;
+          ahEdit(function (x) { x.stay = x.stay || {}; x.stay.url = u; }, "Got it. Reading the bookings calendar now.");
+          stayRefresh(true);
+        }, true);
+      } });
+    rows.push({ kind: "cycle", key: "ah-stay-in", label: "Check in from", value: sr.checkin || "15:00", act: function () {
+      ahEdit(function (x) { var l = CouchAtHome.TIMES_IN, s = x.stay = x.stay || {}; s.checkin = l[(l.indexOf(s.checkin || "15:00") + 1) % l.length]; });
+    } });
+    rows.push({ kind: "cycle", key: "ah-stay-out", label: "Check out by", value: sr.checkout || "10:00", act: function () {
+      ahEdit(function (x) { var l = CouchAtHome.TIMES_OUT, s = x.stay = x.stay || {}; s.checkout = l[(l.indexOf(s.checkout || "10:00") + 1) % l.length]; });
+    } });
+    // Airbnb's link has no names: the host types one per stay (it wins over a name in the calendar)
+    var target = sv && sv.phase !== "between" ? sv : sv && sv.next;
+    if (target) rows.push({ kind: "input", key: "ah-stay-name", label: (sv && sv.phase !== "between" ? "This stay's guest" : "Next guest") + ", from " + shortDay(target.from),
+      value: target.guest || "No name", sub: STAY.mailOn ? "Read from your booking emails by the home computer. Type a name here to use another." : "Airbnb's calendar has no names: type the first name once, or let a home computer read your booking emails (setup guide, Guests).", act: function () {
+        ahType("The guest's first name for this stay", target.guest || "", function (v) {
+          ahEdit(function (x) { var s = x.stay = x.stay || {}; s.names = s.names || {}; var w = CouchAtHome.guestWord(v); if (w) s.names[target.key] = w; else delete s.names[target.key]; });
+        });
+      } });
+    if (sr.url) rows.push({ kind: "action", key: "ah-stay-clear", label: "Remove the bookings link", danger: true, act: function () { ahEdit(function (x) { if (x.stay) delete x.stay.url; }, "The bookings link is removed from this TV."); stayRefresh(true); } });
+    // screen time
+    rows.push(head("Screen time"));
+    var s = screenNow(), goal = (r.screen || {}).goal || 0;
+    rows.push(info("ah-screen", "Today", s.ok ? CouchAtHome.hm(s.minutes) : "", s.ok ? "Time in apps on this TV today." : s.why === "access" ? "This TV has not allowed couch-tv to read screen time yet." : s.why === "tv" ? "This TV does not share screen time: it needs a Google TV, Android TV or Fire TV." : s.why === "ontv" ? "Screen time needs couch-tv set up once from a computer, with the free Setup app. The app put on with just a phone cannot read it." : "Needs the couch-tv home app 0.13.2 or newer: Home settings, Updates."));
+    rows.push({ kind: "cycle", key: "ah-goal", label: "Daily goal", value: goal ? CouchAtHome.hm(goal) : t("off"), act: function () {
+      ahEdit(function (x) { var g = CouchAtHome.GOALS, i = g.indexOf((x.screen || {}).goal || 0); x.screen = { goal: g[(i + 1) % g.length] }; });
+    } });
+    if (s.why === "access" && TV && TV.openUsageAccess) rows.push({ kind: "action", key: "ah-screen-allow", label: "Allow screen time", sub: "Opens the TV's Usage access list: switch on Home", act: function () { if (!TV.openUsageAccess()) SET.msg = "This TV has no such screen. Ask whoever set up couch-tv to switch on screen time from their computer."; SCR.at = 0; } });
+    return rows;
+  }
+  function timeStr(d) { var h = d.getHours(), m = d.getMinutes(); return CLOCK24 ? h + ":" + (m < 10 ? "0" : "") + m : (h % 12 || 12) + ":" + (m < 10 ? "0" : "") + m + (h < 12 ? "am" : "pm"); }
+  function shortDay(ms) { var d = new Date(ms); return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()] + " " + d.getDate() + " " + ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()]; }
+  function openList(li) {
+    var up = SET.sub;
+    SET.sub = { up: up, back: "ah-list:" + li, crumb: "At home", title: function () { var l = (AH.store.get().lists || [])[li]; return l ? l.name : ""; }, rows: function () {
+      var l = (AH.store.get().lists || [])[li];
+      if (!l) return [];
+      var rows = l.items.map(function (it, ii) {
+        return { kind: "check", key: "ah-item:" + ii, label: it.t, checked: it.done, act: function () { AH.store.tick(li, ii); ahChanged(); },
+          move: function (d) { ahEdit(function (x) { var a = x.lists[li].items, j = ii + d; if (j < 0 || j >= a.length) return; var tmp = a[ii]; a[ii] = a[j]; a[j] = tmp; }); SET.lift = "ah-item:" + (ii + d); } };
+      });
+      if (!rows.length) rows.push(info("ah-items-none", "", "", "Nothing on this list yet."));
+      var addOne = function () {
+        ahType("Add to " + l.name + " (Back when you are done)", "", function (v) {
+          if (!String(v || "").trim()) return;
+          ahEdit(function (x) { var it = x.lists[li].items; if (it.length < CouchAtHome.LIM.items) it.push({ t: v, done: false }); });
+          setTimeout(function () { if (zone === "settings" && SET.sub && SET.sub.back === "ah-list:" + li) addOne(); }, 60);
+        });
+      };
+      if (l.items.length < CouchAtHome.LIM.items) rows.push({ kind: "input", key: "ah-item-add", label: "Add an item", act: addOne });
+      if (l.items.some(function (it) { return it.done; })) rows.push({ kind: "action", key: "ah-item-clear", label: "Clear ticked items", act: function () { ahEdit(function (x) { x.lists[li].items = x.lists[li].items.filter(function (it) { return !it.done; }); }); } });
+      rows.push({ kind: "input", key: "ah-list-name", label: "Rename the list", value: l.name, act: function () { ahType("Name the list", l.name, function (v) { ahEdit(function (x) { if (String(v || "").trim()) x.lists[li].name = v; }); }); } });
+      rows.push({ kind: "action", key: "ah-list-remove", label: "Remove this list", danger: true, act: function () { ahEdit(function (x) { x.lists.splice(li, 1); }, "The list is removed."); SET.sub = up; SET.keyFocus = "ah-list-add"; } });
+      return rows;
+    } };
+    SET.keyFocus = null; SET.ri = 0;
+  }
+  function typeGuideWords(gi) {
+    var g = (AH.store.get().guide || [])[gi];
+    if (g) ahType("Type the words for " + g.title, g.text, function (v) { ahEdit(function (x) { if (x.guide && x.guide[gi]) x.guide[gi].text = v; }); });
+  }
+  function openGuide(gi) {
+    var up = SET.sub;
+    SET.sub = { up: up, back: "ah-guide:" + gi, crumb: "At home", title: function () { var g = (AH.store.get().guide || [])[gi]; return g ? g.title : ""; }, rows: function () {
+      var g = (AH.store.get().guide || [])[gi];
+      if (!g) return [];
+      return [
+        { kind: "input", key: "ah-g-title", label: "Heading", value: g.title, act: function () { ahType("Type the heading", g.title, function (v) { ahEdit(function (x) { if (String(v || "").trim()) x.guide[gi].title = v; }); }); } },
+        { kind: "input", key: "ah-g-text", label: "Words", sub: g.text || "None yet", act: function () { typeGuideWords(gi); } },
+        { kind: "action", key: "ah-g-remove", label: "Remove from the guide", danger: true, act: function () { ahEdit(function (x) { x.guide.splice(gi, 1); }); SET.sub = up; SET.keyFocus = "ah-guide-add"; } }
+      ];
+    } };
+    SET.keyFocus = null; SET.ri = 0;
+  }
+
+  // ---- Home settings, couch-tv Studio, Smart home: Home Assistant set up on the TV, no computer ----
+  // The launcher (HomeAssistant.kt) or, on a TV whose home a computer runs, that computer's bridge
+  // checks the address and token and lists what Home Assistant has; the person ticks what shows. The
+  // token is handed over once and never comes back to this page. English only, like the rest of the
+  // couch-tv Studio section (needs i18n).
+  var SH = { addr: "http://homeassistant.local:8123", list: null, picks: null, busy: false, err: "" };
+  var SH_GROUPS = [
+    ["climate", "Air conditioning and heating", /^climate\./, 8],
+    ["scenes", "Scenes and scripts", /^(scene|script)\./, 10],
+    ["controls", "Lights, switches, fans and blinds", /^(light|switch|fan|cover)\./, 16],
+    ["cameras", "Cameras (a still picture, never video)", /^camera\./, 4],
+    ["sensors", "Sensors (the pool, rain, humidity)", /^sensor\./, 8],
+    ["speakers", "Speakers", /^media_player\./, 6],
+    ["doorbell", "Doorbell", /^(event|binary_sensor|input_boolean)\./, 1],
+    ["doorbell_camera", "The doorbell's camera", /^camera\./, 1],
+    ["energy", "Solar or power meter", /^sensor\./, 1],
+    ["battery", "Home battery (%)", /^sensor\./, 1]
+  ];
+  var SH_ERR = { address: "That is not an address. It looks like http://homeassistant.local:8123 or http://192.168.1.20:8123.",
+    token: "Home Assistant did not accept that token. Make a new one and paste the whole of it.",
+    unreachable: "The TV could not reach Home Assistant at that address. Check it is on and on the same Wi-Fi. If homeassistant.local does not work, use its number address from Home Assistant: Settings, System, Network.",
+    not_ha: "Something answered at that address, but it is not Home Assistant. Check the address and the port (usually 8123).",
+    refused: "This copy of the home cannot set up smart home.", bridge: "The home computer did not answer. Check couch-tv is running on it.",
+    timeout: "That took too long. Try again.", check: "Connect first, then pick what shows.", picks: "That could not be kept. Pick again." };
+  function shPicksFrom(st) {
+    var p = {}; ["climate", "scenes", "controls", "cameras", "sensors", "speakers"].forEach(function (k) { p[k] = Array.isArray(st[k]) ? st[k].slice() : []; });
+    ["doorbell", "doorbell_camera", "energy"].forEach(function (k) { p[k] = st[k] ? [st[k]] : []; });
+    p.battery = st.battery ? [st.battery] : [];
+    return p;
+  }
+  // the ticks as HomeAssistant.kt reads a section (docs/CONFIG.md, Smart home)
+  function shSection(p) {
+    var named = function (l) { return (l || []).map(function (e) { return { entity: e }; }); };
+    var out = { climate: named(p.climate), scenes: named(p.scenes), controls: named(p.controls), cameras: named(p.cameras), sensors: named(p.sensors), speakers: named(p.speakers) };
+    if (p.doorbell && p.doorbell[0]) out.doorbell = p.doorbell_camera && p.doorbell_camera[0] ? { entity: p.doorbell[0], camera: p.doorbell_camera[0] } : { entity: p.doorbell[0] };
+    if (p.energy && p.energy[0]) out.energy = p.battery && p.battery[0] ? { entity: p.energy[0], battery: p.battery[0] } : { entity: p.energy[0] };
+    return out;
+  }
+  function shCheck(token) {
+    SH.busy = true; SH.err = ""; SET.msg = "Asking Home Assistant...";
+    // no token: the one kept, with only the address kept with it (an empty address); the kept token
+    // is never sent to a newly typed address
+    window.smartHome.setup.check(token ? SH.addr : "", token).then(function (r) {
+      SH.busy = false;
+      if (r.ok) { SH.list = r.entities || []; if (!SH.picks) SH.picks = shPicksFrom(window.smartHome.setup.status()); SET.msg = "Connected. " + SH.list.length + " things found: pick what shows on this TV."; }
+      else { SH.err = SH_ERR[r.error] || SH_ERR.unreachable; SET.msg = SH.err; }
+      if (zone === "settings") renderSettings();
+    });
+  }
+  function openSmartSetup() {
+    SH.list = null; SH.err = ""; SH.picks = null;
+    SET.sub = { back: "dz-smart", crumb: "couch-tv Studio", title: function () { return "Smart home"; }, rows: smartRows };
+    SET.keyFocus = null; SET.ri = 0;
+  }
+  function smartRows() {
+    var S = window.smartHome.setup, st = S.status(), rows = [];
+    rows.push(info("sh-intro", "", "", "Shows your air conditioning, lights, cameras, speakers, solar and more through Home Assistant, the free smart home app that talks to over 2,000 brands. Everything stays on this TV" + (TV ? "." : " and the home computer.")));
+    if (st.set) rows.push(info("sh-on", "Connected", st.host || "", "Pick Change what shows to add or take away things."));
+    rows.push(head("1. Home Assistant at home"));
+    rows.push(info("sh-ha", "", "", "Already have it? Go to step 2. If not: it runs on a small box (Home Assistant Green) or a spare computer at home, and finds most smart devices by itself. Start at home-assistant.io/installation on your phone."));
+    rows.push(head("2. Connect"));
+    rows.push({ kind: "input", key: "sh-addr", label: "Home Assistant's address", value: SH.addr, sub: "Usually http://homeassistant.local:8123. Or its number address from Home Assistant: Settings, System, Network.", act: function () {
+      ahType("Home Assistant's address", SH.addr, function (v) { v = String(v || "").trim(); if (v) SH.addr = /^https?:\/\//i.test(v) ? v : "http://" + v; }, true);
+    } });
+    rows.push({ kind: "input", key: "sh-token", label: st.set ? "Paste a new token" : "Paste a token", value: st.set ? "Kept on this TV" : "",
+      sub: "In Home Assistant on your phone: tap your name (bottom left), Security, Long-lived access tokens, Create token, name it TV, then copy it. Paste it here with the phone remote's Type on the TV. Best made as a separate user for the TV, not an administrator.", act: function () {
+        ahType("Paste the long-lived access token", "", function (v) { v = String(v || "").trim(); if (v) shCheck(v); }, true);
+      } });
+    if (st.set && !SH.list) rows.push({ kind: "action", key: "sh-change", label: "Change what shows", sub: "Reads what Home Assistant has now, with the kept token", act: function () { shCheck(""); } });
+    if (SH.list) {
+      rows.push(head("3. Pick what shows"));
+      SH_GROUPS.forEach(function (g) {
+        var have = SH.list.filter(function (e) { return g[2].test(e.entity) && (g[0] !== "energy" || /^(k|M)?Wh?$/.test(e.unit || "")) && (g[0] !== "battery" || e.unit === "%"); });
+        if (!have.length) return;
+        var picked = (SH.picks[g[0]] || []).filter(function (id) { return have.some(function (e) { return e.entity === id; }); });
+        rows.push({ kind: "nav", key: "sh-g:" + g[0], label: g[1], value: picked.length ? picked.length + " picked" : "None", act: function () { openSmartGroup(g, have); } });
+      });
+      rows.push({ kind: "action", key: "sh-save", label: "Save and show on the home", sub: "Then add the widgets in couch-tv Studio, or open the Smart home tile in your apps", act: function () {
+        SET.msg = "Saving...";
+        S.save(shSection(SH.picks)).then(function (r) { SET.msg = r.ok ? "Saved. Smart home is on this TV." : SH_ERR[r.error] || SH_ERR.picks; if (r.ok) SH.list = null; if (zone === "settings") renderSettings(); });
+      } });
+    }
+    if (!OFFLINE && !MOCK && !PREVIEW) directRows(rows);
+    rows.push(head("A device we don't list"));
+    rows.push({ kind: "nav", key: "sh-more", label: "Add a device we don't list", sub: "Tuya and Smart Life, Google Nest, Alexa, Apple Home, Matter, Hue, aircon and solar brands, and anything with a web address", act: openSmartMore });
+    if (st.set) rows.push({ kind: "action", key: "sh-forget", label: "Disconnect smart home", danger: true, sub: "Removes the address and token from this TV. Also delete the token in Home Assistant.", act: function () {
+      S.forget().then(function () { SH.list = null; SH.picks = null; SET.msg = "Smart home is off on this TV."; if (zone === "settings") renderSettings(); });
+    } });
+    return rows;
+  }
+  // ---- Philips Hue and AirTouch 5 with no Home Assistant, through the home computer (bridge/direct.py) ----
+  // The Hue bridge is paired by its round link button; the AirTouch console is found on the Wi-Fi. A TV
+  // cannot open the AirTouch console's own port from this page, so both live on the home computer, which
+  // keeps the Hue key (bridge/data/direct.json) and never sends it here.
+  var DIR = { st: null, hueAddr: "", atAddr: "", lights: null, picked: [] };
+  var DIR_ERR = { address: "That is not an address on your home Wi-Fi. It looks like 192.168.1.x, with a number for the x.",
+    button: "Press the round button on top of the Hue bridge, then pick Pair within 30 seconds.",
+    unreachable: "Nothing answered at that address. Check it is on and on the same Wi-Fi as the home computer.",
+    not_hue: "Something answered, but it is not a Hue bridge.", none: "No AirTouch console answered on the Wi-Fi. Type its address instead (on the console: Settings, Network).",
+    library: "The home computer needs one more part for AirTouch: run bridge/.venv/bin/pip install -r bridge/requirements.txt on it, then restart couch-tv there.",
+    pair: "Pair the Hue bridge first.", refused: "That could not be done.", bridge: "The home computer did not answer. Check couch-tv is running on it." };
+  function dirAsk(body, then) {
+    SET.msg = "Asking the home computer...";
+    if (zone === "settings") renderSettings();
+    api("POST", "/api/ha/direct", body, 25000).then(function (r) {
+      DIR.st = r && r.status || DIR.st;
+      var res = r && r.result || { ok: false };
+      SET.msg = res.ok ? "" : DIR_ERR[res.error] || DIR_ERR.refused;
+      if (res.ok && then) then(res);
+      if (res.ok && window.smartHome && window.smartHome.rebridge) window.smartHome.rebridge(api);
+      if (zone === "settings") renderSettings();
+    }, function () { SET.msg = DIR_ERR.bridge; if (zone === "settings") renderSettings(); });
+  }
+  function directRows(rows) {
+    if (!DIR.st) { DIR.st = {}; dirAsk({ action: "status" }); }
+    var st = DIR.st || {};
+    rows.push(head("Philips Hue, straight from the Hue bridge"));
+    rows.push(info("dh-intro", "", "", "No Home Assistant needed. The home computer talks to the Hue bridge on your Wi-Fi, and the lights you tick show in a design's Control Centre widget."));
+    if (st.hue) rows.push(info("dh-on", "Paired", st.hue_lights ? st.hue_lights + " lights show" : "No lights ticked yet", ""));
+    rows.push({ kind: "input", key: "dh-addr", label: "Hue bridge address", value: DIR.hueAddr, sub: "In the Hue app: Settings, Bridges, the i button, IP address.", act: function () {
+      ahType("Hue bridge address", DIR.hueAddr, function (v) { DIR.hueAddr = String(v || "").trim(); }, true);
+    } });
+    rows.push({ kind: "action", key: "dh-pair", label: "Pair", sub: "Press the round button on top of the Hue bridge first, then pick this within 30 seconds", act: function () {
+      dirAsk({ action: "hue_pair", address: DIR.hueAddr }, function (r) { DIR.lights = r.lights || []; DIR.picked = []; SET.msg = "Paired. Tick the lights to show."; });
+    } });
+    if (st.hue) rows.push({ kind: "nav", key: "dh-lights", label: "Pick the lights", value: st.hue_lights ? st.hue_lights + " picked" : "None", act: function () {
+      dirAsk({ action: "hue_lights" }, function (r) { DIR.lights = r.lights || []; DIR.picked = (r.picked || []).slice(); openDirectLights(); });
+    } });
+    if (st.hue) rows.push({ kind: "action", key: "dh-forget", label: "Unpair the Hue bridge", danger: true, sub: "The home computer forgets it. Also remove couch-tv in the Hue app: Settings, Apps", act: function () { dirAsk({ action: "hue_forget" }); } });
+    rows.push(head("AirTouch 5 aircon, straight from the console"));
+    rows.push(info("dt-intro", "", "", "No Home Assistant needed. Each zone shows as a room you can switch on and off and set the temperature of. Cooling or heating stays as set on the wall."));
+    if (st.airtouch) rows.push(info("dt-on", "Connected", "", ""));
+    rows.push({ kind: "action", key: "dt-find", label: "Find the console", sub: "Looks for an AirTouch 5 on the Wi-Fi", act: function () {
+      dirAsk({ action: "airtouch_find" }, function (r) { DIR.atAddr = (r.found || [])[0] || DIR.atAddr; SET.msg = "Found it. Pick Connect."; });
+    } });
+    rows.push({ kind: "input", key: "dt-addr", label: "Console address", value: DIR.atAddr, sub: "Found above, or on the console: Settings, Network.", act: function () {
+      ahType("AirTouch console address", DIR.atAddr, function (v) { DIR.atAddr = String(v || "").trim(); }, true);
+    } });
+    rows.push({ kind: "action", key: "dt-save", label: "Connect", sub: "Reads the zones once to check", act: function () {
+      dirAsk({ action: "airtouch_save", address: DIR.atAddr }, function (r) { SET.msg = "Connected: " + (r.zones || []).length + " zones. Open the Smart home tile in your apps."; });
+    } });
+    if (st.airtouch) rows.push({ kind: "action", key: "dt-forget", label: "Disconnect the AirTouch", danger: true, sub: "The aircon is not changed", act: function () { dirAsk({ action: "airtouch_forget" }); } });
+  }
+  function openDirectLights() {
+    var up = SET.sub;
+    SET.sub = { up: up, back: "dh-lights", crumb: "Smart home", title: function () { return "Hue lights"; }, rows: function () {
+      var rows = [info("dh-most", "", "", "Pick up to 16. They show in this order.")];
+      (DIR.lights || []).forEach(function (l) {
+        rows.push({ kind: "check", key: "dh-l:" + l.id, label: l.name, checked: DIR.picked.indexOf(l.id) >= 0, act: function () {
+          var i = DIR.picked.indexOf(l.id);
+          if (i >= 0) DIR.picked.splice(i, 1); else if (DIR.picked.length < 16) DIR.picked.push(l.id); else SET.msg = "That is the most. Untick one first.";
+        } });
+      });
+      rows.push({ kind: "action", key: "dh-save", label: "Save", act: function () { SET.sub = up; dirAsk({ action: "hue_save", lights: DIR.picked }, function () { SET.msg = "Saved. Add a Control Centre widget in couch-tv Studio to see them."; }); } });
+      return rows;
+    } };
+    SET.keyFocus = null; SET.ri = 0;
+  }
+  function openSmartGroup(g, have) {
+    var up = SET.sub;
+    SET.sub = { up: up, back: "sh-g:" + g[0], crumb: "Smart home", title: function () { return g[1]; }, rows: function () {
+      var cur = SH.picks[g[0]] = SH.picks[g[0]] || [];
+      var rows = [info("sh-g-most", "", "", g[3] === 1 ? "Pick one." : "Pick up to " + g[3] + ". They show in this order.")];
+      have.forEach(function (e) {
+        rows.push({ kind: "check", key: "sh-e:" + e.entity, label: e.name, sub: e.entity + (e.unit ? ", " + e.unit : ""), checked: cur.indexOf(e.entity) >= 0, act: function () {
+          var i = cur.indexOf(e.entity);
+          if (i >= 0) cur.splice(i, 1);
+          else if (g[3] === 1) { cur.length = 0; cur.push(e.entity); }
+          else if (cur.length < g[3]) cur.push(e.entity);
+          else SET.msg = "That is the most for this. Untick one first.";
+        } });
+      });
+      return rows;
+    } };
+    SET.keyFocus = null; SET.ri = 0;
+  }
+  // the brands people ask about, each with the way into Home Assistant (then it shows in step 3)
+  var SH_MORE = [
+    ["How it works", "Add the device to Home Assistant first, then come back here and pick Change what shows: it is in the list. In Home Assistant: Settings, Devices and services, Add integration, then search for the brand."],
+    ["Tuya, Smart Life, Arlec Grid Connect, Deta", "Add integration, Tuya. Home Assistant shows a QR code: scan it with the Smart Life or Tuya app."],
+    ["Google Home and Nest", "Nest thermostats, cameras and doorbells: Add integration, Google Nest. Other Google Home devices: share them to Home Assistant with Matter (below)."],
+    ["Amazon Alexa", "Alexa itself has no way in, but the plugs and lights in it do: add each by its own brand (often Tuya, TP-Link, Hue or Matter)."],
+    ["Apple Home", "In the Home app, open the device, Turn On Pairing Mode, and copy the code. Then in the Home Assistant phone app: Add device, Matter."],
+    ["Matter or Thread devices", "In the Home Assistant phone app: Settings, Devices and services, Add device, Add Matter device, then scan the code on the device."],
+    ["Philips Hue", "With a computer at home: Philips Hue, straight from the Hue bridge, on the Smart home page (no Home Assistant). Or in Home Assistant: Add integration, Philips Hue, then press the round button on the Hue bridge."],
+    ["Aircon", "Add integration and search for the brand: Daikin, Mitsubishi (MELCloud), Fujitsu, Panasonic, LG, Sensibo, AirTouch 5 (it finds the console by itself). With a computer at home, AirTouch 5 also works with no Home Assistant: on the Smart home page."],
+    ["Solar and batteries", "Add integration: Fronius, Enphase, SolarEdge, SMA, GoodWe or Tesla Powerwall. Then pick its today total under Solar or power meter."],
+    ["Plugs, cameras and speakers", "TP-Link Kasa and Tapo, Shelly, LIFX, Reolink, Ring, Eufy, Sonos, Google Cast: Add integration and search for the brand."],
+    ["Anything with a web address or MQTT", "A home made sensor, a Raspberry Pi or a router: Home Assistant's RESTful, MQTT or Webhook integrations make it a sensor or a switch, which then shows here."],
+    ["Still not there?", "Search the brand at home-assistant.io/integrations on your phone. If it is listed there, it works here."]
+  ];
+  function openSmartMore() {
+    var up = SET.sub;
+    SET.sub = { up: up, back: "sh-more", crumb: "Smart home", title: function () { return "Add a device we don't list"; }, rows: function () {
+      var rows = SH_MORE.map(function (m, i) { return info("sh-m:" + i, m[0], "", m[1]); });
+      if (window.smartHome.setup.status().set) rows.push({ kind: "action", key: "sh-again", label: "Check again", sub: "Reads what Home Assistant has now", act: function () { SET.sub = up; shCheck(""); } });
+      return rows;
+    } };
+    SET.keyFocus = null; SET.ri = 0;
+  }
+
   // the native side calls these
   // Home on the remote also re-reads the lists, so an order arranged on the phone shows straight away
-  window.tv = { back: function () { if (idleAmbientActive) { setIdleAmbient(false); resetSmartIdle(); return; } if (idlePhotoInput(null)) return; goHome(); resetIdlePhoto(); resetSmartIdle(); },
+  window.tv = { back: function () { if (typeof CouchShare !== "undefined" && CouchShare.close()) return; if (typeof CouchDesign !== "undefined" && CouchDesign.back && CouchDesign.back()) return; if (idleAmbientActive) { setIdleAmbient(false); resetSmartIdle(); return; } if (idlePhotoInput(null)) return; goHome(); resetIdlePhoto(); resetSmartIdle(); },
     home: function () { forgetFocus(); if (idleAmbientActive) { setIdleAmbient(false); resetSmartIdle(); return; } if (idlePhotoInput(null)) return; if (zone === "settings") closeSettings(); else goHome(); refresh(); resetIdlePhoto(); resetSmartIdle(); },
     screenOff: function () { toggleScreenOff(true); },
     wakeScreen: function () { toggleScreenOff(false); },
@@ -4811,18 +6327,257 @@
     noDream: function () { note(t("no_dream")); },
     // the remote's Settings/gear key, caught by the launcher natively (MainActivity.dispatchKeyEvent)
     settingsKey: function () { blip(0, 0); settingsKey(); },
-    resume: function () { toggleScreenOff(false); setIdleAmbient(false); resetSmartIdle(); okReset(); refresh(); if (!OFFLINE) refreshQuick(); refreshWeather(); startVideo(); sceneVideos(true); refreshMusic(); refreshCards(true); if (window.AmbientWeather) window.AmbientWeather.resume(); resetIdlePhoto(); },
+    resume: function () { PAGE_PAUSED = false; clock(); designVideo("away", false); toggleScreenOff(false); setIdleAmbient(false); resetSmartIdle(); okReset(); refresh(); if (!OFFLINE) refreshQuick(); refreshWeather(); startVideo(); sceneVideos(true); refreshMusic(); refreshCards(true); if (window.AmbientWeather) window.AmbientWeather.resume(); resetIdlePhoto(); },
     // an app is in front: the video background stops until the home is back
-    pause: function () { saveFocusNow(); pauseVideo(); },
+    // (and a design's video background lets go of the TV's decoder, which the app may need)
+    pause: function () { saveFocusNow(); PAGE_PAUSED = true; pauseVideo(); designVideo("away", true); },
     // the launcher's file picker has copied the chosen photos into its own storage (Home settings)
     photosAdded: function (names) { photosAdded(names); },
     // the launcher's updater has news (Updater.kt)
     update: function (state) { updChanged(state); },
     // Android's "default home app" chooser closed (HomeRole.kt, #98)
-    homeAnswered: function (held) { homeAnswered(held); } };
+    homeAnswered: function (held) { homeAnswered(held); },
+    // a calendar the launcher read for the Agenda widget (MainActivity.calendar)
+    calendarText: function (id, ok, text) { calendarText(id, ok, text); },
+    // words typed on the phone remote (Type on the TV) when the TV app cannot press keys (the on-TV app
+    // with no ADB): they go into the typing box Home settings has open, at the cursor. False: no box open.
+    typeText: function (s) { return typeIn(s); } };
+
+  // ---------------- the web widgets (widget-web.js): headlines, scores, markets, the commute ----------------
+  // Asked only while such a widget is on the home, each source at most once per refresh, the last
+  // answers kept on this TV. A news feed or a share price sends no CORS header, so the TV asks through a
+  // relay that is part of couch-tv at home: the bridge or the on-TV app (/api/webdata), or with neither,
+  // this TV's own launcher (tvos.invalid/webdata). Scores and the drive come straight from their free
+  // services. A preview (?mock=1) asks nobody (weblive=1: a test that does).
+  var WEB = null, webTimer = 0;
+  function webRelayOk() { return !OFFLINE || !!(TV && TV.webData && TV.webData()); }
+  function webRelay(src, id) {
+    var q = "src=" + encodeURIComponent(src) + "&id=" + encodeURIComponent(id);
+    var get = function (url, auth) {
+      return new Promise(function (resolve, reject) {
+        var x = new XMLHttpRequest();
+        x.open("GET", url); x.timeout = 15000;
+        if (auth && KEY) x.setRequestHeader("Authorization", "Bearer " + KEY);
+        x.onload = function () { var j = null; try { j = JSON.parse(x.responseText); } catch (e) {} if (x.status === 200 && j && j.ok && typeof j.text === "string") resolve(j.text); else reject(new Error((j && j.error) || "relay " + x.status)); };
+        x.onerror = x.ontimeout = function () { reject(new Error("relay")); };
+        x.send();
+      });
+    };
+    return !OFFLINE ? get(API + "/api/webdata?" + q + (TV_ID ? "&tv=" + TV_ID : ""), true) : get("http://tvos.invalid/webdata?" + q, false);
+  }
+  function webStart() {
+    if (WEB || typeof CouchWidgetWeb === "undefined" || !CouchDesign.widgetsOf || (MOCK && !/[?&]weblive=1/.test(Q))) return;
+    WEB = CouchWidgetWeb.loader({
+      widgets: function () { return CouchDesign.widgetsOf(Object.keys(CouchWidgetWeb.SOURCES)); },
+      canRelay: webRelayOk, relay: webRelay,
+      json: function (url) { return fetch(url).then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r.json(); }); },
+      // the last answers, on this TV only (headlines and prices, never anything about the household)
+      load: function () { try { return JSON.parse(localStorage.getItem(PFX + "tvhome.webdata") || "null"); } catch (e) { return null; } },
+      save: function (o) { try { localStorage.setItem(PFX + "tvhome.webdata", JSON.stringify(o)); } catch (e) {} },
+      changed: webChanged,
+      paused: webPaused,
+      places: commutePlaces,
+      hidden: function () { return !!document.hidden; }
+    });
+    // the first look waits for the store's off switch (or 6 seconds), so a paused source is never asked
+    var go = function () { if (WEB && !WEB.started) { WEB.started = true; WEB.start(); } };
+    if (CouchDesign.widgetsOf(Object.keys(CouchWidgetWeb.SOURCES)).length) webPaused(); else WEB_PAUSE = WEB_PAUSE || { at: 0, paused: [] };
+    if (WEB_PAUSE.wait) { WEB_PAUSE.wait.then(go, go); setTimeout(go, 6000); } else go();
+  }
+  // The design store's off switch for the web widgets' sources (widget-web.js pausedOf): GET
+  // <store>/v1/config/sources, asked at most once a day and only while a web widget is on the home,
+  // with no cookies and no referrer. No store, no answer or a bad one: everything on.
+  var WEB_PAUSE = null;
+  function webPaused() {
+    var t = Date.now();
+    if (!WEB_PAUSE) {
+      var c = null;
+      try { c = JSON.parse(localStorage.getItem(PFX + "tvhome.webpause") || "null"); } catch (e) {}
+      WEB_PAUSE = c && isFinite(c.at) && t - c.at < 86400000 && t >= c.at ? { at: c.at, paused: CouchWidgetWeb.pausedOf(c) } : { at: 0, paused: [] };
+    }
+    if (t - WEB_PAUSE.at >= 86400000) webPauseAsk();
+    return WEB_PAUSE.paused;
+  }
+  function webPauseAsk() {
+    var base = typeof CouchDesignCode !== "undefined" && CouchDesignCode.base ? CouchDesignCode.base() : "", t = Date.now();
+    WEB_PAUSE.at = t;   // one ask a day, whatever the answer
+    var done = function (paused) {
+      var was = WEB_PAUSE.paused.join();
+      WEB_PAUSE = { at: t, paused: paused };
+      try { localStorage.setItem(PFX + "tvhome.webpause", JSON.stringify({ at: t, paused: paused })); } catch (e) {}
+      if (was !== paused.join()) { if (WEB) WEB.tick(); webChanged(); }
+    };
+    if (!base || !window.fetch) return done([]);
+    WEB_PAUSE.wait = fetch(base + "/v1/config/sources", { credentials: "omit", referrerPolicy: "no-referrer", cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { done(CouchWidgetWeb.pausedOf(j)); }, function () { done([]); });
+    return WEB_PAUSE.wait;
+  }
+  function webChanged() { clearTimeout(webTimer); webTimer = setTimeout(function () { if (typeof CouchDesign !== "undefined" && CouchDesign.dataChanged) CouchDesign.dataChanged("web"); }, 150); }
+  // The commute's two places, kept on this TV only (never in a design, never sent to the bridge): from
+  // the town set in Location (or config.json's weather place), to the place picked in Home settings,
+  // couch-tv Studio, Commute. Both are towns or suburbs from the place search, about a kilometre wide.
+  function commutePlaces() {
+    var pl = ST.place && isFinite(ST.place.lat) && isFinite(ST.place.lon) ? { name: ST.place.name, lat: ST.place.lat, lon: ST.place.lon }
+      : CFG.weather && isFinite(CFG.weather.lat) && isFinite(CFG.weather.lon) ? { name: String(CFG.weather.place || "").split(",")[0], lat: CFG.weather.lat, lon: CFG.weather.lon } : null;
+    var to = kept("tvhome.commute");
+    return { from: pl, to: to && isFinite(to.lat) && isFinite(to.lon) ? { name: String(to.name || ""), lat: +to.lat, lon: +to.lon } : null };
+  }
+  // Picks for you: each person's Keep watching (no kids or guest profiles' shows are picked for others)
+  function householdData() {
+    if (NOBODY || !KW_ON) return [];
+    return PEOPLE.map(function (p) {
+      var kid = !!(window.KidsMode && window.KidsMode.isKid && window.KidsMode.isKid(p)) || !!p.kid;
+      return { id: p.id, name: p.name, kid: kid, guest: !!p.guest, shows: (data.showsBy[p.id] || []).slice(0, KEEP_MAX) };
+    });
+  }
+  // OK on a pick: the show, in its own app, the way Keep watching opens it (as its owner's)
+  function playPick(i) {
+    var d = typeof CouchWidgetWeb !== "undefined" ? CouchWidgetWeb.picks(householdData(), who, arrangeItems().items.map(function (it) { return it.package; }), 8) : [], p = d[i];
+    var it = p && (data.showsBy[p.owner] || [])[p.i];
+    if (!it) return;
+    status(it.app ? t("opening_in", { title: it.title, app: it.app.name }) : t("opening", { title: it.title }), true);
+    if (it.wn && TV && TV.openWatchNext) {
+      if (!TV.openWatchNext(String(it.id)) && it.app) TV.launch(it.app.package);
+      status("");
+      return;
+    }
+    api("POST", "/api/continue/open", { id: it.id, who: p.owner }, 60000)
+      .then(function (res) { status(res.note ? tBridge(res.note_key, res.note_vars, res.note) : ""); })
+      .catch(function (e) { if (TV && it.app && TV.launch(it.app.package)) { status(""); return; } status(tBridge(e.key, e.vars, e.message)); });
+  }
+  function commuteData() {
+    var p = commutePlaces();
+    return { from: p.from ? { name: p.from.name } : null, to: p.to ? { name: p.to.name } : null,
+      key: typeof CouchWidgetWeb !== "undefined" ? CouchWidgetWeb.routeKey(p.from, p.to) : null };
+  }
+  // Home settings, couch-tv Studio, Commute: shown while a design has a Commute widget (English only,
+  // like the rest of this section)
+  var cgeoTimer = null, cgeoTicket = 0;
+  function commuteRows(rows) {
+    if (typeof CouchDesign === "undefined" || !CouchDesign.widgetsOf || !CouchDesign.widgetsOf(["commute"]).length) return;
+    var p = commutePlaces(), g = SET.cgeo || (SET.cgeo = { q: "", list: null, busy: false, err: false });
+    rows.push(head("Commute"));
+    rows.push(info("cm-from", "From", p.from ? p.from.name : "Not set", p.from ? "Your town in Location" : "Set your town in Location first"));
+    rows.push({ kind: "input", key: "cm-search", label: "Where to", sub: p.to ? p.to.name : "Type the town or suburb you drive to", value: g.q, act: function () {
+      startTyping({ label: "Type the town or suburb you drive to", value: g.q, search: true,
+        live: function (q) { findCommute(q, false); }, submit: function (q) { findCommute(q, true); } });
+    } });
+    if (g.busy) rows.push(info("cm-busy", t("loc_searching")));
+    else if (g.err) rows.push(info("cm-err", t("loc_error")));
+    else if (g.list && !g.list.length) rows.push(info("cm-none", t("loc_none", { q: g.q })));
+    (g.list || []).forEach(function (pl, i) {
+      rows.push({ kind: "choice", key: "cplace:" + i, label: pl.name, sub: pl.area, checked: !!(p.to && p.to.lat === pl.lat && p.to.lon === pl.lon), act: function () { chooseCommute(pl); } });
+    });
+    if (p.to) rows.push({ kind: "action", key: "cm-forget", label: "Forget where you drive to", sub: "Removes it from this TV", act: function () {
+      keep("tvhome.commute", null); SET.msg = "Forgotten. The Commute widget asks for a place again."; webChanged();
+    } });
+    rows.push(info("cm-note", "Kept on this TV only, never in a design. The route uses the suburb, never your address."));
+  }
+  function findCommute(q, go) {
+    clearTimeout(cgeoTimer);
+    q = (q || "").trim();
+    SET.cgeo = SET.cgeo || {};
+    SET.cgeo.q = q;
+    if (q.length < 2) { SET.cgeo = { q: q, list: null, busy: false, err: false }; if (zone === "settings") renderSettings(); return; }
+    var run = function () {
+      var ticket = ++cgeoTicket;
+      SET.cgeo.busy = true; SET.cgeo.err = false;
+      if (zone === "settings") renderSettings();
+      geocode(q).then(function (list) {
+        if (ticket !== cgeoTicket) return;
+        SET.cgeo = { q: q, list: list, busy: false, err: false };
+        if (go && list.length && !SET.typing) { SET.col = "rows"; SET.keyFocus = "cplace:0"; }
+        if (zone === "settings") renderSettings();
+      }, function () {
+        if (ticket !== cgeoTicket) return;
+        SET.cgeo = { q: q, list: null, busy: false, err: true };
+        if (zone === "settings") renderSettings();
+      });
+    };
+    if (go) run(); else cgeoTimer = setTimeout(run, 500);
+  }
+  function chooseCommute(pl) {
+    // the town or suburb from the place search (two decimals: about a kilometre), never an address
+    keep("tvhome.commute", { name: pl.name, lat: pl.lat, lon: pl.lon });
+    SET.msg = "Commute set: to " + pl.name + ".";
+    if (WEB) WEB.tick();
+    webChanged();
+  }
 
   function start() {
     readConfig();
+    // a TV whose home a computer runs (no launcher): smart home goes through that computer's bridge
+    // (on a Google TV or Android TV with a computer at home, only its Hue lights and AirTouch zones)
+    if (!OFFLINE && !MOCK && !PREVIEW && window.smartHome && window.smartHome.useBridge) window.smartHome.useBridge(api);
+    // a design got by code: pictures only from here, the store and the hosts this TV already uses
+    if (DESIGN_FROM_CODE && CouchDesignCode.lockImages) CouchDesignCode.lockImages((ST.photos || []).map(function (p) { return p && p.url; }), VIDEO_URL);
+    // couch-tv Studio's design block (design.js): nothing happens without one, unless the page is
+    // the designer's own preview (?designer=1), which sends designs in as they are made
+    // With couch-tv Studio off (designer-gate.js) design.js is never started: no keys of its own, no
+    // question, no page policy. On, the page policy a design runs under goes in first.
+    var designOn = typeof CouchDesign !== "undefined" && !!(GATE.design || GATE.preview);
+    // (videos only from this page, memory, the design store and this TV's own video link)
+    if (designOn && typeof CouchDesigner !== "undefined") CouchDesigner.lockPage(document, typeof CouchDesignCode !== "undefined" && CouchDesignCode.mediaSources ? { media: CouchDesignCode.mediaSources(VIDEO_URL) } : null);
+    if (designOn) CouchDesign.start(CFG.design, {
+      // a design's video background keeps its still picture with Lighter home or in power save
+      videoEnv: function () { var ps = false; try { ps = !!(TV && TV.powerSave && TV.powerSave()); } catch (e) {} return { lighter: LIGHTER, powerSave: ps }; },
+      clock: function () { glassShown = ""; clock(); },
+      apps: function () { renderGrid(); },
+      clock24: function () { return CLOCK24; },
+      night: NIGHT,
+      // widget mode: whether the home itself has the remote (no menu, settings or pop up open)
+      free: function () { return !screenOffActive && !idleAmbientActive && !kidsOn() && !expanded && !lift && ["grid", "shelf", "np", "people", "quick"].indexOf(zone) >= 0; },
+      // what the widgets show: only what this TV already has
+      data: function () {
+        return { weather: WX_SHOW ? data.weather : null, wxOff: !WX_SHOW, place: { name: String((WXCFG && WXCFG.place) || "").split(",")[0], lat: WXCFG && WXCFG.lat, lon: WXCFG && WXCFG.lon },
+          shows: data.shows || [], music: music, apps: (function () { try { return arrangeItems().items.map(function (it) { return { package: it.package, name: it.name }; }); } catch (e) { return []; } })(),
+          photos: (Array.isArray(ST.photos) ? ST.photos : []).filter(function (p) { return p && (p.file || p.url); }).map(photoSrc),
+          people: NOBODY ? [] : PEOPLE.map(function (p) { return { id: p.id, name: p.name }; }), who: who, quick: quickVisible(), cards: CARDS.slice(0, 8), iconUrl: iconUrl,
+          // no bridge at all (option A, or the standalone home): widgets that need one say so
+          bridge: !OFFLINE,
+          // the scenes the launcher's Home Assistant allows (names and entities only, never its address)
+          scenes: window.smartHome && window.smartHome.scenes ? window.smartHome.scenes() : [],
+          // things typed at home (Home settings, couch-tv Studio, At home): kept on this TV only
+          home: homeView(),
+          // the web widgets' answers (widget-web.js): headlines, scores, prices, the drive
+          web: WEB ? WEB.data() : null,
+          // the commute's two places by name only, and the drive's id (Home settings; never in a design)
+          commute: commuteData(),
+          // everyone's Keep watching on this TV, for Picks for you (widget-web.js picks; stays on the TV)
+          household: householdData() };
+      },
+      // the detail layers (widget-detail.js) ask Home Assistant through smarthome.js, never directly
+      ha: function (action, entity, value) {
+        if (!window.smartHome || !window.smartHome.request || !(window.smartHome.enabled || window.smartHome.available)()) return Promise.resolve({ ok: false, error: "off" });
+        return window.smartHome.request(action, entity, value);
+      },
+      // OK on a widget: open the app, the show, the smart home, a quick button
+      act: function (what, arg) {
+        touched = true;
+        if (ahAct(what, arg)) return;
+        if (what === "app") {
+          var it = arrangeItems().items.filter(function (x) { return x.package === arg; })[0];
+          if (it && it.kind && it.kind !== "app") { var i = gridItems.indexOf(it); if (i >= 0) { zone = "grid"; g = i; activate(); } return; }
+          opened(arg);
+          if (TV && TV.launch(arg)) return;
+          api("POST", "/api/launch", { app: (it && it.id) || arg }).catch(function (e) { status(tBridge(e.key, e.vars, e.message)); });
+        } else if (what === "show") { zone = "shelf"; s = Math.max(0, parseInt(arg, 10) || 0); activate(); zone = "grid"; }
+        else if (what === "pick") playPick(parseInt(arg, 10) || 0);
+        else if (what === "more") { dockBack = null; expanded = true; zone = "grid"; g = 0; renderGrid(); paintFocus(); }
+        else if (what === "gear") openGear();
+        else if (what === "smart") openSmart();
+        else if (what === "quick") { var qv = quickVisible(), qn = qv.indexOf(arg); if (qn >= 0) { qi = qn; quickAction(); } else if (arg === "soundscape") cycleSoundscape(); }
+        else if (what === "person") { pickWho(arg); renderPeople(); }
+        else if (what === "scene") { if (window.smartHome && window.smartHome.request && window.smartHome.available()) { var scn = (window.smartHome.scenes() || []).filter(function (x) { return x.entity === arg; })[0], snm = scn ? scn.name : arg; window.smartHome.request("scene", arg).then(function (r) { note(r && r.ok ? t("sh_started", { name: snm }) : t("sh_failed")); }); } }
+        else if (what === "media") {
+          var key = { prev: "previous", play: "play_pause", next: "next", vol_up: "volume_up", vol_down: "volume_down", mute: "mute" }[arg];
+          if (key) { api("POST", "/api/key", { key: key }).catch(function (e) { note(tBridge(e.key, e.vars, e.message)); }); setTimeout(refreshMusic, 1200); }
+        }
+      },
+      fromCode: DESIGN_FROM_CODE
+    });
+    if (designOn) webStart();
     kidsInit();
     kidSync();   // a kids profile on the couch: its shelf before anything else shows
     staticText();
@@ -4845,14 +6600,14 @@
         resetSmartIdle();
       });
     }
-    document.addEventListener("pointerdown", resetSmartIdle, { passive: true });
+    document.addEventListener(PTR + "down", resetSmartIdle, { passive: true });
     document.addEventListener("wheel", resetSmartIdle, { passive: true });
     initSettings();
     // Home settings gets an Updates section, before About, where the launcher can update itself
     if (updRead() && UPD.supported) SECS.splice(SECS.length - 1, 0, ["updates", "download"]);
     mark("app-start");
     clock();
-    setInterval(clock, 15000);
+    setInterval(clockTick, 15000);
     if (NIGHT) {
       if (window.AmbientWeather) {
         window.AmbientWeather.init($("weather-canvas"), $("ambient-lighting"));
@@ -4884,7 +6639,7 @@
       setInterval(refreshCards, window.CustomCards.EVERY_MIN * 60000);
     }
     var cached = load();
-    if (cached) { data.showsBy = cached.showsBy || data.showsBy; data.screens = cached.screens || []; data.order = cached.order || null; }
+    if (cached) { data.showsBy = cached.showsBy || data.showsBy; data.videosBy = cached.videosBy || data.videosBy; data.screens = cached.screens || []; data.order = cached.order || null; }
     setPeople(PEOPLE);   // the cache may predate someone new
     if (OFFLINE) {   // no bridge: an order made with this TV's remote wins
       var lo = kept("tvhome.order.tv");
@@ -4896,18 +6651,20 @@
     renderQuick();
     if (!OFFLINE) refreshQuick();
     refreshMusic();
-    setInterval(refreshMusic, 5000);
+    setInterval(function () { if (!covered()) refreshMusic(); }, 5000);
     updateOledShift();
     setInterval(updateOledShift, 60000);
     setInterval(checkSmartIdle, 10000);
-    setInterval(function () { renderQuick(); refreshBedtimeDim(); }, 30000);
+    // couch-tv Studio's home widgets: the calendar, photo dates, screen time and a new day
+    if (AH) { setTimeout(ahTick, 2500); setInterval(ahTick, 60000); }
+    setInterval(function () { if (!covered()) { if (!screenOffActive) renderQuick(); refreshBedtimeDim(); } }, 30000);
     // LG: the weekly Developer Mode extend. It asks on screen and stays until answered (this TV's
     // clock screensaver would hide anything that timed out). devResume() records an extend that just
     // happened, so the question is never asked twice.
     setTimeout(devResume, 1500);
     // This TV says who is on its couch first, so what plays here is logged for them (each TV
     // keeps its own); then the lists. Once the home is up: the one-time "tell you about new versions?" question.
-    if (!OFFLINE) setInterval(followWho, 3000);
+    if (!OFFLINE) setTimeout(followWhoTick, 3000);
     // The bridge's choice wins (a phone that just turned the TV on set it); this TV's own memory is
     // only handed over when the bridge has nobody yet.
     var hello = OFFLINE ? Promise.resolve() : api("GET", "/api/who").then(function (j) {

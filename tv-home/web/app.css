@@ -196,6 +196,9 @@ body {
   background-size: 250% 100%; background-position: 100% 0;
   transition: opacity 240ms var(--ease);
 }
+/* Chrome before 57 (webOS 4) drops a rounded overflow clip while the tile animates, so the picture
+   showed square corners as the focus moved: round the picture and the glint themselves */
+.old-engine .face img, .old-engine .face::after { border-radius: inherit; }
 .tile.focus { z-index: 2; }
 .tile.focus .face {
   box-shadow: 0 1.75rem 3rem rgba(0, 0, 0, 0.6), 0 0 0 0.0625rem rgba(255, 255, 255, 0.12);
@@ -207,6 +210,10 @@ body {
   to { transform: perspective(60rem) rotateX(-1.2deg) rotateY(1.8deg); }
 }
 @keyframes glint { from { background-position: 100% 0; } to { background-position: 0% 0; } }
+/* a few seconds after the focus last moved (app.js, unsettle), the sway and glint hold still where they
+   are: while anything moves the TV draws the whole screen every frame, and on a 2 GB TV with frosted
+   panels that is 22 frames a second instead of 60. Any key or pointer move starts them again. */
+html.settled .tile.focus .face, html.settled .tile.focus .face::after { animation-play-state: paused; }
 
 /* Keep watching tile */
 .show { width: var(--shelf-w); height: var(--shelf-h); }
@@ -324,10 +331,10 @@ html.still .tile.focus .face, html.still .tile.focus .face::after { animation: n
 /* 1 Golden hour: a little smaller, low enough for the volcano's tip to rise into the digits */
 .s-golden .gclock { top: 9.5rem; font-size: 24.375rem; }
 /* 2 Waterline: the clock sits on the water (app.js water: the underside of the surface); the part
-   under it is blurred like a reflection */
+   under it is blurred like a reflection, lined up with the sharp part above (no sideways shift) */
 .s-water .shade { background: linear-gradient(180deg, rgba(0, 12, 24, 0.42) 0%, rgba(0, 12, 24, 0.12) 40%, rgba(0, 0, 0, 0) 52%, rgba(0, 20, 40, 0.5) 100%); }
 .s-water .gclock { top: 16.75rem; font-size: 26.25rem; filter: drop-shadow(0 0.5rem 1.875rem rgba(0, 20, 40, 0.35)); }
-.s-water .gclock.under { filter: blur(0.1375rem); opacity: 0.78; transform: translateX(0.3125rem); }
+.s-water .gclock.under { filter: blur(0.1375rem); opacity: 0.78; }
 .s-water .gclock.under .fill { filter: hue-rotate(-8deg) saturate(1.4); }
 .s-water .gclock.under .rim { -webkit-text-stroke-color: rgba(170, 240, 255, 0.5); }
 /* 3 Fog: a big dark clock on the left, sinking into the misty hills */
@@ -351,9 +358,23 @@ html.still .tile.focus .face, html.still .tile.focus .face::after { animation: n
   text-shadow: 0 0.125rem 1.125rem rgba(0, 0, 0, 0.25); transition: opacity 600ms ease-in-out;
 }
 .theme-night .date .wx { color: rgba(255, 255, 255, 0.78); font-weight: 400; }
+/* home.date_bars: a thin vertical bar between the day, the place and the weather, in place of the dots */
+.theme-night .date .vbar { display: inline-block; width: 0.125rem; height: 1.3em; margin: 0 0.95em; vertical-align: -0.28em; border-radius: 0.0625rem;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0), currentColor 25%, currentColor 75%, rgba(255, 255, 255, 0)); opacity: 0.55; }
+/* the weather place follows the date on the same line, after a middle dot (app.js clock()); the
+   icon then needs only a small gap after the place */
+.theme-night .date .wx-place + svg { margin-inline-start: 0.4rem; }
 .theme-night .date { white-space: nowrap; }
+.theme-night .date.weather-lines { white-space: normal; }
+.theme-night .date.weather-lines .dline {
+  display: inline-flex; flex-direction: column; align-items: center; white-space: normal;
+}
+.theme-night .date.weather-lines .date-label,
+.theme-night .date.weather-lines .wx { display: block; }
+.theme-night .date.weather-lines .wx { font-size: 0.72em; line-height: 1.4; }
 /* fitDate() in app.js: not enough room between the people switch and the quick buttons */
-.theme-night .date.tight .ww, .theme-night .date.tighter .wx { display: none; }
+.theme-night .date.tight .ww, .theme-night .date.tight .wx-place,
+.theme-night .date.tighter .wx { display: none; }
 /* the date sits just above each scene's clock; it fades out while the scenes swap */
 .theme-night .date.swap { opacity: 0; }
 .scene-night .date { color: rgba(255, 232, 238, 0.92); }
@@ -413,6 +434,13 @@ html.still .tile.focus .face, html.still .tile.focus .face::after { animation: n
 .theme-night .app .face.tool { background: rgba(255, 255, 255, 0.14); }
 .theme-night .app .face.word { font-size: 1.125rem; padding: 0 0.5rem; background: #2a2a30; }
 .theme-night .app .label { top: calc(100% + 0.75rem); }
+/* home.dock_banners: each app's wide TV banner (16:9) instead of its square icon, as tall as the icon */
+.dock-banners.theme-night .app { width: 12.5rem; height: 7rem; }
+.dock-banners.theme-night .app .face { border-radius: 1rem; corner-shape: round; }
+.dock-banners.theme-night .app .face.banner img { width: 100%; height: 100%; object-fit: cover; }
+/* rows of banners below the first: they slide up into view as the focus moves down */
+.dock-banners.theme-night .apps { transition: transform 240ms var(--ease); }
+.dock-down.theme-night .shelf { opacity: 0; }
 /* More apps: the dock grows into a full list and the cards step aside */
 .theme-night.expanded .shelf { display: none; }
 
@@ -620,6 +648,15 @@ html.still .tile.focus .face, html.still .tile.focus .face::after { animation: n
   width: 100%; padding: 0; border: 0; outline: 0; background: transparent; color: #fff; caret-color: #0a84ff;
   font: inherit; font-size: 2.25rem; line-height: 3rem; font-weight: 500; user-select: text; -webkit-user-select: text;
 }
+/* a design code as it is typed (ABCDE-FGHJK and how many letters), and shown big on Check the code */
+.set-type-check { margin: 0.25rem 0 0; min-height: 0; font-size: 1.5rem; line-height: 2rem; font-weight: 600; letter-spacing: 0.08em; color: #8fd3ff; }
+.set-type-check:empty { display: none; }
+.scode { padding: 1.25rem 1.75rem 1.5rem; }
+.scode-big { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.scode-big i { font-style: normal; display: inline-flex; align-items: center; justify-content: center; width: 4.25rem; height: 5.5rem; border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.12); color: #fff; font-size: 3.25rem; font-weight: 700; font-family: ui-monospace, Menlo, Consolas, monospace; }
+.scode-big i.dash { width: 2rem; background: none; color: rgba(255, 255, 255, 0.6); }
+.scode small { display: block; margin-top: 1rem; font-size: 1.4375rem; line-height: 2rem; color: rgba(255, 255, 255, 0.8); }
 .set-msg { flex: none; min-height: 2rem; margin: 1.5rem 0 0 1.75rem; font-size: 1.4375rem; line-height: 2rem; font-weight: 550; color: #8fd3ff; }
 .set-hint { flex: none; margin: 0.25rem 0 0 1.75rem; font-size: 1.25rem; line-height: 1.75rem; color: rgba(255, 255, 255, 0.5); }
 @media (prefers-reduced-motion: reduce) {
@@ -893,12 +930,15 @@ html.still .tile.focus .face, html.still .tile.focus .face::after { animation: n
    html.no-flex-gap there, and these margins stand in for the gaps people can see. */
 .no-flex-gap .quick > * + *, .no-flex-gap .qbtns > * + * { margin-left: 0.75rem; }
 .no-flex-gap .qbtn > * + * { margin-left: 0.625rem; }
+.no-flex-gap .toast > * + * { margin-left: 0.75rem; }
+.no-flex-gap .shelf-head h2 { margin-right: 1.5rem; }   /* not on .status: its margin-left: auto keeps it right */
+.no-flex-gap .share-home > * + * { margin-left: 5rem; }
 .no-flex-gap .top-left > * + * { margin-top: 1.5rem; }
 .no-flex-gap .people > * + * { margin-left: 0.5rem; }
 .no-flex-gap .shelf-track > * + * { margin-left: var(--gap); }
 .no-flex-gap.theme-night .shelf-track > * + * { margin-left: 1.375rem; }
 .no-flex-gap .ncard > * + * { margin-left: 1.25rem; }
-.no-flex-gap .ncard .nap > * + * { margin-left: 0.625rem; }
+.no-flex-gap .ncard .nap > img { margin-right: 0.625rem; }   /* the app's name after it is text, not an element */
 .no-flex-gap .plist > * + * { margin-top: 0.25rem; }
 .no-flex-gap .prow > * + * { margin-left: 1rem; }
 .no-flex-gap .grow > * + * { margin-left: 1.25rem; }
@@ -930,6 +970,7 @@ html.still .tile.focus .face, html.still .tile.focus .face::after { animation: n
 .old-engine .app.end-row, .old-engine.theme-night .app.end-row { margin-bottom: 0; }
 .old-engine .settings.on { display: flex; column-gap: 0; }
 .old-engine .set-side { flex: none; width: 36rem; margin-right: 4rem; }
+.old-engine[dir="rtl"] .set-side { margin-left: 4rem; }   /* right to left the list sits on the right */
 .old-engine .set-main { flex: 1; }
 /* Home settings and Smart home sit over the home. With no blur (Chrome before 76) a see-through panel shows
    the clock, the dock and the Keep watching cards ghosting behind its words, which read as a broken layout
@@ -1024,13 +1065,17 @@ html.still .tile.focus .face, html.still .tile.focus .face::after { animation: n
 .theme-night .shelf-row { display: flex; align-items: stretch; gap: 1.375rem; }
 .theme-night .np-slot.on { display: flex; flex: none; }
 .theme-night .shelf-clip { flex: 1; min-width: 0; overflow: hidden; padding: 1.5rem; margin: -1.5rem; }
+/* Beside Now playing the clip's left edge stays inside the gap, so scrolled cards stop short of the card */
+.theme-night:not(.no-flex-gap) .np-slot.on + .shelf-clip { padding-left: 1.25rem; margin-left: -1.25rem; }
 .theme-night .np { width: 34rem; margin: 0; padding: 1rem; border-radius: 1.875rem; }
 .theme-night .np-art { width: 5.9375rem; height: 5.9375rem; border-radius: 1rem; }
 .theme-night .np-app { font-size: 1.1875rem; line-height: 1.5rem; }
 .theme-night .np-t b { margin-top: 0.375rem; font-size: 1.5625rem; line-height: 2rem; }
 .theme-night .np-t small { font-size: 1.25rem; line-height: 1.625rem; }
 .theme-night.gearing .np-slot, .theme-night.apping .np-slot, .theme-night.shelfmenu .np-slot { opacity: 0; }
-.no-flex-gap.theme-night .shelf-row > * + * { margin-left: 1.375rem; }
+/* no flex gap: the clip itself steps 1.375rem clear of Now playing (with the same 1.25rem inside the gap
+   as above), and keeps its -1.5rem when Now playing is hidden, as a gap after a hidden card is no gap */
+.no-flex-gap.theme-night .np-slot.on + .shelf-clip { padding-left: 1.25rem; margin-left: 0.125rem; }
 
 /* ================= Lighter home (Home settings, Look, Lighter home; home.lighter) =================
    #58: for a slow box (a Xiaomi Mi Box, a Fire stick). Nothing is blurred, no tile casts a soft
@@ -1053,6 +1098,21 @@ html.lighter .gear-pop, html.lighter .app-pop, html.lighter .people-pop, html.li
 html.lighter.theme-night .people, html.lighter.theme-night .qbtn:not(.focus), html.lighter.theme-night .grid, html.lighter.theme-night .ncard:not(.focus),
 html.lighter.theme-night .hint.on { background: rgba(30, 20, 28, 0.62); box-shadow: inset 0 0 0 0.0625rem rgba(255, 210, 220, 0.16); }
 html.lighter.glass { --glass-edge: inset 0 0 0 0.0625rem rgba(255, 255, 255, 0.26); }
+
+/* Lighter home, the filters it still left on: a Fire TV Cube (2 GB) drew the home at a 17-21 ms frame
+   whenever it animated, over the 16.7 ms budget, with the night dim's brightness filter on three
+   full-screen layers, drop-shadows and saturation on the glass clock, and a brightness filter on
+   every dock icon that is not focused. Under Lighter none of those run: the night dim is one dark
+   sheet over the scene, the fog clock's dark fill is a dark colour, and a dock icon that is not
+   focused is a little see-through instead. */
+html.lighter .night .scene .sbg, html.lighter .night .scene .fg, html.lighter .night .scene .gclock, html.lighter .night .scene .svid,
+html.lighter .s-night .sbg, html.lighter .s-night .fg, html.lighter .gclock, html.lighter .s-water .gclock, html.lighter .s-dawn .gclock,
+html.lighter .s-night .gclock .fill, html.lighter .s-water .gclock.under .fill, html.lighter .clock-liquid.night .scene .gclock { filter: none; }
+html.lighter .night .scene.ready::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: rgba(0, 0, 0, 0.28); pointer-events: none; }
+html.lighter .s-water .gclock.under { filter: none; opacity: 0.6; }
+html.lighter .s-fog .gclock .fill { filter: none; background-image: none !important; color: rgba(22, 32, 29, 0.78); -webkit-text-fill-color: rgba(22, 32, 29, 0.78); }
+html.lighter .gclock .sheen { display: none; }
+html.lighter.theme-night .app:not(.focus) .face img { filter: none; opacity: 0.85; }
 
 /* webOS: LG's pointer is shown over the home (elsewhere the home is arrows only) */
 html.has-pointer body { cursor: default; }
@@ -1663,6 +1723,8 @@ html.ambient-playing .ambient-wave span {
 .no-flex-gap .ambient-stage > * + * { margin-left: 5rem; }
 .no-flex-gap .ambient-progress > * + * { margin-left: 1.25rem; }
 .no-flex-gap .ambient-controls > * + * { margin-left: 1.5rem; }
+.no-flex-gap .ambient-wave > * + * { margin-left: 0.375rem; }
+.no-flex-gap .amb-btn-open > * + * { margin-left: 0.625rem; }
 
 /* Lighter home and old WebViews: a plain colour wash, no 100px blur, no blend mode, no breathing,
    no backdrop blur, no transitions. The big blur on a full screen layer is what a low end box cannot draw. */
@@ -1929,4 +1991,55 @@ html:not(.kids-on) .kids { display: none; }
   left: auto;
   top: 7.25rem;
   text-align: right;
+}
+
+
+
+/* ================= Mac-style dock (Home settings, Look; home.dock "mac") =================
+   The focused app and its neighbours grow in a wave (app.js magnify sets their sizes and moves the
+   rest aside), all standing on the same line, and the tray grows with them. The size and the name
+   show which app is chosen, so there is no white ring and the other apps are not dimmed. The name
+   sits in a small bubble above the icon. OK presses the icon in, and it hops once as the app opens. */
+html.dock-mac.theme-night .app { transform-origin: 50% 100%; transition: transform 240ms cubic-bezier(0.23, 1, 0.32, 1); }
+html.dock-mac.theme-night .app.focus, html.dock-mac.glass.theme-night .app.focus { transform: scale(1.55); }
+html.dock-mac.theme-night .app.focus .face, html.dock-mac.glass.theme-night .app.focus .face { box-shadow: 0 0.75rem 1.75rem rgba(0, 0, 0, 0.35); }
+html.dock-mac.theme-night .app:not(.focus) .face img { filter: none; }
+html.dock-mac.theme-night .grid {
+  transition-property: padding-left, padding-right, margin-left, margin-right;
+  transition-duration: 240ms; transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+}
+html.dock-mac.theme-night .app .label {
+  top: auto; bottom: calc(100% + 0.35rem); left: 50%; right: auto; width: max-content; max-width: 13rem;
+  overflow: visible; font-size: 0.95rem; line-height: 1.2rem; font-weight: 500; color: rgba(255, 255, 255, 0.95);
+  transform: translateX(-50%) translateY(0.3rem); transition: opacity 200ms var(--ease), transform 240ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+html.dock-mac.theme-night .app.focus .label { transform: translateX(-50%); }
+html.dock-mac.theme-night .app .label span,
+html.dock-mac.theme-night .app .label::after {
+  background: rgba(38, 40, 48, 0.55); -webkit-backdrop-filter: blur(1rem) saturate(170%); backdrop-filter: blur(1rem) saturate(170%);
+}
+html.dock-mac.theme-night .app .label span {
+  display: block; padding: 0.25rem 0.7rem; border-radius: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  box-shadow: inset 0 0 0 0.0625rem rgba(255, 255, 255, 0.22), inset 0 0.0625rem 0 rgba(255, 255, 255, 0.35), 0 0.4rem 1rem rgba(0, 0, 0, 0.25);
+}
+html.dock-mac.theme-night .app .label::after {
+  content: ""; position: absolute; left: 50%; top: 100%; width: 1rem; height: 0.5rem; margin-left: -0.5rem;
+  -webkit-clip-path: polygon(0 0, 100% 0, 50% 100%); clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html.dock-mac.theme-night .app .label span, html.dock-mac.theme-night .app .label::after { background: rgba(38, 40, 48, 0.9); }
+}
+html.dock-mac.theme-night .app.pressed .face { transform: scale(0.95); transition: transform 100ms ease-out; }
+html.dock-mac.theme-night .app.hop { animation: dock-hop 520ms 1; }
+@keyframes dock-hop {
+  0% { translate: 0 0; animation-timing-function: cubic-bezier(0.2, 0.8, 0.3, 1); }
+  38% { translate: 0 -1.6rem; animation-timing-function: cubic-bezier(0.6, 0, 0.8, 0.4); }
+  70% { translate: 0 0; animation-timing-function: cubic-bezier(0.2, 0.8, 0.3, 1); }
+  84% { translate: 0 -0.35rem; animation-timing-function: cubic-bezier(0.6, 0, 0.8, 0.4); }
+  100% { translate: 0 0; }
+}
+/* reduced motion (also a TV with Android's animations off): the sizes stay, they just don't glide or hop */
+@media (prefers-reduced-motion: reduce) {
+  html.dock-mac.theme-night .app, html.dock-mac.theme-night .grid, html.dock-mac.theme-night .app .label { transition: none; }
+  html.dock-mac.theme-night .app.hop { animation: none; }
 }
