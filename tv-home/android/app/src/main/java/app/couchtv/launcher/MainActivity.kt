@@ -67,6 +67,7 @@ class MainActivity : Activity() {
 
     private lateinit var root: FrameLayout
     private var web: WebView? = null
+    private var recoveryWeb: WebView? = null
     private var fallback: View? = null
     private var pageReady = false
     private var loadFailed = false
@@ -209,7 +210,8 @@ class MainActivity : Activity() {
             return
         }
         // HOME pressed while we are already in front: back to the first tile.
-        if (!returnToServer()) js("window.tv && tv.home()")
+        tryRecoveredServer()
+        js("window.tv && tv.home()")
     }
 
     override fun onResume() {
@@ -225,7 +227,7 @@ class MainActivity : Activity() {
             channelOpened = null
             if (android.os.SystemClock.elapsedRealtime() - at < CHANNEL_RETRY_MS) start(i)
         }
-        if (pageReady && offline) returnToServer()
+        tryRecoveredServer()
         if (pageReady) js("window.tv && tv.resume()")
         if (pageReady && !offline) {
             // the computer may have gone off while the page was open: then the saved copy takes over
@@ -240,6 +242,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        discardRecovery()
         runCatching { unregisterReceiver(packageChanged) }
         runCatching { contentResolver.unregisterContentObserver(watchNextChanged) }
         super.onDestroy()
@@ -248,6 +251,7 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         resumed = false
+        discardRecovery()
         try {
             val lp = window.attributes
             if (lp.screenBrightness == 0.0f) {
@@ -266,12 +270,70 @@ class MainActivity : Activity() {
         if (pageReady) { web?.onPause(); web?.pauseTimers() }
     }
 
-    // A recovered server is only used at an explicit Home/foreground transition.
-    private fun returnToServer(): Boolean {
-        if (!offline) return false
-        val base = loading.takeRecovered() ?: return false
-        showWeb(base)
-        return true
+    // On an explicit Home transition, let the live page draw behind the saved home. Its scripts and images
+    // can take much longer than a health check, especially on a cold Android WebView.
+    private fun tryRecoveredServer() {
+        if (!resumed || !offline || !pageReady || recoveryWeb != null) return
+        val base = loading.takeRecovered() ?: return
+        val candidate = try {
+            makeWebView()
+        } catch (e: Throwable) {
+            android.util.Log.w("couchtv", "Could not prepare the live home", e)
+            later(loading.retryDelay())
+            return
+        }
+        recoveryWeb = candidate
+        // Invisible WebViews may receive a paint callback before they present a frame.
+        // Keep this one drawn beneath the opaque saved page, with focus on that page.
+        candidate.isFocusable = false
+        candidate.settings.offscreenPreRaster = true
+        root.addView(candidate, 0, MATCH)
+        CrashGuard.install(this)
+        main.postDelayed({
+            if (recoveryWeb === candidate) discardRecovery()
+        }, RECOVERY_BUDGET_MS)
+        candidate.loadUrl(bridgeHomeUrl(base))
+        awaitRecoveredPaint(candidate, base)
+    }
+
+    private fun awaitRecoveredPaint(candidate: WebView, base: String) {
+        if (recoveryWeb !== candidate) return
+        candidate.evaluateJavascript(RECOVERY_PAGE_READY) { ready ->
+            if (recoveryWeb !== candidate) return@evaluateJavascript
+            if (ready != "true") {
+                main.postDelayed({ awaitRecoveredPaint(candidate, base) }, 150)
+                return@evaluateJavascript
+            }
+            candidate.postVisualStateCallback(0L, object : WebView.VisualStateCallback() {
+                override fun onComplete(requestId: Long) {
+                    if (recoveryWeb !== candidate || !resumed) return
+                    recoveryWeb = null
+                    val previous = web
+                    web = candidate
+                    offline = false
+                    loadFailed = false
+                    pageReady = true
+                    main.removeCallbacks(retry)
+                    removeFallback()
+                    candidate.isFocusableInTouchMode = true
+                    candidate.requestFocus()
+                    candidate.settings.offscreenPreRaster = false
+                    previous?.let {
+                        root.removeView(it)
+                        it.destroy()
+                    }
+                    android.util.Log.i("couchtv", "Live Home drawn after bridge recovery")
+                    io.execute { syncOffline(base) }
+                }
+            })
+        }
+    }
+
+    private fun discardRecovery() {
+        val candidate = recoveryWeb ?: return
+        recoveryWeb = null
+        root.removeView(candidate)
+        candidate.destroy()
     }
 
     private fun startDeadline(): Int {
@@ -412,7 +474,7 @@ class MainActivity : Activity() {
     private fun webView(): WebView? = web ?: try {
         makeWebView().also {
             web = it
-            if (resumed) it.resumeTimers()
+            it.visibility = View.INVISIBLE
             root.addView(it, 0, MATCH)
             CrashGuard.install(this)
         }
@@ -429,13 +491,17 @@ class MainActivity : Activity() {
         offline = false
         pageReady = false
         remoteAttempt = attempt ?: startDeadline()
+        w.loadUrl(bridgeHomeUrl(base))
+    }
+
+    private fun bridgeHomeUrl(base: String): String {
         val tv = prefs.getString("tv", null)
         val key = prefs.getString("pairing_key", null)
         val q = mutableListOf<String>()
         if (!tv.isNullOrEmpty()) q.add("tv=$tv")
         if (!key.isNullOrEmpty()) q.add("key=$key")
         val qs = if (q.isEmpty()) "" else "?" + q.joinToString("&")
-        w.loadUrl("$base/tv/$qs")
+        return "$base/tv/$qs"
     }
 
     private fun makeWebView(): WebView = WebView(this).apply {
@@ -456,6 +522,7 @@ class MainActivity : Activity() {
         addJavascriptInterface(Updater.Page(this@MainActivity, this), "TVUP")   // updates from GitHub releases, see Updater.kt
         webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) {
+                if (view !== web) return   // the offscreen copy has its own paint gate
                 val localPage = android.net.Uri.parse(url).host == OFFLINE_HOST
                 // Ignore a late server callback after the deadline chose the local copy.
                 if (!loadFailed && url == view.url && localPage == offline &&
@@ -471,11 +538,11 @@ class MainActivity : Activity() {
             }
 
             override fun onReceivedError(view: WebView, req: WebResourceRequest, err: WebResourceError) {
-                if (req.isForMainFrame && (req.url.host == OFFLINE_HOST) == offline) pageFailed()
+                if (req.isForMainFrame) mainPageFailed(view, req.url.host == OFFLINE_HOST)
             }
 
             override fun onReceivedHttpError(view: WebView, req: WebResourceRequest, res: WebResourceResponse) {
-                if (req.isForMainFrame && res.statusCode >= 400 && (req.url.host == OFFLINE_HOST) == offline) pageFailed()
+                if (req.isForMainFrame && res.statusCode >= 400) mainPageFailed(view, req.url.host == OFFLINE_HOST)
             }
 
             // Only the home page itself may navigate (its restart() after a look or Home settings
@@ -527,7 +594,13 @@ class MainActivity : Activity() {
             }
 
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-                // The page crashed or was killed for memory. Drop it and start again.
+                if (view === recoveryWeb) {
+                    discardRecovery()
+                    return true
+                }
+                if (view !== web) return true
+                // Both WebViews can share a renderer. Recreate the visible home first.
+                discardRecovery()
                 root.removeView(view)
                 view.destroy()
                 web = null
@@ -536,6 +609,11 @@ class MainActivity : Activity() {
                 return true
             }
         }
+    }
+
+    private fun mainPageFailed(view: WebView, localPage: Boolean) {
+        if (view === recoveryWeb) discardRecovery()
+        else if (view === web && localPage == offline) pageFailed()
     }
 
     private fun pageFailed() {
@@ -553,6 +631,7 @@ class MainActivity : Activity() {
      * from the old one (its cache included), so changes on the computer show without a force-stop.
      */
     private fun restartPage() {
+        discardRecovery()
         main.removeCallbacks(retry)
         web?.let { root.removeView(it); it.clearCache(true); it.destroy() }
         web = null
@@ -1891,6 +1970,18 @@ class MainActivity : Activity() {
     }
 
     companion object {
+        private const val RECOVERY_BUDGET_MS = 12_000L
+        private val RECOVERY_PAGE_READY = """
+            (function () {
+                var grid = document.getElementById("grid");
+                if (!window.tv || !grid || !grid.childElementCount ||
+                    !performance.getEntriesByName("home-painted-live").length) return false;
+                if (!document.documentElement.classList.contains("theme-night")) return true;
+                var photo = document.querySelector("#scenes .scene.on .sbg");
+                return !!(photo && photo.complete && photo.naturalWidth);
+            })()
+        """.trimIndent()
+
         @Volatile private var shown: java.lang.ref.WeakReference<MainActivity>? = null
 
         /** True while the home is resumed (in front). FireWatch checks this after a move to front on Android 10 (issue #202). */
