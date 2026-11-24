@@ -47,10 +47,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import app.couchtv.ha.HaPhone
+import app.couchtv.ha.HomeAssistant
 
 /**
  * The TV home screen. Shows the page the bridge serves at /tv/ full screen. If the bridge cannot be
@@ -62,6 +65,7 @@ class MainActivity : Activity() {
 
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
+    private val inboxBusy = java.util.concurrent.atomic.AtomicBoolean(false)   // one look at the account's TV inbox at a time
     private val banners = ConcurrentHashMap<String, ByteArray>()
     private val icons = ConcurrentHashMap<String, ByteArray>()
 
@@ -81,6 +85,10 @@ class MainActivity : Activity() {
     private val retry = Runnable { if (!pageReady || offline) connect() }
 
     private val prefs by lazy { getSharedPreferences("home", MODE_PRIVATE) }
+    private val bingDailyPhoto by lazy { BingDailyPhoto(File(filesDir, "bing-daily-photo"), io) }
+    private val spotifyPlayer by lazy { SpotifyPlayer(applicationContext) }
+    private var spotifyPush: ((org.json.JSONObject) -> Unit)? = null   // this activity's SpotifyMediaListener callback
+    private val fotMobScores by lazy { FotMobScores(io) }
 
     /**
      * `home.render_height` (config.json): draw the home this many pixels high in its own hardware layer and
@@ -135,7 +143,12 @@ class MainActivity : Activity() {
             root.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         } else setContentView(root)
         hideSystemBars()
+        // smart home (app.couchtv.ha): a new or removed doorbell restarts its watch; a phone that signed
+        // in or saved (HaPhone.kt) makes the page read what is set up again, at once
+        HomeAssistant.changed = { c -> Doorbell.start(c) }
+        HaPhone.onChange = { main.post { js("window.smartHome && smartHome.reload && smartHome.reload(); window.smartHome && smartHome.phoneChanged && smartHome.phoneChanged()") } }
         intent?.let { readExtras(it) }
+        startPhonePage()   // option A only: the phone's Home settings page, from this TV (PhoneServer.kt)
         io.execute { warmApps() }
         // An app installed, removed or renamed (or the TV's language changed): the list is read again,
         // in the background, instead of on every return to the home.
@@ -150,6 +163,10 @@ class MainActivity : Activity() {
         Doorbell.start(this)   // smart home (optional): nothing happens unless a doorbell is set up
         FireWatch.ensure(this)   // Fire TV only, and only once a computer has switched it on
         main.postDelayed({ FireWatch.rebindIfUnbound(applicationContext) }, 10_000L)   // listed but not bound after a force-stop
+        // the listener is static and lives longer than this activity: hold it weakly, and clear it in onDestroy
+        val self = java.lang.ref.WeakReference(this)
+        spotifyPush = { json -> self.get()?.js("window.tv && tv.spotifyUpdate && tv.spotifyUpdate($json)") }
+        SpotifyMediaListener.onStateChangedListener = spotifyPush
         // At power-on the page is often asked for before Wi-Fi is up: try again the moment it is.
         val netBack = object : android.net.ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: android.net.Network) {
@@ -192,9 +209,15 @@ class MainActivity : Activity() {
         super.onNewIntent(intent)
         if (intent.hasExtra("bridge") || intent.hasExtra("config_b64")) {
             readExtras(intent)
+            startPhonePage()   // a computer added: its own page from now on, this one stops (none: it starts)
             pageReady = false
             offline = false
             connect()
+            return
+        }
+        // Couch TV Setup with only the account's link and design code: kept, and the page gets the design now
+        if (AccountLink.readExtras(this, intent)) {
+            js("window.tv && tv.setupDesign && tv.setupDesign()")
             return
         }
         // tv-home/tools/app-icons.sh after it copies your own app icons: the page afresh, so they
@@ -239,10 +262,18 @@ class MainActivity : Activity() {
         if (appCache == null) io.execute { warmApps() }   // otherwise the package receiver below keeps the list fresh
         io.execute { watchNextCache = readWatchNext().toString() }   // off the page's thread: TV.watchNext() answers from here
         Updater.resumed(this)   // the daily look for a new release (Home settings, Updates)
+        // Some TVs (a Hisense Google TV) stop the on-TV app (option C) in standby and refuse
+        // to restart it by themselves. Its BootReceiver is exported and starts its server on any
+        // intent, so poke it whenever the home comes forward. Harmless when it is not installed.
+        runCatching {
+            sendBroadcast(Intent("dev.couchtv.WAKE").setComponent(android.content.ComponentName("dev.couchtv.ontv", "dev.couchtv.ontv.BootReceiver")))
+        }
     }
 
     override fun onDestroy() {
         discardRecovery()
+        if (SpotifyMediaListener.onStateChangedListener === spotifyPush) SpotifyMediaListener.onStateChangedListener = null
+        spotifyPush = null
         runCatching { unregisterReceiver(packageChanged) }
         runCatching { contentResolver.unregisterContentObserver(watchNextChanged) }
         super.onDestroy()
@@ -368,6 +399,8 @@ class MainActivity : Activity() {
             if (event.action == KeyEvent.ACTION_UP && event.repeatCount == 0 && pageReady) js("window.tv && tv.settingsKey && tv.settingsKey()")
             return true
         }
+        // The mic/search button: the TV's own assistant opens, the page never sees it (VoiceKeys)
+        VoiceKeys.handle(this, event)?.let { return it }
         // The TV's own keys (TV/channels, guide, channel up and down, last channel, input): the home
         // uses none of them, and the WebView would swallow them. Hand them back unhandled so the TV's
         // own system gets them (Philips handles TV as an unhandled key fallback), for #90.
@@ -413,12 +446,81 @@ class MainActivity : Activity() {
         }
         e.apply()
         HomeAssistant.readExtras(this, i)   // smart home ("ha_b64"), kept apart from the page's settings
+        AccountLink.readExtras(this, i)     // Couch TV Setup: "account_link" and "design_code", kept apart too
     }
 
     // ---------------------------------------------------------------- finding the bridge
 
     /** No bridge anywhere (option A): the built-in copy is the home, and nothing to look for. */
     private fun alone() = prefs.getString("bridge", null) == null && BuildConfig.BRIDGES.isEmpty()
+
+    // ---------------------------------------------------------------- the phone's Home settings page
+
+    /**
+     * With no computer at home (option A), this TV serves the phone's Home settings page itself
+     * (PhoneServer.kt) on the home Wi-Fi, port 5400 (5401 if that is taken). With a computer, the computer
+     * serves it (bridge/phonepage.py), so nothing listens here. One server for the life of the app. It also
+     * answers smart home set up from a phone (/ha, PhoneHost.ha), so HaServer.kt does not start beside it.
+     * It listens on every interface on purpose: with Ethernet and Wi-Fi, Wi-Fi Direct while casting or a VPN,
+     * one picked address can differ from the one the QR names, and the Wi-Fi can change under it. The Host
+     * check, the key and the pairing guard it instead.
+     */
+    private fun startPhonePage() {
+        // a computer was added (apply.sh with BRIDGE_URL): the computer serves the page now, nothing listens here
+        if (!alone()) { phone?.let { runCatching { it.stop() } }; phone = null; return }
+        if (phone != null) return
+        val store = object : PhoneAuth.Store {
+            private val sp = applicationContext.getSharedPreferences("phonepage", MODE_PRIVATE)
+            override fun get(key: String): String? = sp.getString(key, null)
+            override fun put(key: String, value: String?) { sp.edit().apply { if (value == null) remove(key) else putString(key, value) }.apply() }
+        }
+        val auth = PhoneAuth(store)
+        for (port in listOf(PhoneServer.PORT, PhoneServer.PORT + 1)) {
+            val srv = PhoneServer(PhoneHost(applicationContext), auth, port)
+            if (runCatching { srv.start(fi.iki.elonen.NanoHTTPD.SOCKET_READ_TIMEOUT, true) }.isSuccess) { phone = srv; return }
+        }
+    }
+
+    /** What the phone's page needs from Android: this app's files, and the home page through evaluateJavascript. */
+    private class PhoneHost(private val app: android.content.Context) : PhoneServer.Host {
+        override fun asset(path: String): java.io.InputStream? = runCatching { app.assets.open(path) }.getOrNull()
+        override fun page(code: String): JSONObject? {
+            val a = shown?.get()?.takeIf { !it.isFinishing && !it.isDestroyed && it.pageReady && it.web != null } ?: return null
+            val got = java.util.concurrent.atomic.AtomicReference<String?>(null)
+            val done = java.util.concurrent.CountDownLatch(1)
+            a.main.post {
+                val w = a.web
+                if (w == null || !a.pageReady) done.countDown() else w.evaluateJavascript(code) { v -> got.set(v); done.countDown() }
+            }
+            if (!done.await(4, java.util.concurrent.TimeUnit.SECONDS)) return null
+            val v = got.get()?.takeIf { it.startsWith("{") } ?: return null
+            return runCatching { JSONObject(v) }.getOrNull()
+        }
+        override fun addPhoto(file: java.io.File): String? = shown?.get()?.copyPhoto(android.net.Uri.fromFile(file))
+        // an installed app's icon for the phone page's apps card (the same 256 px picture the home draws)
+        override fun appIcon(pkg: String): ByteArray? = shown?.get()?.let { a -> runCatching { a.iconImage(pkg) }.getOrNull() }
+        override fun photo(name: String): java.io.File? {
+            if (!Regex("[A-Za-z0-9_-]{1,64}\\.jpg").matches(name)) return null
+            return java.io.File(java.io.File(app.filesDir, "photos"), name).takeIf { it.isFile }
+        }
+        override fun deletePhoto(name: String) { photo(name)?.delete() }
+        override fun homeState(): JSONObject = JSONObject().put("on", true).put("held", HomeRole.held(app))
+        // the code was used or thrown away: Home settings' QR (and Edit on your phone) ask for the new one at once
+        override fun codeChanged() {
+            val a = shown?.get() ?: return
+            a.main.post { a.js("window.tv && tv.phoneLink && tv.phoneLink()") }
+        }
+        override fun showCode(code: String) {
+            val a = shown?.get() ?: return
+            a.main.post { a.js("window.tv && tv.phonePage && tv.phonePage('code', " + JSONObject.quote(code) + ")") }
+        }
+        override fun tmpDir(): java.io.File = app.cacheDir
+        // smart home set up from a phone on this same server (HaPhone.kt): no second server, no second port
+        override fun ha(method: String, path: String, query: Map<String, String>, body: String, hostHeader: String?, port: Int) =
+            HaPhone.handle(app, method, path, query, body, hostHeader, port) { name ->
+                runCatching { app.assets.open("www/tv/" + name).use { it.readBytes() } }.getOrNull()
+            }
+    }
 
     private fun connect() {
         val standalone = alone()
@@ -509,6 +611,9 @@ class MainActivity : Activity() {
         if (resumed) resumeTimers()   // a WebView made while the last one's pause is still in force (a renderer crash while covered)
         isFocusable = true
         isFocusableInTouchMode = true
+        // no ring round the whole screen when the page has the focus (a thin line round the welcome on a TCL,
+        // 23 Nov 2026): the page draws its own focus
+        if (Build.VERSION.SDK_INT >= 26) defaultFocusHighlightEnabled = false
         overScrollMode = View.OVER_SCROLL_NEVER
         isVerticalScrollBarEnabled = false
         isHorizontalScrollBarEnabled = false
@@ -518,7 +623,8 @@ class MainActivity : Activity() {
         settings.cacheMode = WebSettings.LOAD_DEFAULT
         settings.textZoom = 100
         addJavascriptInterface(Native(), "TVOS")
-        addJavascriptInterface(HomeAssistant.Page(this@MainActivity, this), "TVHA")   // smart home, see HomeAssistant.kt
+        addJavascriptInterface(HaPage(this@MainActivity, this), "TVHA")   // smart home, see HaPage.kt
+        addJavascriptInterface(MatterPage(this@MainActivity, this), "TVMATTER")   // Matter devices, see MatterPage.kt
         addJavascriptInterface(Updater.Page(this@MainActivity, this), "TVUP")   // updates from GitHub releases, see Updater.kt
         webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) {
@@ -567,6 +673,12 @@ class MainActivity : Activity() {
                     // the household's own photos (Home settings), copied in by the file picker
                     val f = photoFile(u.lastPathSegment ?: "") ?: return null
                     return WebResourceResponse("image/jpeg", null, f.inputStream()).apply {
+                        responseHeaders = mapOf("Cache-Control" to "max-age=86400")
+                    }
+                }
+                if (u.pathSegments.firstOrNull() == "bing-daily-photo") {
+                    val image = bingDailyPhoto.open(u.lastPathSegment.orEmpty()) ?: return null
+                    return WebResourceResponse("image/jpeg", null, image).apply {
                         responseHeaders = mapOf("Cache-Control" to "max-age=86400")
                     }
                 }
@@ -780,6 +892,16 @@ class MainActivity : Activity() {
             "?render=sharp"
 
         @JavascriptInterface
+        fun fotmobScores(): String = fotMobScores.current()
+        @JavascriptInterface
+        fun spotifyMusic(): String = spotifyPlayer.current()
+
+        @JavascriptInterface
+        fun spotifyKey(command: String): Boolean = spotifyPlayer.key(command)
+
+        @JavascriptInterface
+        fun dailyBingPhoto(): String = bingDailyPhoto.current()
+        @JavascriptInterface
         fun apps(): String {
             val out = JSONArray()
             for ((ri, label) in appList()) {
@@ -799,6 +921,11 @@ class MainActivity : Activity() {
         /** This launcher relays the web widgets' sources (WebData.kt, http://tvos.invalid/webdata). */
         @JavascriptInterface
         fun webData(): Boolean = true
+
+        /** The phone's Home settings page on this TV with no computer (PhoneServer.kt): its address with a
+         *  pairing code, for Home settings' QR and Hold OK, Edit on your phone. "null": no page here. */
+        @JavascriptInterface
+        fun phoneLink(): String = phone?.link(PhoneServer.lanAddress())?.toString() ?: "null"
 
         /** Opens an http(s) web link in the TV's browser (used by custom cards with a url). */
         @JavascriptInterface
@@ -918,6 +1045,41 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun version(): String = BuildConfig.VERSION_NAME
+
+        /** Total memory in MB (0 if unknown), sent with a design fetch only (design-code.js, TvReport.kt). */
+        @JavascriptInterface
+        fun memoryMb(): Int = TvReport.memoryMb(this@MainActivity)
+
+        /** The kind of TV (platform, sdk, memMb, res, model) as JSON, sent with a design fetch only (TvReport.profileJson). */
+        @JavascriptInterface
+        fun tvProfile(): String = TvReport.profileJson(this@MainActivity)
+
+        // Couch TV Setup's link to the account (AccountLink.kt). The page only learns whether there is one,
+        // never the link itself; the design code Setup brought is handed over until the page says it is done.
+        @JavascriptInterface
+        fun accountLinked(): Boolean = AccountLink.linked(AccountLink.kv(this@MainActivity))
+
+        @JavascriptInterface
+        fun setupDesignCode(): String = AccountLink.pendingCode(AccountLink.kv(this@MainActivity), System.currentTimeMillis()) ?: ""
+
+        @JavascriptInterface
+        fun setupDesignDone() = AccountLink.codeDone(AccountLink.kv(this@MainActivity))
+
+        @JavascriptInterface
+        fun unlinkAccount(): Boolean { AccountLink.unlink(AccountLink.kv(this@MainActivity)); return true }
+
+        // The account's TV inbox, asked from here so the link never reaches the page: the answer (a checked
+        // code and title, or a state) comes back through tv.accountInbox. False: no link, or a look is running.
+        @JavascriptInterface
+        fun accountInbox(): Boolean {
+            val kv = AccountLink.kv(this@MainActivity)
+            if (!AccountLink.linked(kv) || !inboxBusy.compareAndSet(false, true)) return false
+            io.execute {
+                val r = try { AccountLink.inbox(kv) } finally { inboxBusy.set(false) }
+                main.post { js("window.tv && tv.accountInbox && tv.accountInbox(" + JSONObject.quote(r.toString()) + ")") }
+            }
+            return true
+        }
 
         /** Home settings, About, Restart home: what a force-stop and Home would do, from the remote. */
         @JavascriptInterface
@@ -1110,7 +1272,56 @@ class MainActivity : Activity() {
         fun removePhoto(name: String) {
             photoFile(name)?.delete()
         }
+
+        // ---------------- Spotify local media session ----------------
+        @JavascriptInterface
+        fun spotifyState(): String {
+            val listener = SpotifyMediaListener.instance
+            return listener?.currentStateJson()?.toString() ?: JSONObject().apply {
+                put("available", false)
+                put("package", JSONObject.NULL)
+                put("state", "stopped")
+                put("has_permission", SpotifyMediaListener.hasNotificationAccess(this@MainActivity))
+                put("listener_connected", SpotifyMediaListener.isListenerConnected())
+            }.toString()
+        }
+
+        @JavascriptInterface
+        fun spotifyControl(action: String, param: Long): Boolean {
+            return SpotifyMediaListener.instance?.executeControl(action, param) ?: false
+        }
+
+        @JavascriptInterface
+        fun spotifyHasPermission(): Boolean {
+            return SpotifyMediaListener.hasNotificationAccess(this@MainActivity)
+        }
+
+        // Reminders (reminders.js): Android's own speech screen (Google's "Speak now" on Google TV),
+        // which listens through the remote's mic and hands back what was said as text. The words go
+        // to the TV's voice service only; the page gets them through tv.heard().
+        @JavascriptInterface
+        fun canListen(): Boolean = packageManager.resolveActivity(speechIntent(""), 0) != null
+
+        @JavascriptInterface
+        fun listen(prompt: String): Boolean {
+            val i = speechIntent(prompt)
+            if (packageManager.resolveActivity(i, 0) == null) return false
+            main.post {
+                try {
+                    startActivityForResult(i, LISTEN)
+                } catch (e: Exception) {
+                    js("window.tv && tv.heard && tv.heard(null)")
+                }
+            }
+            return true
+        }
     }
+
+    private fun speechIntent(prompt: String): Intent =
+        Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            .apply { if (prompt.isNotBlank()) putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, prompt.take(80)) }
 
     // ---------------------------------------------------------------- the household's own photos
 
@@ -1137,6 +1348,11 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == HomeRole.REQUEST) { js("window.tv && tv.homeAnswered && tv.homeAnswered(" + HomeRole.held(this) + ")"); return }
+        if (requestCode == LISTEN) {
+            val said = if (resultCode == RESULT_OK) data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() else null
+            js("window.tv && tv.heard && tv.heard(" + (said?.let { JSONObject.quote(it.take(300)) } ?: "null") + ")")
+            return
+        }
         if (requestCode != PICK_PHOTOS) return
         val uris = mutableListOf<android.net.Uri>()
         if (resultCode == RESULT_OK && data != null) {
@@ -1354,17 +1570,17 @@ class MainActivity : Activity() {
     /** Reads the installed apps and their labels: slow (30 apps on a Fire TV take a while), so never on the page's thread while a copy exists. */
     private fun buildAppList(): List<Pair<ResolveInfo, String>> = run {
             val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
-            // Fire TV apps that declare only LAUNCHER: the Appstore and Audible (#238), plus saved order packages.
+            // Some apps declare only LAUNCHER: add the Fire TV defaults and the user's explicit choices.
             val launcherPkgs = mutableSetOf("com.amazon.venezia", "com.audible.application.firetv")
             val savedOrder = runCatching {
                 val raw = getSharedPreferences("page", MODE_PRIVATE).getString("tvhome.order.tv", null)
                 raw?.let { org.json.JSONObject(it).optJSONArray("packages") }
             }.getOrNull()
-            savedOrder?.let { order ->
-                for (i in 0 until order.length()) {
-                    val pkg = order.optString(i)
-                    if (pkg.isNotEmpty()) launcherPkgs.add(pkg)
-                }
+            val shown = runCatching {
+                prefs.getString("config", null)?.let { JSONObject(it).optJSONObject("home")?.optJSONArray("show_packages") }
+            }.getOrNull()
+            listOfNotNull(savedOrder, shown).forEach { packages ->
+                for (i in 0 until packages.length()) packages.optString(i).takeIf { it.isNotEmpty() }?.let(launcherPkgs::add)
             }
             val extra = launcherPkgs.flatMap {
                 packageManager.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage(it), 0)
@@ -1983,6 +2199,11 @@ class MainActivity : Activity() {
         """.trimIndent()
 
         @Volatile private var shown: java.lang.ref.WeakReference<MainActivity>? = null
+        /** The phone's Home settings page with no computer (option A), started once for the app's life. */
+        @Volatile private var phone: PhoneServer? = null
+
+        /** The port of the phone's Home settings page server while it runs (it serves /ha too), else null. */
+        fun phonePagePort(): Int? = phone?.takeIf { it.isAlive }?.listeningPort?.takeIf { it > 0 }
 
         /** True while the home is resumed (in front). FireWatch checks this after a move to front on Android 10 (issue #202). */
         fun isInFront(): Boolean = shown?.get()?.resumed == true
@@ -2010,6 +2231,7 @@ class MainActivity : Activity() {
         private const val SLOW_MS = 2_500L
         private const val NET_WAIT_MS = 15_000L   // at power-on, how long the first load waits for Wi-Fi
         private const val PICK_PHOTOS = 41
+        private const val LISTEN = 43   // reminders: Android's speech screen
         // The screensaver: Google TV's Ambient mode settings (source and the Google Photos albums),
         // the short screen timeout the home sets for a moment, and what to put back afterwards.
         private const val AMBIENT_SETTINGS = "dreamx.two.panel.SETTINGS"

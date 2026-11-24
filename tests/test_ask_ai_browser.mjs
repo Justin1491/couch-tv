@@ -69,7 +69,8 @@ console.log("Running Ask AI browser tests...");
 // 1. nothing set up: a setup card each
 ok(/pick who answers/i.test(await text("w0")), "Ask AI says to pick who answers: " + await text("w0"));
 ok(/Connect your AI|Nothing from your AI/i.test(await text("w1")), "From your AI says how to connect: " + await text("w1"));
-ok(/Batteries/.test(await text("w2")) || /nearby/i.test(await text("w2")), "Batteries draws: " + await text("w2"));
+// (0.13.10) in a browser it says Not on this TV, never which TVs it needs
+ok((/Batteries/.test(await text("w2")) || /nearby|Not on this TV/i.test(await text("w2"))) && !/Google TV|Android TV|Fire TV/.test(await text("w2")), "Batteries draws: " + await text("w2"));
 if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "ask-1-unset.png") });
 
 // 2. with the remote only
@@ -103,6 +104,9 @@ ok(!(await page.evaluate(() => window.CouchAsk.isOpen())), "Back closes the shee
 await page.waitForTimeout(400);
 ok(/How far away is the moon\?/.test(await text("w0")) && /384,000/.test(await text("w0")), "the widget shows the question and the answer: " + await text("w0"));
 if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "ask-3-answered.png") });
+// the Android apps send Back as tv.back(), never a key: it closes the sheet too
+await page.evaluate(() => window.CouchAsk.open("ask"));
+ok(await page.evaluate(() => window.tv.back() === undefined && !window.CouchAsk.isOpen()), "tv.back() closes the sheet");
 
 // 3. a message from an agent
 await page.evaluate(() => window.CouchAsk._test.took({ message: { text: "Dinner is ready", from: "Claude", at: Date.now(), seconds: 20 } }, Date.now()));

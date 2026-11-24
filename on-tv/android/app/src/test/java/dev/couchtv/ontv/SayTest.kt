@@ -3,6 +3,7 @@ package dev.couchtv.ontv
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 
@@ -32,6 +33,30 @@ class SayTest {
     @Test(expected = IllegalArgumentException::class) fun emptyMessageIsRefused() { Say.message("   ", null, null) }
 
     @Test(expected = IllegalArgumentException::class) fun aLinkIsNotACode() { Say.design("http://evil.example/design.json") }
+
+    @Test fun aSceneIsOnlyNextOrPrev() {
+        assertEquals("next", Say.scene("next", now = 5L).getString("pick"))
+        Say.scene("prev")
+        assertEquals("prev", Say.snapshot().getJSONObject("scene").getString("pick"))
+        for (bad in listOf("night", "", null, "<script>")) {
+            try { Say.scene(bad); fail("took $bad") } catch (e: IllegalArgumentException) { }
+        }
+        Say.clear()
+        assertTrue(Say.snapshot().isNull("scene"))
+    }
+
+    @Test fun aDesignSaysOnlyPhoneOrAi() {
+        assertEquals("phone", Say.design("abcde-fghjk", from = "phone").getString("from"))
+        assertEquals("ai", Say.design("abcde-fghjk").getString("from"))
+        assertEquals("ai", Say.design("abcde-fghjk", from = "<b>Mum's phone</b>").getString("from"))
+    }
+
+    @Test fun listeningOnlyWhileTheHomeAsks() {
+        assertFalse(Say.listening(1_000_000))
+        Say.heard(1_000_000)
+        assertTrue(Say.listening(1_000_000 + 29_000))
+        assertFalse(Say.listening(1_000_000 + 31_000))
+    }
 
     @Test fun snapshotHoldsTheLatestOfEach() {
         assertTrue(Say.snapshot().isNull("message"))

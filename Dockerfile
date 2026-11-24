@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir -r bridge/requirements.txt \
     && mkdir /config /data && chown couch:couch /config /data
 COPY bridge/ ./bridge/
 COPY tv-home/web/ ./tv-home/web/
+COPY on-tv/web/ ./on-tv/web/
 COPY titan/ ./titan/
 COPY lg/app/largeIcon.png ./lg/app/largeIcon.png
 COPY config.example.json ./config.example.json

@@ -2,7 +2,7 @@
 //  1. A Welcome widget whose design says the name comes from the calendar greets the guest booked now
 //     ("Welcome, Sarah") with their check out, from the bookings link kept on this TV; before any link
 //     it says where to add one. A name typed in At home wins.
-//  2. Home settings, couch-tv Studio, Smart home: the address and a pasted token are checked, what
+//  2. Home settings, Designs, Smart home: the address and a pasted token are checked, what
 //     Home Assistant has is listed, ticks are saved the way the launcher keeps them, the guide for a
 //     device we don't list is there, and the token is never kept in the page's storage or address.
 // Needs Playwright (Chromium). Without it the test says so and passes:
@@ -94,19 +94,19 @@ console.log("Running integrations browser tests...");
   const page = await home("&hasetup=1", [["controls", { label: "Lights" }]]);
   ok(await page.evaluate(() => window.smartHome.setup.can() && !window.smartHome.enabled()), "nothing set up yet, and the TV can set it up");
   await page.evaluate(() => window.tv.settingsKey()); await page.waitForTimeout(300); await press(page, "Enter", 400);
-  for (let i = 0; i < 14 && !(await page.evaluate(() => /couch-tv Studio/.test((document.querySelector(".ssec.focus") || {}).textContent || ""))); i++) await press(page, "ArrowDown");
+  for (let i = 0; i < 14 && !(await page.evaluate(() => /Designs/.test((document.querySelector(".ssec.focus") || {}).textContent || ""))); i++) await press(page, "ArrowDown");
   await press(page, "ArrowRight");
   const toRow = async (re) => { for (let i = 0; i < 60; i++) { const t = await page.evaluate(() => (document.querySelector(".srow.focus") || {}).textContent || ""); if (re.test(t)) return true; await press(page, "ArrowDown", 100); } return false; };
   const type = async (words) => { await press(page, "Enter", 250); await page.fill("#set-input", words); await press(page, "Enter", 500); };
-  ok(await toRow(/^Smart home/), "Home settings, couch-tv Studio has Smart home");
+  ok(await toRow(/^Smart home/), "Home settings, Designs has Smart home");
   await press(page, "Enter", 300);
   const rowsText = () => page.evaluate(() => document.getElementById("set-rows").textContent);
   ok(/Long-lived access tokens/.test(await rowsText()), "the steps to make a token are on the screen");
-  ok(await toRow(/Paste a token/), "a row to paste the token");
+  ok(await toRow(/Paste the access key/), "a row to paste the access key");
   await type("not-the-right-token-at-all");
   await page.waitForTimeout(400);
-  ok(/did not accept that token/.test(await page.evaluate(() => document.getElementById("set-msg").textContent)), "a wrong token says so in plain words");
-  ok(await toRow(/Paste a token/), "back to the token row");
+  ok(/did not accept that key/.test(await page.evaluate(() => document.getElementById("set-msg").textContent)), "a wrong token says so in plain words");
+  ok(await toRow(/Paste the access key/), "back to the access key row");
   await type("test-token-for-the-preview-only");
   await page.waitForTimeout(500);
   ok(/3\. Pick what shows/.test(await rowsText()), "connected: what Home Assistant has is listed");
@@ -121,12 +121,55 @@ console.log("Running integrations browser tests...");
   ok(saved && saved.controls[0].entity === "light.lounge" && saved.climate[0].entity === "climate.lounge", "the ticks are kept the way the launcher reads them");
   ok(saved && !("token" in saved) && !("url" in saved), "the page never sends the token twice: the launcher holds it");
   ok(await page.evaluate(() => window.smartHome.enabled() && window.smartHome.available()), "smart home is on, the Smart home screen too");
-  ok(await toRow(/Add a device we don't list/), "the guide for other devices"); await press(page, "Enter", 300);
+  // the long guide moved to the phone page (ha-phone.html); the TV keeps one line
   const more = await rowsText();
-  ["Tuya", "Google Home", "Apple Home", "Matter", "Alexa", "AirTouch 5", "MQTT"].forEach((w) => ok(more.indexOf(w) >= 0, "the guide covers " + w));
+  ok(/A device we don't list/.test(more) && /home-assistant\.io\/integrations/.test(more), "one line for devices we don't list");
+  ok(!/Tuya/.test(more), "the long guide is not on the TV");
   const kept = await page.evaluate(() => { const o = []; for (let i = 0; i < localStorage.length; i++) o.push(localStorage.getItem(localStorage.key(i))); return o.join(" ") + location.href; });
   ok(kept.indexOf("test-token-for-the-preview-only") < 0, "the token is in no storage of the page and not in the address");
   ok(seen.every((u) => u.indexOf("test-token") < 0), "and never went to a server");
+  ok(page.errors.length === 0, "no page errors: " + page.errors.join(" | "));
+  await page.close();
+}
+
+// 3. smart home set up from a phone (the launcher's HaPage.phone): one QR code and one short line
+{
+  const page = await home("&hasetup=phone", [["controls", { label: "Lights" }]]);
+  await page.evaluate(() => window.tv.settingsKey()); await page.waitForTimeout(300); await press(page, "Enter", 400);
+  for (let i = 0; i < 14 && !(await page.evaluate(() => /Designs/.test((document.querySelector(".ssec.focus") || {}).textContent || ""))); i++) await press(page, "ArrowDown");
+  await press(page, "ArrowRight");
+  const toRow = async (re) => { for (let i = 0; i < 60; i++) { const t = await page.evaluate(() => (document.querySelector(".srow.focus") || {}).textContent || ""); if (re.test(t)) return true; await press(page, "ArrowDown", 100); } return false; };
+  ok(await toRow(/^Smart home/), "Home settings, Designs has Smart home");
+  ok(/Connect Home Assistant from your phone/.test(await page.evaluate(() => (document.querySelector(".srow.focus") || {}).textContent)), "its row says it is done from a phone");
+  await press(page, "Enter", 800);
+  const shot = () => page.evaluate(() => ({ qr: document.querySelectorAll("#set-rows .sqr").length, svg: !!document.querySelector("#set-rows .sqr svg"),
+    line: ((document.querySelector("#set-rows .sqr b") || {}).textContent || ""), rows: document.querySelectorAll("#set-rows .srow").length, text: document.getElementById("set-rows").textContent }));
+  let s1 = await shot();
+  ok(s1.qr === 1 && s1.svg, "one QR code, drawn in the page");
+  ok(s1.line === "Scan with your phone to connect your home.", "one short line: " + s1.line);
+  ok(s1.rows <= 1 && !/token|key|Tuya|Paste/i.test(s1.text), "nothing else to do on the TV (" + s1.rows + " row: Hue or AirTouch)");
+  if (process.env.SHOTS) await page.screenshot({ path: path.join(process.env.SHOTS, "tv-smart-home-qr.png") });
+  await page.evaluate(() => window.MOCK_HA_PHONE_SIGN_IN());
+  await page.waitForTimeout(3600);
+  s1 = await shot();
+  ok(/Connected to homeassistant\.local/.test(s1.line), "the phone signed in: the TV says so by itself (" + s1.line + ")");
+  ok(/Disconnect/.test(s1.text), "and offers Disconnect");
+  ok(await page.evaluate(() => window.smartHome.enabled()), "smart home is on: the widgets read it again");
+  // Home Assistant refused the TV's refresh token: the TV says Sign in again by itself, and the QR stays
+  await page.evaluate(() => window.MOCK_HA_SIGNED_OUT());
+  await page.waitForTimeout(3600);
+  s1 = await shot();
+  ok(s1.qr === 1 && /^Sign in again\./.test(s1.line), "signed out by Home Assistant: the TV says Sign in again (" + s1.line + ")");
+  // and in the TV's language (tv-words.js, tw_ha_* in i18n.js)
+  // (a TV in German draws the line in German when it is drawn: sign in again, then be signed out again)
+  await page.evaluate(() => { window.I18N.set("de"); window.MOCK_HA_PHONE_SIGN_IN(); });
+  await page.waitForTimeout(3600);
+  await page.evaluate(() => window.MOCK_HA_SIGNED_OUT());
+  await page.waitForTimeout(3600);
+  s1 = await shot();
+  ok(/^Erneut anmelden\. Home Assistant hat diesen Fernseher abgemeldet/.test(s1.line), "in German too (" + s1.line + ")");
+  ok(await page.evaluate(() => window.CouchTvWords.words("Sign in again") === "Erneut anmelden"), "the short Sign in again line in German");
+  await page.evaluate(() => window.I18N.set("en"));
   ok(page.errors.length === 0, "no page errors: " + page.errors.join(" | "));
   await page.close();
 }

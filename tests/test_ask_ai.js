@@ -131,7 +131,7 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
     const { A, sb, store } = page("?api=http%3A%2F%2Fbridge%3A5400", {});
     sb.CouchDesignCode = { readCode: (c) => (/^[A-Z0-9]{5}-[A-Z0-9]{5}$/.test(c) ? c : ""), get: (c) => { got.push(c); return Promise.resolve(); } };
     const now = 1800000000000;
-    // couch-tv Studio is opt in: never chosen, or switched off, an agent's design is not used, and the
+    // Couch TV Studio is opt in: never chosen, or switched off, an agent's design is not used, and the
     // choice is left exactly as it was
     A._test.took({ design: { code: "ABCDE-FGHJK", at: now - 450 } }, now);
     ok(got.length === 0 && !("tvhome.designer" in store), "Studio never turned on: the design is not fetched and Studio stays as it was");
@@ -153,11 +153,18 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
     ok(got.length === 1, "an old one is not fetched");
   }
 
-  // 6b. opt in: the home computer is asked for messages only once Ask AI is set up on this TV (or its
-  // sheet is open, or an Ask AI or From your AI widget is on the home)
+  // 6b. opt in: a home with no design store asks the home computer for messages only once Ask AI is
+  // set up on this TV (or its sheet is open, or an Ask AI or From your AI widget is on the home). A home
+  // that can get designs (a design store, the usual case) always asks, so a design sent from the phone
+  // shows at once (phone send, 20 Nov 2026)
   {
     const { A } = page("?api=http%3A%2F%2Fbridge%3A5400", {});
-    ok(A._test.wanted() === false, "a bridge home with nothing set up never asks GET /api/say");
+    ok(A._test.wanted() === false, "a bridge home with nothing set up and no design store never asks GET /api/say");
+    const withStore = page("?api=http%3A%2F%2Fbridge%3A5400", {});
+    withStore.sb.CouchDesignCode = { base: () => "https://designs.example" };
+    ok(withStore.A._test.wanted() === true, "a home that can get designs asks, for a design sent from the phone");
+    withStore.sb.CouchDesignCode = { base: () => "" };
+    ok(withStore.A._test.wanted() === false, "design_store off: back to opt in");
     A.save({ provider: "local", base: "http://my-computer.local:11434/v1", model: "llama3.2" });
     ok(A._test.wanted() === true, "Ask AI set up on this TV: it asks");
   }

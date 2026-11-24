@@ -2,7 +2,7 @@
 
 This page has every step to put couch-tv on your TV, and to take it off again.
 
-**Before you start:** the easy way is the setup site, [couchtv.sites.underseage.studio](https://couchtv.sites.underseage.studio), from your phone, with the free Setup app on a Mac or Windows computer, or with your AI agent. Not sure about your TV? See [Will it work on my TV?](../README.md#will-it-work-on-my-tv) and [PLATFORMS.md](PLATFORMS.md).
+**Before you start:** the easy way is [couchtv.joshuaseage.com/get](https://couchtv.joshuaseage.com/get/): the TV remote and your phone, or the free Setup app on a Mac or Windows computer, or your AI agent (Claude Code needs a paid Claude plan; any coding AI agent works). First time, and not technical? [START-HERE.md](START-HERE.md) walks Google TV, Android TV and Samsung one step at a time. Not sure about your TV? See [Will it work on my TV?](../README.md#will-it-work-on-my-tv) and [PLATFORMS.md](PLATFORMS.md).
 
 **On this page**
 
@@ -113,7 +113,7 @@ and press **Allow**. You never see it again.
 > 0.10 or older, whose `apply.sh` switched off the Google TV home and its setup app: the TV no longer
 > showed "Allow USB debugging?" for any new computer. Computers allowed before that kept working.
 > The current `apply.sh` leaves both on, but to be safe connect each computer you will use (`check-tv.py <tv address> --adb`, and for option C the
-> app's **Connect ADB**) and press Allow **before** step 6. If it already happened, see "If
+> app's key link: Settings, Phone remote, Set it up, then **Connect**) and press Allow **before** step 6. If it already happened, see "If
 > something is stuck" in [UNINSTALL.md](UNINSTALL.md).
 
 <details>
@@ -330,7 +330,7 @@ left. On a plain Android TV 10 or newer, couch-tv asks Android to make it the ho
 - Open couch-tv. The first time, it asks "Make couch-tv your home screen?" Choose Yes, then pick
   couch-tv in Android's own screen and press **Always**. Missed it? Home settings, About, **Make
   couch-tv your home screen** asks again. (The on-TV app, option C, does the same when you press
-  **Use as home screen** on its setup screen.)
+  **Make it my home** on its first setup step.)
 - Some Android TV 11 builds also show **Select a home app** the first time you press Home. Pick
   couch-tv and **Always**.
 - **Home still opens the TV's own home?** Some TVs (a Haier, issue #98) open their own launcher by

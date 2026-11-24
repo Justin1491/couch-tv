@@ -1,5 +1,5 @@
-// couch-tv Studio's design block: config.json "design" (docs/CONFIG.md, "Design"), made in
-// couch-tv Studio (a poster style editor for this home). It is laid over the normal Night home:
+// Couch TV Studio's design block: config.json "design" (docs/CONFIG.md, "Design"), made in
+// Couch TV Studio (a poster style editor for this home). It is laid over the normal Night home:
 //  - the home's own parts (clock, date, weather, people, quick buttons, Keep watching, the dock):
 //    where each sits, its size and turn, font, colour, weight, shadow, a shade behind it to read it
 //    on a busy photo, the panel behind it, and for the dock its shape (row, column, grid), icon
@@ -315,7 +315,7 @@
     // picture over the words, for a square of the grid)
     if (key === "keep_watching") put(out, "compact", SAN.pick(src.compact, ["one", "square"]));
     if (key === "clock" || key === "date" || key === "weather" || key === "keep_watching") sanType(src, out);
-    if (key === "clock") { put(out, "format", SAN.pick(src.format, ["12h", "24h"])); put(out, "style", SAN.pick(src.style, ["glass", "solid"])); put(out, "behind", SAN.b(src.behind)); }
+    if (key === "clock") { put(out, "format", SAN.pick(src.format, ["12h", "24h"])); put(out, "style", SAN.pick(src.style, ["glass", "solid"])); put(out, "behind", SAN.b(src.behind)); put(out, "at", SAN.pick(src.at, ["scene"])); }
     if (key === "date") put(out, "format", SAN.pick(src.format, DATE_KEYS));
     if (key === "weather") { put(out, "place", SAN.b(src.place)); put(out, "words", SAN.b(src.words)); }
     if (key === "people" || key === "quick" || key === "keep_watching" || key === "dock") put(out, "panel", SAN.pick(src.panel, PANELS));
@@ -345,7 +345,7 @@
     if (!app) { put(out, "name", SAN.w(src.name, 24)); put(out, "on", SAN.b(src.on)); }
     return out;
   }
-  // ---------------- widgets (couch-tv Studio v10, widgets/CATALOGUE.md) ----------------
+  // ---------------- widgets (Couch TV Studio v10, widgets/CATALOGUE.md) ----------------
   // A widget is one box on the designer's grid: a kind (one renderer each, widgets.js), a set size,
   // a style from fixed lists and plain colours, and a few options per kind, each on an allow list.
   // A design never carries a widget's data: the TV reads its own (the clock, its weather, its photos,
@@ -375,7 +375,7 @@
     "weather", "bigtemp", "hourly", "week", "rain", "uv", "sun", "moon", "air", "surf", "photo", "slideshow", "mosaic", "artframe",
     "camera", "doorbell", "card", "news", "sports", "memory", "queue", "speakers", "energy", "sensor", "battery", "note", "list", "stocks", "commute", "wifi", "guide", "screentime", "ask", "agent"];
   var WSIZES = ["line", "wline", "tile", "wtile", "small", "tall", "medium", "wide", "large", "xl", "hero", "full", "row8", "row12", "row18"];
-  var WSTYLE = { panel: ["glass", "solid", "colour", "paper", "none"], gradient: ["off", "soft"], ink: ["auto", "white", "ink", "accent"],
+  var WSTYLE = { panel: ["glass", "solid", "colour", "paper", "none"], gradient: ["off", "soft"], ink: ["auto", "white", "ink", "accent", "glass", "liquid"],
     font: ["inter", "antonio", "rounded", "cormorant", "jost"], icons: ["line", "solid", "duotone", "tile", "glass", "playful", "classic"],
     corners: ["square", "soft", "round", "pill"], shadow: ["none", "soft", "lifted"], show: ["always", "live", "night", "day"] };
   var QUICK_IDS = ["sleep", "picture", "look", "soundscape", "screen_off", "headphones", "input", "bluetooth", "network", "tvsettings", "screensaver"];
@@ -387,10 +387,15 @@
   var OPT = {
     label: function (v) { return SAN.w(v, 40); }, text: function (v) { return SAN.w(v, 120); }, sub: function (v) { return SAN.w(v, 80); },
     kicker: function (v) { return SAN.w(v, 60); }, caption: function (v) { return SAN.w(v, 60); },
-    format: function (v) { return SAN.pick(v, ["12h", "24h"]); }, ampm: SAN.b, seconds: SAN.b, date: SAN.b,
+    format: function (v) { return SAN.pick(v, ["auto", "12h", "24h"]); }, ampm: SAN.b, seconds: SAN.b, date: SAN.b,
+    // the clocks' own settings (widget-caps.js): the analogue clock's numbers, the word clock's minute and
+    // day line, the month's first day of the week
+    numbers: SAN.b, precise: SAN.b, dayline: SAN.b, wstart: function (v) { return SAN.pick(v, ["mon", "sun"]); },
     align: function (v) { return SAN.pick(v, ["left", "center", "right"]); },
     show: function (v) { return SAN.pick(v, ["date", "weather", "both"]); }, dfmt: function (v) { return SAN.pick(v, DATE_KEYS); },
     cities: function (v) { return SAN.list(v, 4, tzOk); },
+    // a clock's own time zone (an IANA id, checked like the world clock's cities); left out, the TV's own
+    zone: tzOk,
     month: function (v) { return SAN.n(v, 1, 12, true); }, day: function (v) { return SAN.n(v, 1, 31, true); },
     unit: function (v) { return SAN.pick(v, ["sleeps", "days", "weeks"]); }, icon: iconName,
     // apps in a dock, row, folder or app tile: catalogue ids (app-catalogue.js). An old design's package
@@ -406,7 +411,7 @@
     },
     cols: function (v) { return SAN.n(v, 1, 6, true); }, names: SAN.b, more: SAN.b,
     image: function (v) { return imgOk(v) || undefined; }, fit: function (v) { return SAN.pick(v, ["cover", "contain"]); },
-    seconds_each: function (v) { return SAN.n(v, 5, 600, true); }, count: function (v) { return SAN.n(v, 1, 8, true); },
+    seconds_each: function (v) { return SAN.n(v, 5, 600, true); }, count: function (v) { return v === "auto" ? "auto" : SAN.n(v, 1, 8, true); },
     mat: SAN.c, weekday: function (v) { return SAN.n(v, 0, 6, true); }, alt: SAN.b, anchor: function (v) { return SAN.n(v, 0, 100000, true); },
     lid_a: SAN.c, lid_b: SAN.c, bin_a: function (v) { return SAN.w(v, 20); }, bin_b: function (v) { return SAN.w(v, 20); },
     quick: function (v) { return SAN.list(v, 6, function (q) { return SAN.pick(q, QUICK_IDS); }); },
@@ -416,8 +421,21 @@
     controls: function (v) { return SAN.list(v, 8, function (c) { c = obj(c); var o = {}; put(o, "icon", SAN.pick(c.icon, CTL_ICONS)); put(o, "name", SAN.w(c.name, 24)); return o.icon ? o : undefined; }); },
     shows: function (v) { return SAN.n(v, 1, 5, true); },
     // the web widgets (widget-web.js): a source picked from a fixed list, never a link
-    feed: function (v) { return SAN.pick(v, WEB_FEEDS); },
-    league: function (v) { return SAN.pick(v, WEB_LEAGUES); }, team: function (v) { return SAN.w(v, 24); },
+    feed: function (v) { return SAN.pick(v, ["auto"].concat(WEB_FEEDS)); },
+    // the widget settings Studio can set (widget-caps.js settings, store "design"): a year or "every" (a
+    // countdown that comes round each year), a timer's quick start, how many hours, shuffle, the price, the
+    // agenda's days and which games
+    year: function (v) { return v === "every" ? "every" : SAN.n(v, 2026, 2040, true); }, minutes: function (v) { return SAN.n(v, 0, 240, true); },
+    hours: function (v) { return v === "auto" ? "auto" : SAN.n(v, 1, 24, true); }, shuffle: SAN.b, price: SAN.b,
+    days: function (v) { return SAN.pick(v, ["today", "two", "week"]); }, games: function (v) { return SAN.pick(v, ["all", "live", "mine"]); },
+    league: function (v) { return SAN.pick(v, WEB_LEAGUES); },
+    // a team's name as ESPN writes it ("Philadelphia 76ers", "Brighton & Hove Albion"): letters, digits, spaces and & . ' -
+    team: function (v) { v = typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, 40) : ""; // never a secret: no word over 16 letters, and digits only in a short word ("76ers"), never a token
+      return /^[A-Za-z0-9\u00c0-\u024f][A-Za-z0-9\u00c0-\u024f &.'-]*$/.test(v) && !v.split(" ").some(secretish) && v.split(/[ &.'-]+/).every(function (w) { return w.length <= 16 && (!/[0-9]/.test(w) || w.length <= 5); }) ? v : undefined; },
+    // the quote's kind of line, the word's language and whether its meaning shows; how long Ask AI's last
+    // answer and From your AI's last message show, and whether the message names its sender
+    mood: function (v) { return SAN.pick(v, ["all", "calm", "go", "home"]); }, lang: function (v) { return SAN.pick(v, ["en", "es", "fr", "it", "de", "ja"]); }, meaning: SAN.b,
+    keep: function (v) { return SAN.pick(v, ["always", "hour", "day", "never"]); }, who: SAN.b,
     // share symbols as Yahoo writes them (BHP.AX, ^AXJO, AUDUSD=X, BTC-AUD): never a link or a word
     tickers: function (v) { return SAN.list(v, 6, function (s) { s = typeof s === "string" ? s.trim().toUpperCase() : ""; return /^\^?[A-Z0-9]{1,8}([.=-][A-Z0-9]{1,4})?$/.test(s) ? s : undefined; }); },
     // the commute: when to arrive and the minutes to spare; the places stay on the TV, never here
@@ -427,17 +445,17 @@
   var WEB_LEAGUES = ["afl", "nrl", "aleague", "epl", "nba", "bbl", "cricket"];
   var WEB_FEEDS = ["abc", "abc-justin", "abc-sport", "abc-business", "sbs", "guardian", "bbc", "rnz"];
   var WOPT = {
-    clock: "format ampm seconds date align", tallclock: "format align", glassclock: "format scene", analog: "seconds", flipclock: "format",
-    wordclock: "", solar: "", worldclock: "label cities", countdown: "label month day unit icon", date: "show dfmt align place", month: "", timer: "label",
-    weather: "place hilo night", bigtemp: "place", hourly: "place", week: "place", rain: "label", uv: "label", sun: "label", moon: "", air: "label", surf: "label",
-    photo: "image fit caption sub", slideshow: "seconds_each caption sub", mosaic: "count", artframe: "image mat caption sub", memory: "align",
+    clock: "format ampm seconds date align zone", tallclock: "format align zone", glassclock: "format scene zone", analog: "seconds numbers zone", flipclock: "format zone",
+    wordclock: "precise dayline zone", solar: "", worldclock: "label cities format", countdown: "label month day year unit icon rule", date: "show dfmt align place", month: "wstart", timer: "label minutes",
+    weather: "place hilo night degrees", bigtemp: "place degrees", hourly: "place hours degrees", week: "place", rain: "label", uv: "label", sun: "label", moon: "hemi", air: "label scale", surf: "label units wind",
+    photo: "image fit caption sub", slideshow: "seconds_each caption sub shuffle", mosaic: "count", artframe: "image mat caption sub", memory: "align range ago",
     keep: "", keeprow: "label shows", upnext: "apps sport", picks: "label align",
     app: "apps", folder: "label apps cols", dock: "apps more", appgrid: "apps cols names", games: "label apps",
-    nowplaying: "", soundscape: "sound", queue: "", speakers: "",
-    aircon: "entity", scenes: "label", controls: "label controls cols", camera: "label", doorbell: "", energy: "", sensor: "label", battery: "",
-    bins: "label weekday alt anchor lid_a lid_b bin_a bin_b", people: "", agenda: "label align", note: "align", list: "label icon align",
-    card: "label text icon", quote: "text sub", word: "", news: "feed label align", sports: "label league team align", stocks: "label tickers align", commute: "label arrive_h arrive_m buffer weekdays align",
-    welcome: "kicker text sub align source times", quick: "quick align", wifi: "align", guide: "align", screentime: "align", ask: "label align", agent: "label align", stack: ""
+    nowplaying: "", soundscape: "sound volume", queue: "", speakers: "",
+    aircon: "entity others", scenes: "label", controls: "label controls cols", camera: "label", doorbell: "", energy: "", sensor: "label", battery: "low",
+    bins: "label weekday alt anchor lid_a lid_b bin_a bin_b", people: "names", agenda: "label align days", note: "align byline", list: "label icon align done",
+    card: "label text icon", quote: "text sub mood", word: "lang meaning", news: "feed label align count", sports: "label league team align games", stocks: "label tickers align price", commute: "label arrive_h arrive_m buffer weekdays align",
+    welcome: "kicker text sub align source times", quick: "quick align", wifi: "align hidepass", guide: "align", screentime: "align appcount", ask: "label align keep", agent: "label align keep who", stack: ""
   };
   // The smart home and music widgets: which of the TV's own Home Assistant things a widget shows,
   // named by entity id only (never a reading, a state or an address). A TV shows one only when it is
@@ -448,13 +466,40 @@
   OPT.reading = haId(/^sensor\.[a-z0-9_]{1,64}$/);
   OPT.players = function (v) { return SAN.list(v, 6, haId(/^media_player\.[a-z0-9_]{1,64}$/)); };
   // the Welcome widget: where the guest's name comes from. "calendar" means this TV's own bookings
-  // calendar (Home settings, couch-tv Studio, At home, Guests); the design never carries a name, a
+  // calendar (Home settings, Designs, At home, Guests); the design never carries a name, a
   // link or a time. times: false hides the check in and check out line.
   OPT.source = function (v) { return SAN.pick(v, ["typed", "calendar"]); };
+  // the smart home widgets' own settings Studio can set (widget-caps.js, store "design"): the aircon's
+  // other rooms, the doorbell's picture, the energy's power now (on or off), and the batteries' red line
+  OPT.others = SAN.b; OPT.picture = SAN.b; OPT.now = SAN.b;
+  OPT.low = function (v) { return SAN.n(v, 5, 50, true); };
   OPT.times = SAN.b;
+  // the family and photo widgets' own choices (widget-caps.js settings, store "design"): who the note is
+  // from, ticked items on a list, On this day's days and how long ago, the apps beside screen time
+  OPT.byline = SAN.b; OPT.done = SAN.b; OPT.ago = SAN.b;
+  OPT.range = function (v) { return SAN.pick(v, ["day", "week"]); };
+  OPT.appcount = function (v) { return v === "auto" ? "auto" : SAN.n(v, 0, 8, true); };
   // align: centred unless the design says left or right (seagey, 18 Nov 2026)
-  WOPT.controls = "label controls cols switches align"; WOPT.camera = "label cam align"; WOPT.doorbell = "label align"; WOPT.energy = "label align";
+  WOPT.controls = "label controls cols switches align"; WOPT.camera = "label cam align"; WOPT.doorbell = "label align picture"; WOPT.energy = "label align now";
   WOPT.sensor = "label reading align"; WOPT.speakers = "label players align"; WOPT.queue = "label align";
+  // the watching, apps and music widgets' own settings (widget-caps.js settings, store "design")
+  OPT.mix = function (v) { return SAN.pick(v, ["all", "others", "mine"]); }; OPT.buttons = SAN.b; OPT.cover = SAN.b;
+  OPT.turn = function (v) { return SAN.pick(v, [0, 10, 20, 30, 60]); };
+  WOPT.picks = "label align mix"; WOPT.nowplaying = "buttons cover"; WOPT.queue = "label align count"; WOPT.stack = "turn";
+  // settings that were kept on the TV only, with nothing private in them, now in the design too (0.13.10,
+  // widget-caps.js store "design"), so Couch TV Studio can set them; a TV's own choice still wins:
+  // temperature in, the moon's half of the world, the air quality scale, the surf's units, the
+  // soundscape's volume, the doorbell's and energy's heading (label, already kept) and the guest Wi-Fi's
+  // password hidden (each named in WOPT above)
+  OPT.degrees = function (v) { return SAN.pick(v, ["auto", "c", "f"]); };
+  OPT.hemi = function (v) { return SAN.pick(v, ["auto", "south", "north"]); };
+  OPT.scale = function (v) { return SAN.pick(v, ["auto", "eu", "us"]); };
+  OPT.units = function (v) { return SAN.pick(v, ["auto", "m", "ft"]); };
+  OPT.wind = function (v) { return SAN.pick(v, ["auto", "kmh", "kn", "mph"]); };
+  OPT.volume = function (v) { return SAN.n(v, 10, 100, true); };
+  OPT.hidepass = SAN.b;
+  // a countdown to a day that moves each year: the TV works the date out (widgets.js RULES); "date" is the day and month
+  OPT.rule = function (v) { return SAN.pick(v, ["date", "easter", "mothers_day", "fathers_day", "fathers_day_june"]); };
   function sanWStyle(src) {
     src = obj(src);
     var out = {};
@@ -561,7 +606,7 @@
       // depth: a built in scene photo has a cut out of its hills (scene-<name>-fg.webp); drawn between
       // the widgets behind (layer "back") and the ones in front, so a clock can stand behind the hills
       // depth_image: the design's own cut out of its photo (a PNG or WebP with see through sky, made in
-      // couch-tv Studio), drawn in the same place over the clock; checked like the photo itself (only from
+      // Couch TV Studio), drawn in the same place over the clock; checked like the photo itself (only from
       // this TV or inside the design, never a link; the same size limit). With one, depth is on unless
       // the design says false. A design without it is drawn exactly as before.
       var cut = depthImgOk(bg.depth_image);
@@ -572,7 +617,7 @@
       // is drawn on the still only: blurring every frame of a video is too slow for a TV.
       var vid = vidOk(bg.video);
       if (vid) { out.background.video = vid; if (out.background.blur) { delete out.background.blur; note("A video background is not blurred, so the blur was taken off."); } }
-      else if (bg.video !== undefined) note("That video background is not allowed: only a built in loop or a video from couch-tv Studio's store.");
+      else if (bg.video !== undefined) note("That video background is not allowed: only a built in loop or a video from Couch TV Studio's store.");
     } else if (bg.video !== undefined) {
       note("A video background needs its still picture, so it was left out.");
     }
@@ -809,6 +854,14 @@
     if (ctls) out.push(["Controls in sections (" + ctls + ")", Math.ceil(ctls / 4), "controls"]);
     var glows = Object.keys(E).filter(function (k) { return obj(E[k]).shade && !obj(E[k]).hidden; }).length + shown.filter(function (o) { return o.shade; }).length;
     if (glows) out.push(["Glow behind words (" + glows + ")", glows * 2, "glow"]);
+    // glass words: a soft shadow under every letter, redrawn when the words change (no blur behind them)
+    var inked = function (v) { return shown.filter(function (o) { return o.type === "widget" && [o].concat(list(o.items)).some(function (it) { return obj(obj(it).style).ink === v; }); }).length; };
+    var gtext = inked("glass");
+    if (gtext) out.push(["Glass words (" + gtext + ")", gtext, "glasstext"]);
+    // liquid glass words: the photo behind seen through every letter, drawn again with a shadow filter each
+    // time the words change; weighed like a frosted card (3 each)
+    var ltext = inked("liquid");
+    if (ltext) out.push(["Liquid glass words (" + ltext + ")", ltext * 3, "liquidtext"]);
     var strong = Object.keys(E).filter(function (k) { return obj(E[k]).shadow === "strong"; }).length + shown.filter(function (o) { return o.shadow === "strong"; }).length;
     if (strong) out.push(["Strong shadows (" + strong + ")", strong, "strong"]);
     var turned = shown.filter(function (o) { return o.rotate; }).length;
@@ -943,10 +996,22 @@
 
   function css(d) {
     var E = obj(d.elements), out = [], H = "html.cd";
+    // clock.at "scene" (Couch TV Studio's Couch Original): the clock and the date stay where each built in
+    // scene puts them, as on the home with no design: behind the hills, and on the Waterline scene on the
+    // water with its reflection under it. Only over the scenes: a design's own background keeps one place.
+    var atScene = obj(E.clock).at === "scene" && !d.background;
     // the base: in a design every part keeps one place, whichever scene is showing
-    out.push(H + ".theme-night #scenes .gclock{left:0;right:0;top:11.5rem;font-size:25rem;text-align:center}");
-    out.push(H + ".theme-night #date{left:0 !important;right:0 !important;top:6rem;text-align:center}");
-    out.push(H + " #date .wx{display:none}");
+    if (!atScene) {
+      out.push(H + ".theme-night #scenes .gclock{left:0;right:0;top:11.5rem;font-size:25rem;text-align:center}");
+      out.push(H + ".theme-night #date{left:0 !important;right:0 !important;top:6rem;text-align:center}");
+      out.push(H + " #date .wx{display:none}");
+    } else {
+      // the weather stays in the date line, as on the home with no design (hidden with the weather part)
+      out.push(H + " #cd-weather{display:none !important}");
+      if (obj(E.weather).hidden === true) out.push(H + " #date .wx{display:none}");
+      if (obj(E.weather).place === false) out.push(H + " #date .wx .wx-place{display:none}");
+      if (obj(E.weather).words === false) out.push(H + " #date .wx .ww{display:none}");
+    }
     out.push(H + " #cd-weather{position:fixed;left:0;right:0;top:9rem;z-index:2;text-align:center;white-space:nowrap;pointer-events:none;" +
       "font-size:1.75rem;line-height:2.25rem;font-weight:450;color:rgba(255, 255, 255, 0.84);text-shadow:0 0.125rem 1.125rem rgba(0, 0, 0, 0.25)}");
     out.push(H + ":not(.theme-night) #cd-weather{display:none}");
@@ -961,6 +1026,8 @@
     // (a photo that would not load takes the clock's own styling with it: the scene's clock comes back)
     var clockSel = H + ":not(.cd-bg-missing).theme-night #scenes .gclock";
     var cr = [];
+    // a clock in each scene's own place is not moved or sized: the reflection and the hills are lined up with it there
+    if (atScene) cm = { x: 0, y: 0, s: 1, r: 0 };
     if (cm.x || cm.y) cr.push("transform:translate(" + vw(cm.x) + "," + vh(cm.y) + ")");
     if (cm.s !== 1) cr.push("font-size:" + +(25 * cm.s).toFixed(3) + "rem");
     if (fontOf(ce.font)) cr.push("font-family:" + fontOf(ce.font) + (ce.font === "antonio" ? "" : ";letter-spacing:-0.045em;line-height:0.86"));
@@ -972,12 +1039,14 @@
     out.push(common(clockSel, ce));
     // a scene's hills stand in front of its clock where it normally sits; a clock moved anywhere
     // else would vanish behind them, so in a design it is in front unless clock.behind is true
-    if (ce.behind !== true) out.push(H + ":not(.cd-bg-missing).theme-night #scenes .scene .fg{z-index:0}" + clockSel + "{z-index:1}");
+    if (ce.behind !== true && !atScene) out.push(H + ":not(.cd-bg-missing).theme-night #scenes .scene .fg{z-index:0}" + clockSel + "{z-index:1}");
     if (ce.style === "solid") {
       var cc = colour(ce.colour) || "#ffffff";
       out.push(clockSel + " .fill{background-image:none !important;color:" + cc + " !important;opacity:1 !important;filter:none !important}");
       out.push(clockSel + " .sheen, " + clockSel + " .rim, " + clockSel + " .edge{display:none !important}");
       out.push(clockSel + ".under{display:none}");
+      // solid digits have no reflection: the Waterline scene's cut at the waterline comes off too
+      if (atScene) out.push(clockSel + "{clip-path:none !important;-webkit-clip-path:none !important}");
     }
     // the Classic and OLED clock, top right
     if (moved(cm)) out.push(H + ":not(.theme-night) #time{transform:translate(" + vw(cm.x) + "," + vh(cm.y) + ") scale(" + cm.s + ");transform-origin:100% 0}");
@@ -1004,7 +1073,8 @@
     out.push(panel(H + " .ncard:not(.focus)", obj(E.keep_watching).panel));
 
     // the clock's shade: a dark pool under the digits, in each scene's own shade layer
-    if (ce.shade === "panel") {
+    // (not for a clock in each scene's own place: the pool is drawn for the one place, and each scene has its own shade)
+    if (ce.shade === "panel" && !atScene) {
       out.push(H + ".theme-night #scenes .scene .shade{background:radial-gradient(ellipse " + vw(900 * cm.s) + " " + vh(420 * cm.s) + " at " +
         vw(960 + cm.x) + " " + vh(184 + cm.y + 170 * cm.s) + ", rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0) 72%)}");
     }
@@ -1350,7 +1420,7 @@
     if (!w) return FORCE_DEMO || !document.getElementById("date") ? { place: "Riverside", temp: "24°", words: "Partly cloudy", icon: icon("sun") } : null;
     var c = w.cloneNode(true), place = c.querySelector(".wx-place"), words = c.querySelector(".ww"), svg = c.querySelector("svg");
     var bits = {
-      place: place ? place.textContent.replace(/\s*·\s*$/, "") : "",
+      place: place ? (place.querySelector(".wx-town") || place).textContent.replace(/\s*·\s*$/, "").replace(/^\s*·\s*/, "") : "",
       words: words ? words.textContent.replace(/^\s*·\s*/, "") : "",
       icon: svg ? svg.cloneNode(true) : null   // the home's own icon, copied as a node
     };
@@ -1428,17 +1498,18 @@
     }
     if (t === "weather") {
       var b = weatherBits() || { place: "", words: "", icon: null, temp: "" }, showPlace = o.place !== false;
-      if (o.style === "big") return h("div", "cd-wx cd-wx-big", textStyle(o, true), [h("div", "cd-v", null, [b.temp]), h("div", "cd-s", null, [b.words + (showPlace && b.place ? " · " + b.place : "")])]);
+      if (o.style === "big") return h("div", "cd-wx cd-wx-big", textStyle(o, true), [h("div", "cd-v", null, [b.temp]), h("div", "cd-s", null, [b.words + (showPlace && b.place ? " · " : ""), showPlace && b.place ? h("span", "wx-town", null, [b.place]) : null])]);
       if (o.style === "card") {
         return h("div", "cd-wx " + cardClass(o), withStyle({ "min-width": "300px" }, textStyle(o)), [
-          showPlace ? h("div", "cd-k", null, [b.place]) : null,
+          showPlace ? h("div", "cd-k", null, [h("span", "wx-town", null, [b.place])]) : null,
           h("div", "cd-row", { "margin-top": "8px" }, [b.icon, h("span", "cd-v", null, [b.temp])]),
           h("div", "cd-s", null, [b.words])
         ]);
       }
       if (b.icon) { b.icon.style.width = "32px"; b.icon.style.height = "32px"; }
       return h("div", "cd-wx" + (o.shade === "panel" ? " cd-shade-panel" : ""), withStyle({ "font-size": "30px" }, textStyle(o, true)), [
-        h("span", "cd-row", { gap: "10px" }, [b.icon, (showPlace && b.place ? b.place + " · " : "") + b.temp + (b.words ? " · " + b.words : "")])
+        // the town is the place's own name (app.js weatherPlace), and a long one ends in "..." (.wx-town)
+        h("span", "cd-row", { gap: "10px" }, [b.icon, h("span", null, { "white-space": "nowrap" }, [showPlace && b.place ? h("span", "wx-town", null, [b.place]) : null, (showPlace && b.place ? " · " : "") + b.temp + (b.words ? " · " + b.words : "")])])
       ]);
     }
     if (t === "smart") return smart(o);
@@ -1465,6 +1536,46 @@
   }
   function saveEdits() { try { if (Object.keys(EDITS).length) localStorage.setItem(EDITS_KEY, JSON.stringify(EDITS)); else localStorage.removeItem(EDITS_KEY); } catch (e) {} }
   function editsOf(id, kind) { var e = EDITS[id + "|" + kind]; return Array.isArray(e) ? e.slice() : null; }
+  // Each widget's own settings (docs/WIDGET-SETTINGS-CONTRACT.md) are kept by app.js in Home settings
+  // (ST.widgets["<id>|<kind>"]), never here and never in a design; widgets read them as env.wset, by the
+  // widget's id. A widget in a smart stack has the id "<stack id>/<its place in the stack>".
+  // Every widget on the home now, a stack's widgets too: [{ key, id, kind, label, x, y, w, h }].
+  function widgetList() {
+    var out = [], seen = {};
+    if (D && ON) list(D.objects).forEach(function (o) {
+      o = obj(o);
+      if (o.type !== "widget") return;
+      // a smart stack has settings of its own (when it moves on), then each of its widgets has its own
+      var each = o.kind === "stack" ? [{ id: o.id, it: o }].concat(list(o.items).map(function (it, i) { return { id: o.id + "/" + i, it: obj(it) }; })) : [{ id: o.id, it: o }];
+      each.forEach(function (e) {
+        var key = e.id + "|" + e.it.kind;
+        if (!e.it.kind || seen[key]) return;
+        seen[key] = 1;
+        var x = JSON.parse(JSON.stringify(obj(e.it.opts)));
+        // Studio's own Turns control keeps the stack's turn at the top (o.turn), the way the TV reads it
+        if (e.it.kind === "stack" && x.turn === undefined && e.it.turn !== undefined) x.turn = e.it.turn;
+        out.push({ key: key, id: e.id, kind: e.it.kind, label: obj(e.it.opts).label || "", opts: x, x: +o.x || 0, y: +o.y || 0, w: +o.w || 0, h: +o.h || 0 });
+      });
+    });
+    return out;
+  }
+  // every container of apps on the home a person may change (the same ones Hold OK changes)
+  function appWidgets() {
+    var W = window.CouchWidgets, A = window.CouchApps, out = [];
+    if (!(D && ON) || !W || !W.appKinds) return out;
+    var env = wenv(), have = W.installedApps(env);
+    list(D.objects).forEach(function (o) {
+      o = obj(o);
+      if (o.type !== "widget" || W.appKinds().indexOf(o.kind) < 0) return;
+      var keys = W.appKeys(o, env);
+      out.push({ key: o.id + "|" + o.kind, kind: o.kind, label: obj(o.opts).label || "", max: W.appMax(o.kind), edited: !!EDITS[o.id + "|" + o.kind],
+        apps: keys.map(function (k) {
+          var c = A && A.get(k), hit = c ? A.resolve(k, have) : have.filter(function (a) { return a.package === k; })[0];
+          return { key: k, name: c ? c.name : hit ? String(hit.name || k) : String(k).split(".").pop(), missing: !hit };
+        }) });
+    });
+    return out;
+  }
   // what a widget may know: demo data in the designer, else what this TV really has (app.js hooks)
   var DATA_V = 0, DATA_KEYS = {};
   function wenv() {
@@ -1474,8 +1585,37 @@
     var sport = !!(D && list(D.objects).some(function (o) { o = obj(o); return o.type === "widget" && [o].concat(list(o.items)).some(function (it) { return obj(it).kind === "sports"; }); }));
     return { demo: !!(FORCE_DEMO || DEMO_ON), preview: PREVIEW, card: IN_CARD, designer: DESIGNER, data: data, look: obj(D && D.look), sport: sport,
       edits: DESIGNER || PREVIEW ? null : editsOf,
+      // each widget's own settings on this TV, by its id (app.js data().wset); none in the designer or a preview
+      wset: DESIGNER || PREVIEW || FORCE_DEMO || DEMO_ON ? null : (data && data.wset) || null,
       clock24: hooks.clock24 ? hooks.clock24() : false, ha: !!(window.smartHome && window.smartHome.enabled && window.smartHome.enabled()), rooms: LIVE.rooms,
-      icon: function (name, size, set) { return icon(name, size, set); }, colour: colour, imgOk: imgOk };
+      icon: function (name, size, set) { return icon(name, size, set); }, colour: colour, imgOk: imgOk,
+      // a widget waiting for its town, photos or calendar shows the phone page's code (widgets.js
+      // setupFace): whether this home has that page, its address with the pairing code, and a way to ask
+      phone: !DESIGNER && !PREVIEW && typeof hooks.phoneLink === "function" && !!window.TVQR, phoneUrl: PLINK.url, wantPhone: askPhone };
+  }
+  // The phone page's address with its pairing code, kept while a widget on screen shows it as a code
+  // (asked again every 60 s while one is there; the code changes every few minutes): a new one draws
+  // the widgets again. Never in the designer or a preview.
+  var PLINK = { url: "", at: 0, busy: false };
+  var PLINK_RE = /^http:\/\/([^\/#?]+)(\/setup(?:\?tv=[A-Za-z0-9_-]+)?)#pin=(\d{6})$/;
+  function askPhone() {
+    if (PLINK.busy || DESIGNER || PREVIEW || typeof hooks.phoneLink !== "function" || Date.now() - PLINK.at < 5000) return;
+    PLINK.busy = true; PLINK.at = Date.now();
+    var done = function (u) {
+      PLINK.busy = false;
+      u = PLINK_RE.test(u || "") ? u : "";
+      if (u !== PLINK.url) { PLINK.url = u; if (D && ON) objects(D); }
+    };
+    try { hooks.phoneLink().then(done, function () { done(""); }); } catch (e) { done(""); }
+  }
+  if (typeof setInterval === "function") setInterval(function () { if (D && ON && document.querySelector('.cw[data-face="1"]') && Date.now() - PLINK.at >= 60000) askPhone(); }, 10000);
+  // the phone page at one widget, and at its step when it needs one (setup.html #widget=, &connect=)
+  function phoneAt(id, need) {
+    return hooks.phoneLink().then(function (u) {
+      if (!PLINK_RE.test(u || "")) throw new Error("no phone page");
+      if (u !== PLINK.url) { PLINK.url = u; PLINK.at = Date.now(); }
+      return u + (id ? "&widget=" + encodeURIComponent(id) : "") + (need ? "&connect=" + need : "");
+    });
   }
 
   // ---------------- smart home widgets ----------------
@@ -1822,7 +1962,9 @@
     if (wxEl.getAttribute("data-k") !== key) {
       wxEl.setAttribute("data-k", key);
       while (wxEl.firstChild) wxEl.removeChild(wxEl.firstChild);
-      if (w) { var span = document.createElement("span"); [].slice.call(w.childNodes).forEach(function (c) { span.appendChild(c.cloneNode(true)); }); wxEl.appendChild(span); }
+      if (w) { var span = document.createElement("span"); [].slice.call(w.childNodes).forEach(function (c) { span.appendChild(c.cloneNode(true)); }); var lead = span.querySelector(".wx-place");
+        if (lead && lead.firstChild && lead.firstChild.nodeType === 3) lead.firstChild.nodeValue = lead.firstChild.nodeValue.replace(/^\s*\u00b7\s*/, "");
+        wxEl.appendChild(span); }
     }
     if (D && list(D.objects).some(function (o) { o = obj(o); return o.type === "weather" || (o.type === "smart" && o.instead === "bigtemp"); })) objects(D);
   }
@@ -1880,14 +2022,24 @@
   // It plays only once its still picture has loaded, while the design is on and the home is on
   // screen: app.js holds it ("away" while an app is in front or the screen saver is up, "idle" under
   // the ambient clock, "off" with the screen off), and a hidden page holds it too.
-  var VP = null, HOLD = {};
+  var VP = null, HOLD = {}, STILL_KEY = "couchtv.video.still";
   function vidRef(d) { var bg = obj(d && d.background); return imgOk(bg.image) && bg.video ? bg.video : ""; }
   function vidEnv() {
     var e = hooks.videoEnv ? obj(hooks.videoEnv()) : {}, nav = window.navigator || {}, calm = false;
     try { calm = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); } catch (x) {}
     return { designer: DESIGNER, lighter: !!e.lighter, powerSave: !!e.powerSave, saveData: !!(nav.connection && nav.connection.saveData), reducedMotion: calm,
       memory: Number(nav.deviceMemory) || 0, screenPx: ((window.screen && window.screen.width) || innerWidth) * (window.devicePixelRatio || 1),
-      slow: !DESIGNER && window.CouchVideo.slowMarked() };
+      slow: !DESIGNER && window.CouchVideo.slowMarked(), stillChosen: !DESIGNER && store(STILL_KEY) === "1" };
+  }
+  // Home settings, Designs: why the video shows only its still picture, or, on a 1 GB TV, that it plays
+  // the smaller copy and how to get the still picture instead ("" otherwise)
+  function videoNote() {
+    var vs = VP ? VP.state() : null;
+    if (!vs || store(STILL_KEY) === "1") return "";   // the still picture chosen: the Designs row says so itself
+    if (vs.why && (vs.state === "still" || vs.state === "failed")) return ". Video background: its still picture shows, " + vs.why;
+    var mem = Number((window.navigator || {}).deviceMemory) || 0;
+    if (vs.ref && mem >= 1 && mem < 2 && !DESIGNER && vs.state !== "off") return ". Video background: plays a smaller copy, as this TV has 1 GB of memory";
+    return "";
   }
   function vidWanted() { return ON && BG.ok && !document.hidden && !Object.keys(HOLD).some(function (k) { return HOLD[k]; }); }
   function video(d) {
@@ -1963,6 +2115,24 @@
     if (ak !== appsKey && hooks.apps) { appsKey = ak; hooks.apps(); }
     tiles();
     tell("couchtv:applied");
+    setupSoon();
+  }
+  // A design that just arrived with widgets waiting for something private (a town, photos, a calendar):
+  // one card for 2 minutes, "Set up your widgets" and the code that opens the phone page at the first of
+  // them (setup.html #widgets). Once per design on this TV; Back closes it. Only where the phone page exists.
+  var SETUP_SEEN = "couchtv.design.setupcard", setupT = null;
+  function setupSoon() {
+    clearTimeout(setupT);
+    if (DESIGNER || PREVIEW || typeof hooks.phoneLink !== "function" || !window.TVQR) return;
+    var hk = hashOf(D);
+    if (store(SETUP_SEEN) === hk) return;
+    // the widgets' data (the town, photos) comes in a moment after the design: look once it has
+    setupT = setTimeout(function () {
+      if (!(D && ON) || hashOf(D) !== hk || !document.querySelector('.cw[data-face="1"]')) return;
+      if (NAV.sheetOpen() || (window.CouchDetail && window.CouchDetail.isOpen()) || ASK) return;
+      store(SETUP_SEEN, hk);
+      NAV.setupCard();
+    }, 4000);
   }
 
   function clear() {
@@ -2026,7 +2196,7 @@
     clear();
     var t = document.createElement("div");
     t.className = "cd-escaped";
-    t.textContent = "Design switched off. This is the normal home. Turn it back on in Home settings, couch-tv Studio.";
+    t.textContent = "Design switched off. This is the normal home. Turn it back on in Home settings, Designs.";
     t.setAttribute("style", "position:fixed;left:50%;top:2rem;transform:translateX(-50%);z-index:60;padding:0.875rem 1.5rem;border-radius:2rem;background:rgba(16,16,20,0.9);color:#fff;font-size:1.4375rem;font-weight:600");
     document.body.appendChild(t);
     setTimeout(function () { t.remove(); }, 6000);
@@ -2106,6 +2276,10 @@
     card.appendChild(back);
     var layer = document.createElement("div");
     layer.setAttribute("style", "position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0;transform:scale(" + k + ");font-family:Inter, sans-serif;color:#fff");
+    // the home's own parts the design keeps (the clock, the date, Keep watching, the dock), sketched where
+    // it puts them: a design that only restyles them (Couch Original) showed just its photo here, so the
+    // card did not show what "Check it looks right" asks about (launch audit 0.13.9, 22 Nov 2026)
+    try { homeParts(clean).forEach(function (n) { layer.appendChild(n); }); } catch (e) { /* the objects still draw */ }
     IN_CARD = true;   // the "Use this design?" card: drawn before this TV's app list is read (widgets.js appsFor)
     try {
       list(clean.objects).forEach(function (o) {
@@ -2121,6 +2295,52 @@
     card.appendChild(tag);
     return card;
   }
+  // The sketch of the home's parts for the preview card, in 1920 x 1080 pixels, from the clean design:
+  // each part where the design moves it, at its size, in its font and colour, left out when it hides it.
+  // Shapes stand in for the apps and shows (this TV's own app list is not read before the answer).
+  function homeParts(clean) {
+    var E = obj(clean.elements), out = [], now = new Date();
+    var hid = function (k) { return obj(E[k]).hidden === true; };
+    var box = function (css, text) { var n = document.createElement("div"); n.setAttribute("style", "position:absolute;" + css); if (text) n.textContent = text; out.push(n); return n; };
+    var at = function (m, origin) { return moved(m) ? "transform:translate(" + m.x + "px," + m.y + "px) scale(" + m.s + ");transform-origin:" + origin + ";" : ""; };
+    var font = function (e) { var f = fontOf(obj(e).font); return f ? "font-family:" + f + ";" : ""; };
+    var ink = function (e, def) { return "color:" + (colour(obj(e).colour) || def) + ";"; };
+    if (!hid("clock")) {
+      var ce = obj(E.clock), cm = ce.at === "scene" ? { x: 0, y: 0, s: 1, r: 0 } : place(ce), hh = now.getHours();
+      var time = (ce.format === "24h" ? ("0" + hh).slice(-2) : String(hh % 12 || 12)) + ":" + ("0" + now.getMinutes()).slice(-2);
+      var cw = parseInt(ce.weight, 10);
+      box("left:0;right:0;top:" + (184 + cm.y) + "px;text-align:center;white-space:nowrap;font-size:" + Math.round(400 * cm.s) + "px;line-height:0.86;letter-spacing:-0.045em;" +
+        "font-weight:" + (cw >= 100 && cw <= 900 ? cw : 200) + ";" + font(ce) + ink(ce, "rgba(255,255,255,0.9)") + "text-shadow:0 0.5rem 2.5rem rgba(0,0,0,0.3);transform:translateX(" + cm.x + "px)", time);
+    }
+    if (!hid("date")) {
+      // in the TV's language and the design's date format, as the home writes it (app.js clock)
+      var de = obj(E.date), loc = window.I18N && window.I18N.locale ? window.I18N.locale() : "en-AU";
+      var day = now.toLocaleDateString(loc, DATE_FORMATS[de.format] || { weekday: "long", day: "numeric", month: "long" }).replace(/,/g, "");
+      day = day.charAt(0).toUpperCase() + day.slice(1);
+      box("left:0;right:0;top:96px;text-align:center;white-space:nowrap;font-size:36px;font-weight:600;" + font(de) + ink(de, "#fff") + at(place(de), "50% 0") + "text-shadow:0 0.125rem 1rem rgba(0,0,0,0.35)", day);
+    }
+    if (!hid("keep_watching")) {
+      var kw = place(E.keep_watching), shelf = box("left:80px;top:650px;width:1760px;height:200px;" + at(kw, "0 0"));
+      for (var i = 0; i < 3; i++) {
+        var c = document.createElement("div");
+        c.setAttribute("style", "position:absolute;top:44px;left:" + (i * 544) + "px;width:520px;height:146px;border-radius:24px;background:rgba(18,19,24,0.62);box-shadow:inset 0 0 0 2px rgba(255,255,255,0.1)");
+        shelf.appendChild(c);
+      }
+    }
+    if (!hid("dock")) {
+      var dk = obj(E.dock), dm = place(dk), size = num(dk.icon_size, 112, 40, 240), gap = num(dk.icon_gap, 26, 0, 120);
+      var n = Math.min(12, Math.max(4, Math.floor((1728 - 40 + gap) / (size + gap)))), w = n * size + (n - 1) * gap + 40;
+      var radius = SHAPES[dk.icon_shape] !== undefined ? SHAPES[dk.icon_shape] : "22.5%";
+      var bar = box("left:" + Math.round((1920 - w) / 2) + "px;top:" + (1080 - 48 - size - 40) + "px;width:" + w + "px;height:" + (size + 40) + "px;border-radius:" + Math.round((size + 40) * 0.32) + "px;" +
+        "background:rgba(255,255,255,0.1);box-shadow:inset 0 0 0 2px rgba(255,255,255,0.14);" + at({ x: dm.x, y: dm.y, s: dm.s, r: 0 }, "50% 100%"));
+      for (var j = 0; j < n; j++) {
+        var t = document.createElement("div");
+        t.setAttribute("style", "position:absolute;top:20px;left:" + (20 + j * (size + gap)) + "px;width:" + size + "px;height:" + size + "px;border-radius:" + (radius === "0" ? "8%" : radius) + ";background:rgba(255,255,255," + (j >= n - 2 ? "0.22" : "0.78") + ")");
+        bar.appendChild(t);
+      }
+    }
+    return out;
+  }
   function askFirst(d) {
     // the objects' own styles, for the preview card
     if (!document.getElementById("cd-ask-style")) { var s = document.createElement("style"); s.id = "cd-ask-style"; s.textContent = OBJ_CSS; document.head.appendChild(s); }
@@ -2131,7 +2351,7 @@
     var col = document.createElement("div"); col.setAttribute("style", "flex:1;min-width:0");
     var h1 = document.createElement("div"); h1.textContent = "A new home design arrived. Use this design?";
     h1.setAttribute("style", "font-size:3.25rem;line-height:4rem;font-weight:700;letter-spacing:-0.01em");
-    var p = document.createElement("div"); p.textContent = "Check it looks right first: its words and pictures are the ones whoever made it chose. Keep my home leaves your TV exactly as it is.";
+    var p = document.createElement("div"); p.textContent = "This design came from Couch TV Studio. Keep my home leaves your TV exactly as it is.";
     p.setAttribute("style", "margin-top:1.25rem;font-size:1.75rem;line-height:2.375rem;color:rgba(255,255,255,0.82);max-width:44rem");
     var row = document.createElement("div"); row.setAttribute("style", "margin-top:2.5rem;display:flex;flex-direction:column;align-items:flex-start;gap:1.25rem");
     var mk = function (label, big) { var b = document.createElement("div"); b.textContent = label; b.setAttribute("style", "padding:" + (big ? "1.375rem 3rem" : "1rem 2.25rem") + ";border-radius:3rem;font-size:" + (big ? "2rem" : "1.625rem") + ";font-weight:700;background:rgba(255,255,255,0.12)"); row.appendChild(b); return b; };
@@ -2152,6 +2372,9 @@
       box.remove(); ASK = null;
       if (use) {
         store("couchtv.design.ok", hashOf(d)); store("couchtv.design.no", null);
+        // the person is at the remote: the home that starts next shows where the focus is at once, so the
+        // next press moves from a tile they can see (focusAfterAnswer)
+        try { sessionStorage.setItem(KEYS_SHOWN, "1"); } catch (e) {}
         // its look settings are read when the home starts: start again with it
         setTimeout(function () { try { location.reload(); } catch (e) { apply(d); } }, 50);
       } else { store("couchtv.design.no", hashOf(d)); escaped = true; }
@@ -2168,6 +2391,30 @@
     ASK = { box: box, done: done };
   }
 
+  // ---------------- the focus on a design ----------------
+  // A design opens calm, with no focus drawn until a key is pressed (css(): html.cd:not(.cd-keys)). The
+  // first arrow press only shows where the focus is: it used to move it too, from a tile nobody could
+  // see, and Down from the dock opened More apps by surprise (launch audit 0.13.9, 22 Nov 2026). OK, Back
+  // and the rest act at once, as before. After Use this design the home that starts again shows the
+  // focus straight away: the person is holding the remote.
+  var KEYS_SHOWN = "couchtv.design.keys";
+  var ARROW = { ArrowUp: 1, ArrowDown: 1, ArrowLeft: 1, ArrowRight: 1, Up: 1, Down: 1, Left: 1, Right: 1 };
+  function isArrow(e) { return !!ARROW[e.key] || (e.keyCode >= 37 && e.keyCode <= 40) || (e.keyCode >= 19 && e.keyCode <= 22); }
+  function focusAfterAnswer() {
+    var said = null;
+    try { said = sessionStorage.getItem(KEYS_SHOWN); sessionStorage.removeItem(KEYS_SHOWN); } catch (e) {}
+    if (said && ON && !DESIGNER) ROOT.classList.add("cd-keys");
+  }
+  function firstKey(e) {
+    if (!ON || ROOT.classList.contains("cd-keys")) return;
+    ROOT.classList.add("cd-keys");
+    // only on the home itself: Home settings, a question or a sheet draw their own focus
+    // (nor a home asleep behind its idle photo, the ambient clock or Screen off: that press wakes it)
+    if (DESIGNER || ASK || !isArrow(e) || /\b(setting|idle-photo)\b/.test(document.documentElement.className) ||
+      document.querySelector(".share-home, .cw-sheet, #screen-off-overlay.active, #idle-ambient-overlay.active")) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+  }
+
   // ---------------- what app.js asks ----------------
   // ---------------- the remote in widget mode (widgets/GRID.md, "Focus and the remote") ----------------
   // Focus lives on widgets. A widget with inner items (a folder's apps, a dock, scene buttons) is
@@ -2177,7 +2424,7 @@
   // the nearest by edge distance plus twice the sideways gap. Going back the opposite way returns to
   // where you came from. Nothing wraps round the screen.
   // the Settings button on a design (html.cd-wmode only, widgets.css .cw-gearchip): top right, small,
-  // never in couch-tv Studio or a preview. OK on it opens Home settings, like the gear tile on the classic home.
+  // never in Couch TV Studio or a preview. OK on it opens Home settings, like the gear tile on the classic home.
   var GEAR = null, GEAR_ID = "__gear", TIP_USED = "couchtv.wtip.used";
   function gearChip() {
     if (DESIGNER || PREVIEW || !document.body) return null;
@@ -2242,6 +2489,9 @@
   var NAV = (function () {
     var cur = null, last = null, sheet = null, okDown = false, okHeld = false, okT = null, okSoon = null, okStart = 0, okLast = 0, okSwallow = false, tipShown = false, tracing = false;
     function rectOf(el) { var r = el.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom, w: r.width, h: r.height }; }
+    // a setting the TV or the phone offers now (pre: true), as Home settings lists them
+    function tvSetting(s) { return s && s.pre === true && (!Array.isArray(s.where) || s.where.indexOf("tv") >= 0 || s.where.indexOf("phone") >= 0); }
+    function hasTvSettings(kind) { var Caps = window.CouchWidgetCaps; return !!(kind && Caps && Caps.settings && Caps.settings(kind).some(tvSetting)); }
     function stops() {
       var out = [], look = [];
       [layers.front, layers.back].forEach(function (L) {
@@ -2251,8 +2501,14 @@
           var root = wrap.querySelector(".cw");
           if (!root) return;
           var inner = root.hasAttribute("data-stack") ? [] : [].slice.call(root.querySelectorAll("[data-act]")).filter(function (n) { return n !== root && n.offsetWidth > 0 && getComputedStyle(n).visibility !== "hidden"; });
-          var s = { id: wrap.getAttribute("data-obj"), wrap: wrap, el: root, box: rectOf(root), inner: inner };
-          if (!inner.length && !root.hasAttribute("data-act")) { look.push(s); return; }
+          var s = { id: wrap.getAttribute("data-obj"), wrap: wrap, el: root, box: rectOf(root), inner: inner, grid: !!root.querySelector("[data-cols]") };
+          if (!inner.length && !root.hasAttribute("data-act")) {
+            // a widget only to look at, with settings of its own (a Countdown, the Welcome words): a stop on
+            // the TV too, and OK on it opens the Hold OK menu with Edit on the TV (0.13.9, the owner:
+            // "Holding OK on any widget allows you to edit it")
+            if (!DESIGNER && hasTvSettings(root.getAttribute("data-kind"))) { root.setAttribute("data-act", "menu"); root.setAttribute("data-name", "Home menu"); out.push(s); return; }
+            look.push(s); return;
+          }
           out.push(s);
         });
       });
@@ -2306,7 +2562,9 @@
     function shown() { return ON && ROOT.classList.contains("cd-wmode") && !(DESIGNER && ROOT.classList.contains("cd-edit")); }
     function paint() {
       [].forEach.call(document.querySelectorAll(".cw-focus, .cw-ifocus, .cw-hasfocus"), function (n) { n.classList.remove("cw-focus", "cw-ifocus", "cw-hasfocus"); if (n.classList.contains("cw")) n.style.removeProperty("transform"); });
-      if (!cur || !shown() || sheet) return;
+      // a sheet open: its own focus stays (a redraw behind it, new data or a save, cleared it)
+      if (sheet) { paintSheet(); return; }
+      if (!cur || !shown()) return;
       var S = stops(), s = find(S, cur.id);
       if (!s) { cur = null; return; }
       s.wrap.classList.add("cw-hasfocus");
@@ -2325,7 +2583,12 @@
       if (s.inner.length && cur.i >= 0 && s.inner[cur.i]) {
         var ib = s.inner[cur.i];
         var ic = s.inner.map(function (bx, k) { return { k: k, box: bx }; }).filter(function (x) { return x.k !== cur.i; });
-        var p = pick(ib, ic, dx, dy);
+        // in rows of apps, Left and Right stay in the row (never a slant to the row above)
+        var p = pick(ib, s.grid && dx ? ic.filter(function (x) { return overlap(ib, x.box, dx) > 1; }) : ic, dx, dy);
+        // apps in rows (a folder, an app grid): Right at the end of a row goes on to the first app of the
+        // next row, and Left at the start of one back to the last app of the row above, so every app is
+        // a stop on the way across (0.13.10: Right from the third app skipped the fourth, one row down)
+        if (!p && dx && s.grid && s.inner[cur.i + dx]) p = { k: cur.i + dx };
         if (p) { var c1 = { id: s.id, i: p.k }; return { cur: c1, last: { dir: dir, from: from, to: c1 }, moved: true }; }
       }
       var t = pick(s.box, S.filter(function (x) { return x !== s; }), dx, dy);
@@ -2340,7 +2603,7 @@
       var c2 = { id: t.id, i: i };
       return { cur: c2, last: { dir: dir, from: from, to: c2 }, moved: true };
     }
-    function boxesOf(S) { return S.map(function (x) { return { id: x.id, box: x.box, inner: x.inner.map(rectOf), el: x.el }; }); }
+    function boxesOf(S) { return S.map(function (x) { return { id: x.id, box: x.box, inner: x.inner.map(rectOf), el: x.el, grid: x.grid }; }); }
     function move(dx, dy) {
       var S = stops();
       if (!S.length) return false;
@@ -2350,14 +2613,25 @@
       // the Settings button sits over the top right corner, so plain geometry may never reach it: Up or
       // Right at the edge of the screen goes to it, and any arrow from it goes back to the nearest widget
       var gs = find(S, GEAR_ID), rest = S.filter(function (x) { return x.id !== GEAR_ID; });
+      // Since 0.13.6 the gear goes wherever it covers nothing (a corner or an edge, left or right), so
+      // "towards the edge" is towards the side it is on, not always up and right. On Guest Welcome it
+      // sat on the left and only Up from the clock on the right reached it (a TCL, 20 Nov 2026).
+      var vw = window.innerWidth || 1920, vh = window.innerHeight || 1080;
+      var gx = gs ? (gs.box.l + gs.box.r) / 2 : 0, gy = gs ? (gs.box.t + gs.box.b) / 2 : 0;
+      // tucked (hidden until reached, opacity 0, still a 64x64 box): never a stop for arrow geometry
+      var shown = gs && !gs.el.classList.contains("cw-gear-tuck");
+      function towardGear() { return (dy < 0 && gy < vh / 2) || (dy > 0 && gy >= vh / 2) || (dx > 0 && gx >= vw / 2) || (dx < 0 && gx < vw / 2); }
       if (gs && cur && cur.id === GEAR_ID) {
-        if (!rest.length || dy < 0 || dx > 0) return false;
-        var gc = { x: (gs.box.l + gs.box.r) / 2, y: (gs.box.t + gs.box.b) / 2 };
-        var near = rest.slice().sort(function (a, b) { return Math.hypot((a.box.l + a.box.r) / 2 - gc.x, (a.box.t + a.box.b) / 2 - gc.y) - Math.hypot((b.box.l + b.box.r) / 2 - gc.x, (b.box.t + b.box.b) / 2 - gc.y); })[0];
+        // toward the gear's own edge does nothing, unless it is the way back to where the remote came from
+        if (!rest.length || (towardGear() && !(last && last.to.id === GEAR_ID && last.dir === (-dx) + "," + (-dy)))) return false;
+        var fromGear = shown ? step(boxesOf(S), cur, last, dx, dy) : { moved: false };
+        if (fromGear.moved && fromGear.cur.id !== GEAR_ID) { cur = fromGear.cur; last = fromGear.last; paint(); return true; }
+        var near = rest.slice().sort(function (a, b) { return Math.hypot((a.box.l + a.box.r) / 2 - gx, (a.box.t + a.box.b) / 2 - gy) - Math.hypot((b.box.l + b.box.r) / 2 - gx, (b.box.t + b.box.b) / 2 - gy); })[0];
         cur = { id: near.id, i: near.inner.length ? 0 : -1 }; last = null; paint(); return true;
       }
-      var r = step(boxesOf(rest.length ? rest : S), cur, last, dx, dy);
-      if (gs && !r.moved && cur && (dy < 0 || dx > 0) && !tracing) { last = null; cur = { id: GEAR_ID, i: -1 }; paint(); return true; }
+      // a gear on screen is a stop like any other, so the arrow pointing at it reaches it
+      var r = step(boxesOf(shown && rest.length ? S : rest.length ? rest : S), cur, last, dx, dy);
+      if (gs && !r.moved && cur && towardGear() && !tracing) { last = null; cur = { id: GEAR_ID, i: -1 }; paint(); return true; }
       cur = r.cur; last = r.last;
       paint();
       return true;
@@ -2379,33 +2653,53 @@
       el.classList.remove("cd-flash"); void el.offsetWidth; el.classList.add("cd-flash");
       if (what === "detail" || what === "folder") { openDetail(el); return; }
       if (what === "menu") { holdMenu(); return; }
+      if (what === "wphone" && !DESIGNER) { phoneSheet(arg); return; }
+      if (what === "wtv" && !DESIGNER) { tvEdit(arg); return; }
       if (what === "gear") tipUsed();
       if (what === "edit" || what === "pick") { edit(what === "pick" ? "pick" : arg, arg); return; }
-      if (what === "addapp" && !DESIGNER) { EDIT = appCtx(); if (EDIT) picker("add"); return; }
+      if (what === "addapp" && !DESIGNER) { EDIT = appCtx(); if (EDIT) { if (EDIT.max > 1) appSheet(EDIT); else picker("add"); } return; }
       if (what === "missing" && !DESIGNER) { say("Not on this TV. Install it from the App Store in More apps, or hold OK to change it."); return; }
       if (DESIGNER) { try { window.parent.postMessage({ type: "couchtv:open", name: el.getAttribute("data-name") || "" }, location.origin); } catch (x) {} return; }
       if (hooks.act) hooks.act(what, arg);
     }
     // the detail layer (widget-detail.js): the widget grows into a sheet; the remote stays in it until Back.
-    // What it does goes through the same hooks as the widgets' own buttons; in couch-tv Studio nothing is switched.
+    // What it does goes through the same hooks as the widgets' own buttons; in Couch TV Studio nothing is switched.
     function detailApi() {
       return { designer: DESIGNER,
         act: function (what, arg) { if (DESIGNER) { try { window.parent.postMessage({ type: "couchtv:open", name: String(arg || what) }, location.origin); } catch (x) {} return; } if (hooks.act) hooks.act(what, arg); },
         ha: hooks.ha && !DESIGNER ? function (a, e, v) { return hooks.ha(a, e, v); } : null,
         // Hold OK on an app inside a folder's full screen layer: the same menu as on the widget, for that app
-        hold: DESIGNER ? null : function (slot) { FORCE_SLOT = slot; holdMenu(); FORCE_SLOT = null; } };
+        hold: DESIGNER ? null : function (slot) { FORCE_SLOT = slot; holdMenu(); FORCE_SLOT = null; },
+        // a widget's setup layer: the phone page's code at its step, and "No phone? Set it up here"
+        phone: !DESIGNER && typeof hooks.phoneLink === "function" && window.TVQR ? phoneAt : null,
+        tvEdit: DESIGNER ? null : function (id) { if (window.CouchDetail) window.CouchDetail.close(true); tvEdit(id); } };
+    }
+    // the TV's own page for a widget (Home settings, the widget's page), else Home settings itself
+    function tvEdit(id) {
+      var Caps = window.CouchWidgetCaps, mine = widgetList().filter(function (x) { return x.id === id; })[0];
+      var has = mine && Caps && Caps.settings && Caps.settings(mine.kind).some(function (s) { return s && s.pre === true && (!Array.isArray(s.where) || s.where.indexOf("tv") >= 0); });
+      if (hooks.act) hooks.act(has ? "wset" : "gear", has ? mine.key : "");
     }
     function openDetail(el) {
       var root = el;
       while (root && !(root.classList && root.classList.contains("cw"))) root = root.parentNode;
       if (!root || !window.CouchDetail) return;
       paint();
-      window.CouchDetail.open(root, wenv(), detailApi());
+      // a place inside the widget that names its own layer (the Dock's "+3": the folder layer with every
+      // app): the layer is read from the widget's data-arg, so it carries that name while it opens
+      var arg = el !== root && el.getAttribute("data-arg"), had = root.getAttribute("data-arg");
+      if (arg) root.setAttribute("data-arg", arg);
+      try { window.CouchDetail.open(root, wenv(), detailApi()); }
+      finally { if (arg) { if (had === null) root.removeAttribute("data-arg"); else root.setAttribute("data-arg", had); } }
     }
     // a sheet over the home: a folder opened full screen, or the hold OK menu. The remote stays in it.
     function openSheet(title, items, hint) {
       closeSheet();
-      var el = h("div", "cw-sheet", { transform: "scale(" + innerWidth / 1920 + ")" }, [h("h2", "", null, [title])]);
+      // a menu (cw-msheet): a solid backdrop and rows that fit 1080 with the title and the hint (launch audit, 24 Nov
+      // 2026: on a Studio design the big clock showed through the rows, and the title and hint were cut off)
+      var el = h("div", "cw-sheet" + (items.menu ? " cw-msheet" : ""), { transform: "scale(" + innerWidth / 1920 + ")" }, [h("h2", "", null, [title])]);
+      // a line to read, never a stop for the remote (a widget with nothing to set on the TV)
+      if (items.note) el.appendChild(h("div", "cw-hint cw-note", { margin: "-24px 0 40px" }, [items.note]));
       var row = h("div", items.menu ? "cw-menu" : "cw-sheet-apps", null, items.nodes);
       el.appendChild(row);
       if (hint) el.appendChild(h("div", "cw-hint", null, [hint]));
@@ -2413,7 +2707,18 @@
       sheet = { el: el, nodes: items.nodes, i: 0 };
       paintSheet();
     }
-    function paintSheet() { if (sheet) sheet.nodes.forEach(function (n, k) { n.classList.toggle("cw-ifocus", k === sheet.i); }); }
+    function paintSheet() {
+      if (!sheet) return;
+      sheet.nodes.forEach(function (n, k) { n.classList.toggle("cw-ifocus", k === sheet.i); });
+      // a long app list (Add app, Change app): the list scrolls so the app the remote is on stays in view
+      // (a TCL, 20 Nov 2026: the list ran off the screen and the remote seemed to do nothing)
+      var box = sheet.el.querySelector(".cw-sheet-apps"), n = sheet.nodes[sheet.i];
+      if (box && n && box.scrollHeight > box.clientHeight) {
+        var top = n.offsetTop, bot = top + n.offsetHeight + 40;   // the list is positioned, so offsetTop is inside it
+        if (top - 24 < box.scrollTop) box.scrollTop = Math.max(0, top - 24);
+        else if (bot > box.scrollTop + box.clientHeight) box.scrollTop = bot - box.clientHeight;
+      }
+    }
     function closeSheet() { if (sheet && sheet.el.parentNode) sheet.el.parentNode.removeChild(sheet.el); sheet = null; paint(); }
     function holdMenu() {
       tipUsed();
@@ -2424,7 +2729,8 @@
       // that sends one more OK) lands on settings, never on a widget's own page (a clock's Timers)
       var nodes = [mk("Settings", "gear"), mk("All apps", "more"), mk("Smart home", "smart")];
       var layer = w && w.getAttribute("data-detail");
-      if (layer && window.CouchDetail) { var op = mk("Open " + (window.CouchDetail.title(layer) || "this widget"), "detail"); op.__root = w; nodes.splice(2, 0, op); }
+      // an app folder's own layer is every app again: "All apps" is already here, so no "Open Apps" beside it
+      if (layer && layer !== "folder" && window.CouchDetail) { var op = mk("Open " + (window.CouchDetail.title(layer) || "this widget"), "detail"); op.__root = w; nodes.splice(2, 0, op); }
       // an app in a dock, row, folder or app tile: change, move or remove it, or add one (kept on this TV)
       var ctx = EDIT = appCtx();
       if (ctx) {
@@ -2434,11 +2740,96 @@
           if (ctx.max > 1 && ctx.keys.length > 1) eds.push(mk("Move", "edit", "move"));
           eds.push(mk(folder ? "Remove from folder" : "Remove", "edit", "remove"));
         }
-        if (room && (ctx.slot !== 0 || ctx.max > 1)) eds.push(mk(folder ? "Add app to folder" : "Add app", "edit", "add"));
+        // a folder, dock, app grid or games: Add apps, the sheet with every app on this TV (0.13.11), full or
+        // not, since OK there also takes one out; a one app tile with nothing in it: Add app, as before
+        if (ctx.max > 1) eds.push(mk("Add apps", "edit", "apps"));
+        else if (room && ctx.slot !== 0) eds.push(mk(folder ? "Add app to folder" : "Add app", "edit", "add"));
         // Settings stays first on an app too: one more OK from the hold lands on Settings, never on Change app
         nodes = [nodes[0]].concat(eds, nodes.slice(1));
       }
-      openSheet(ctx && typeof ctx.slot === "number" ? (ctx.name || "App") : "Home", { menu: true, nodes: nodes }, "Back to close. Settings here is couch-tv's own: the remote's Settings button opens the TV's menu.");
+      // the widget's own settings (widget-caps.js settings, docs/WIDGET-SETTINGS-CONTRACT.md). Where the
+      // phone page exists (hooks.phoneLink: the on-TV app, the home computer for a TV it runs, the Couch TV
+      // home app's own page) it comes first (owner, 23 Nov 2026: set widgets up on the phone, not the TV):
+      // "<Widget>: set up on your phone" for a widget waiting for something private, else "Edit on your
+      // phone", each a QR code with "No phone? Set it up here" under it. Anywhere else "Edit on the TV",
+      // right after Settings. A smart stack: the widget showing in it now. A widget with nothing to set
+      // says so in a line, never with an item that does nothing.
+      var pw = w, Caps = window.CouchWidgetCaps, note = "", after = 0, phoneFirst = 0;
+      while (pw && !(pw.getAttribute && pw.getAttribute("data-obj"))) pw = pw.parentNode;
+      var pid = pw && pw.getAttribute("data-obj");
+      if (pid && !DESIGNER && Caps && Caps.settings) {
+        var wid = w && typeof w.__at === "function" && w.getAttribute("data-kind") === "stack" ? pid + "/" + w.__at() : pid;
+        // only a widget with a setting the TV or the phone offers now (pre: true), as Home settings lists them
+        var mine = widgetList().filter(function (x) { return x.id === wid && Caps.settings(x.kind).some(function (s) { return s && s.pre === true && (!Array.isArray(s.where) || s.where.indexOf("tv") >= 0 || s.where.indexOf("phone") >= 0); }); })[0];
+        var known = widgetList().filter(function (x) { return x.id === wid; })[0];
+        var faceEl = w && w.getAttribute("data-face") ? w : w && w.querySelector ? w.querySelector('.cw-slot.on [data-face="1"]') : null, need = faceEl ? faceEl.getAttribute("data-need") || "" : "";
+        if (typeof hooks.phoneLink === "function" && window.TVQR && known && (mine || need)) {
+          var nm = ((Caps.face && Caps.face(known.kind)) || Caps.get(known.kind) || {}).name || known.kind;
+          nodes.unshift(mk(need ? nm + ": set up on your phone" : "Edit on your phone", "wphone", known.id + "|" + need)); phoneFirst = 1;
+        } else if (mine) {
+          nodes.splice(1, 0, mk("Edit on the TV", "wset", mine.key)); after = 1;
+        } else if (known) note = "Nothing to set for this widget on the TV. Change how it looks in Couch TV Studio.";
+      }
+      // a smart stack: its own settings (when it moves on) after the widget showing in it. Where the phone
+      // page exists, on the phone like every other widget ("Edit the stack on your phone", right after the
+      // widget's own phone item); its sheet's "No phone? Set it up here" opens the stack's page in Home
+      // settings (tvEdit). Anywhere else "Edit the stack on the TV", after Settings.
+      if (pid && !DESIGNER && Caps && Caps.settings && wid !== pid && widgetList().some(function (x) { return x.id === pid && x.kind === "stack"; }) &&
+        Caps.settings("stack").some(function (s) { return s && s.pre === true; })) {
+        if (typeof hooks.phoneLink === "function" && window.TVQR) nodes.splice(phoneFirst, 0, mk("Edit the stack on your phone", "wphone", pid + "|"));
+        else nodes.splice(nodes.indexOf(nodes.filter(function (n) { return n.getAttribute("data-act") === "gear"; })[0]) + 1 + after, 0, mk("Edit the stack on the TV", "wset", pid + "|stack"));
+        // the stack itself has something to set: only the widget showing now has nothing
+        if (!mine) note = "Nothing to set for the widget showing now.";
+      }
+      openSheet(ctx && typeof ctx.slot === "number" ? (ctx.name || "App") : "Home", { menu: true, nodes: nodes, note: note }, "Back to close. Settings here is Couch TV's own: the remote's Settings button opens the TV's menu.");
+    }
+    // Set up on your phone: a QR code with the phone's Home settings page, the pairing code, this widget
+    // and its step (http://<tv>:5400/setup#pin=NNNNNN&widget=<id>&connect=<need>), then "No phone? Set it
+    // up here" for a home with no phone to hand (the widget's page in Home settings). The phone takes only
+    // the pin out of the address (shim.js).
+    function phoneSheet(arg) {
+      closeSheet();
+      var parts = String(arg || "").split("|"), id = parts[0], need = parts[1] || "";
+      var fail = function () { say("The phone page is not ready on this TV. Use Edit on the TV instead."); };
+      if (typeof hooks.phoneLink !== "function" || !window.TVQR) { fail(); return; }
+      phoneAt(id, need).then(function (link) {
+        var box = h("div", "cw-qr", { background: "#fff", padding: "24px", "border-radius": "24px", display: "inline-block" }, []);
+        try { box.appendChild(window.TVQR.svg(link, 420)); } catch (e) { fail(); return; }
+        box.setAttribute("data-link", link);
+        var here = h("div", "cw-mi", null, ["No phone? Set it up here"]);
+        here.setAttribute("data-act", "wtv"); here.setAttribute("data-arg", id); here.setAttribute("data-name", "No phone? Set it up here");
+        openSheet("Set up on your phone", { menu: true, nodes: [box, here] });
+        // the code, the one line under it, then the small way for a home with no phone (a stop like the code)
+        if (sheet) { sheet.el.classList.add("cw-phone"); box.parentNode.insertBefore(h("div", "cw-hint", { margin: "28px 0 36px" }, ["Scan with your phone camera."]), here); }
+        if (!sheet) return;
+        sheet.phone = arg;   // drawn again when the code changes (phoneAgain)
+        // and asked again every 20 s while it is open: a code that changed or ran out is never left on show
+        var mine = sheet, url = link;
+        (function again() {
+          setTimeout(function () {
+            if (sheet !== mine) return;
+            phoneAt(id, need).then(function (u2) {
+              if (sheet !== mine) return;
+              if (u2 !== url) phoneSheet(arg); else again();
+            }, function () { if (sheet === mine) phoneSheet(arg); });
+          }, 20000);
+        })();
+      }, fail);
+    }
+    // the card a new design brings when its widgets need setting up (setupSoon): 2 minutes, Back closes it
+    function setupCard() {
+      phoneAt("", "").then(function (u) {
+        var link = u + "&widgets", box = h("div", "cw-qr", { background: "#fff", padding: "24px", "border-radius": "24px", display: "inline-block" }, []);
+        try { box.appendChild(window.TVQR.svg(link, 420)); } catch (e) { return; }
+        box.setAttribute("data-link", link);
+        if (sheet && !sheet.arrive) return;   // something else opened meanwhile: leave it be
+        openSheet("Set up your widgets", { nodes: [box] }, "Scan with your phone camera.");
+        if (!sheet) return;
+        sheet.el.classList.add("cw-arrive");
+        sheet.arrive = true; sheet.phone = "arrive";
+        var mine = sheet;
+        setTimeout(function () { if (sheet === mine) closeSheet(); }, 120000);
+      }, function () {});
     }
     // ---- changing a container's apps with the remote ----
     var EDIT = null, MOVING = null, FORCE_SLOT = null;
@@ -2478,10 +2869,146 @@
       });
       openSheet(op === "add" ? (EDIT.kind === "folder" ? "Add app to folder" : "Add app") : "Change app", { nodes: nodes }, "Pick an app. Back to close");
     }
+    // ---- Add apps (0.13.11, owner approved in round 4): one sheet with every app on this TV. OK adds an
+    // app to the folder, dock, app grid or games, or takes it out; Hold OK on a picked app moves it along
+    // the picked ones; Back saves (kept on this TV, like every Hold OK change). The picked ones come first,
+    // numbered in their order. A picked app that is not on this TV stays in the list, dimmed, so OK can
+    // take it out. Reached from Hold OK, Add apps, from the Add app place, and from Home settings (the
+    // widget's page, Add apps), where it opens over the settings and Back goes back to them.
+    function appSheetCtx(key) {
+      var W = window.CouchWidgets, m = /^([A-Za-z0-9_-]{1,60})\|([a-z]{1,20})$/.exec(String(key || ""));
+      if (!m || DESIGNER || !W || !W.appKinds || W.appKinds().indexOf(m[2]) < 0 || !(D && ON)) return null;
+      var o = list(D.objects).map(obj).filter(function (x) { return x.id === m[1] && x.type === "widget" && x.kind === m[2]; })[0];
+      return o ? { o: o, id: o.id, kind: o.kind, slot: null, keys: W.appKeys(o, wenv()), max: W.appMax(o.kind), name: "" } : null;
+    }
+    function appSheet(c, done) {
+      var W = window.CouchWidgets, A = window.CouchApps, env = wenv(), have = W ? W.installedApps(env) : [];
+      if (!c || c.max < 2) return false;
+      if (!have.length) { say("No apps found on this TV yet."); return false; }
+      var keyOf = function (pkg) { return (A && A.idOf(pkg)) || pkg; };
+      var pkgOf = function (k) { var hit = A && A.get(k) ? A.resolve(k, have) : have.filter(function (a) { return a.package === k; })[0]; return hit ? hit.package : ""; };
+      var S = { c: c, done: done, order: c.keys.slice(0, c.max), was: JSON.stringify(c.keys.slice(0, c.max)), tiles: [], moving: null, down: false, held: false, t: null, soon: null, start: 0 };
+      S.order.forEach(function (k) { S.tiles.push({ key: k, pkg: pkgOf(k) }); });
+      have.forEach(function (a) { var k = keyOf(a.package); if (!S.tiles.some(function (x) { return x.key === k || x.pkg === a.package; })) S.tiles.push({ key: k, pkg: a.package }); });
+      S.tiles = S.tiles.slice(0, 160);
+      S.tiles.forEach(function (x) {
+        var app = W.appNode(x.pkg || "missing:" + x.key, 184, env);
+        app.removeAttribute("data-act");
+        x.el = h("div", "cw-as-tile", null, [app]);
+        x.el.setAttribute("data-key", x.key); if (x.pkg) x.el.setAttribute("data-pkg", x.pkg);
+      });
+      var Caps = window.CouchWidgetCaps, title = String(obj(c.o.opts).label || ((Caps && Caps.get && Caps.get(c.kind)) || {}).name || "Apps");
+      closeSheet();
+      S.count = h("span", "cw-as-count", null, [""]);
+      S.grid = h("div", "cw-sheet-apps cw-as-grid", null, []);
+      S.hint = h("div", "cw-hint cw-as-hint", null, []);
+      var el = h("div", "cw-sheet cw-appsheet", { transform: "scale(" + innerWidth / 1920 + ")" }, [h("div", "cw-as-head", null, [h("h2", "", null, [title]), S.count]), S.grid, S.hint]);
+      document.body.appendChild(el);
+      sheet = { el: el, nodes: [], i: 0, apps: S };
+      asDraw(S, 0);
+      return true;
+    }
+    function asPicked(S, x) { return S.order.indexOf(x.key) >= 0; }
+    // the tiles in their places: while moving, the picked ones first in their order (the rest as they were)
+    function asDraw(S, focusKey) {
+      if (S.moving) S.tiles = S.order.map(function (k) { return S.tiles.filter(function (x) { return x.key === k; })[0]; }).filter(Boolean).concat(S.tiles.filter(function (x) { return !asPicked(S, x); }));
+      while (S.grid.firstChild) S.grid.removeChild(S.grid.firstChild);
+      S.tiles.forEach(function (x) {
+        var n = S.order.indexOf(x.key), b = x.el.querySelector(".cw-as-badge");
+        if (b) x.el.removeChild(b);
+        if (n >= 0) x.el.appendChild(h("div", "cw-as-badge", null, [String(n + 1)]));
+        x.el.classList.toggle("cw-as-on", n >= 0);
+        x.el.classList.toggle("cw-as-moving", S.moving === x.key);
+        S.grid.appendChild(x.el);
+      });
+      sheet.nodes = S.tiles.map(function (x) { return x.el; });
+      if (typeof focusKey === "string") { var at = S.tiles.map(function (x) { return x.key; }).indexOf(focusKey); if (at >= 0) sheet.i = at; }
+      else if (typeof focusKey === "number") sheet.i = Math.max(0, Math.min(focusKey, S.tiles.length - 1));
+      S.count.textContent = S.order.length + " of " + S.c.max + " picked";
+      while (S.hint.firstChild) S.hint.removeChild(S.hint.firstChild);
+      if (S.moving) S.hint.appendChild(document.createTextNode("Left and Right move it. OK when it is in place."));
+      else [["OK", "adds or takes it out"], ["Hold OK", "moves it"], ["Back", "saves"]].forEach(function (p) { S.hint.appendChild(h("span", "", null, [h("b", "", null, [p[0]]), " ", p[1]])); });
+      paintSheet();
+    }
+    function asSay(text) { say(text); var t = document.querySelector(".cw-tip.cw-say"); if (t) t.style.zIndex = "61"; }
+    function asToggle(S) {
+      var x = S.tiles[sheet.i];
+      if (!x) return;
+      if (S.moving) { S.moving = null; asDraw(S, x.key); return; }
+      var n = S.order.indexOf(x.key);
+      if (n >= 0) S.order.splice(n, 1);
+      else if (S.order.length >= S.c.max) { asSay("That holds " + S.c.max + " apps. Take one out first."); return; }
+      else S.order.push(x.key);
+      asDraw(S, x.key);
+    }
+    function asHold(S) {
+      var x = S.tiles[sheet.i];
+      if (!x || S.moving) return;
+      if (!asPicked(S, x)) {
+        if (S.order.length >= S.c.max) { asSay("That holds " + S.c.max + " apps. Take one out first."); return; }
+        S.order.push(x.key);
+      }
+      S.moving = x.key;
+      asDraw(S, x.key);
+    }
+    function asMove(S, d) {
+      var at = S.order.indexOf(S.moving), to = at + d;
+      if (at < 0 || to < 0 || to >= S.order.length) return;
+      S.order[at] = S.order[to]; S.order[to] = S.moving;
+      asDraw(S, S.moving);
+    }
+    function asCols() {
+      var ns = sheet.nodes, top = ns.length ? ns[0].offsetTop : 0, n = 0;
+      for (var i = 0; i < ns.length && ns[i].offsetTop === top; i++) n++;
+      return Math.max(1, n);
+    }
+    // Back: saved when anything changed (EDITS, like Hold OK's other changes), then back where it came from
+    function asDone(S) {
+      clearTimeout(S.t); clearTimeout(S.soon);
+      var changed = JSON.stringify(S.order) !== S.was, c = S.c;
+      closeSheet();
+      if (changed) { saveKeys(c, S.order); if (!S.done) { cur = { id: c.id, i: 0 }; paint(); } say("Saved."); }
+      if (S.done) try { S.done(changed); } catch (e) {}
+    }
+    function asKeydown(e) {
+      var S = sheet.apps, a = arrowOf(e);
+      // Hebrew and Arabic: the tiles run from the right (the grid is a flex row in an rtl page), so Left and Right
+      // swap, as for the home's own arrows in keydown; moving an app follows the tiles the same way
+      if (a && a[0] && document.documentElement.dir === "rtl") a = [-a[0], a[1]];
+      if (backKey(e)) { if (e.repeat) return; if (S.moving) { var mk = S.moving; S.moving = null; asDraw(S, mk); } else asDone(S); return; }
+      if (a) {
+        if (S.moving) { asMove(S, a[0] || a[1]); return; }
+        var cols = asCols(), ni = sheet.i + (a[0] || a[1] * cols);
+        if (a[1] && ni >= sheet.nodes.length && Math.floor(sheet.i / cols) < Math.floor((sheet.nodes.length - 1) / cols)) ni = sheet.nodes.length - 1;
+        if (ni >= 0 && ni < sheet.nodes.length) { sheet.i = ni; paintSheet(); }
+        return;
+      }
+      if (!okKey(e)) return;
+      // the same hold rules as the home: a repeat, or a second down with no up between, is a hold; a TV
+      // that sends a held OK as quick down and up pairs still counts as held
+      // the same held OK still coming in after the hold (repeats, or quick down and up pairs): not a choice
+      var now = Date.now();
+      if (S.swallow) { if (now - S.last < 260) { S.last = now; return; } S.swallow = false; }
+      if (e.repeat || S.down) { if (S.down && !S.held) { clearTimeout(S.t); S.held = true; asHeld(S); } return; }
+      if (S.soon) { clearTimeout(S.soon); S.soon = null; S.down = true; if (now - S.start >= 650) { clearTimeout(S.t); S.held = true; asHeld(S); } return; }
+      S.down = true; S.held = false; S.start = now;
+      S.t = setTimeout(function () { if (!sheet || sheet.apps !== S) return; S.held = true; if (S.soon) { clearTimeout(S.soon); S.soon = null; } asHeld(S); }, 650);
+    }
+    function asHeld(S) { S.swallow = true; S.last = Date.now(); asHold(S); }
+    function asKeyup() {
+      var S = sheet.apps;
+      if (S.swallow) { S.last = Date.now(); S.down = false; clearTimeout(S.t); return; }
+      if (!S.down) return;   // the OK that opened the sheet, let go here: not a choice
+      S.down = false;
+      if (S.held) { clearTimeout(S.t); S.held = false; return; }
+      var heldFor = Date.now() - S.start;
+      S.soon = setTimeout(function () { S.soon = null; clearTimeout(S.t); if (sheet && sheet.apps === S && !S.held) asToggle(S); S.held = false; }, heldFor < 400 ? 140 : 90);
+    }
     function edit(op, arg) {
       var c = EDIT;
       if (!c) return;
       var keys = c.keys.slice(), A = window.CouchApps;
+      if (op === "apps") { appSheet(c); return; }
       if (op === "change" || op === "add") { picker(op); return; }
       if (op === "remove" && typeof c.slot === "number") { keys.splice(c.slot, 1); saveKeys(c, keys); cur = { id: c.id, i: Math.max(0, Math.min(c.slot, keys.length - 1)) }; paint(); say(c.kind === "folder" ? "Removed from the folder." : "Removed. Hold OK, Add app, to put one back."); return; }
       if (op === "move" && typeof c.slot === "number") { MOVING = c; say("Left and Right move it. OK when it is in place."); return; }
@@ -2507,6 +3034,9 @@
     function sheetKey(e, a) {
       if (a) {
         var n = sheet.nodes.length, cols = sheet.el.querySelector(".cw-menu") ? 1 : Math.max(1, Math.round(sheet.el.querySelector(".cw-sheet-apps").offsetWidth / 244));
+        // Hebrew and Arabic: a one app picker's tiles (Change app, Add app) run from the right, so Left and
+        // Right swap, as in Add apps and for the home's own arrows
+        if (a[0] && cols > 1 && document.documentElement.dir === "rtl") a = [-a[0], a[1]];
         var ni = sheet.i + a[0] + a[1] * cols;
         if (ni >= 0 && ni < n && !(a[0] && Math.floor(ni / cols) !== Math.floor(sheet.i / cols))) sheet.i = ni;
         paintSheet();
@@ -2524,7 +3054,11 @@
       if (tipShown || DESIGNER || PREVIEW) return;
       tipShown = true;
       try { if (localStorage.getItem(TIP_USED)) return; } catch (e) {}
-      var t = h("div", "cw-tip cw-tip-settings", null, ["Hold OK for apps and settings, or go Up or Right to the edge of the screen for the Settings gear. The remote's own Settings button opens the TV's menu."]);
+      // a gear hidden until reached (no clear spot on the design) only shows with Up or Right at the edge
+      var tucked = GEAR && GEAR.classList.contains("cw-gear-tuck");
+      var t = h("div", "cw-tip cw-tip-settings", null, [tucked ?
+        "Hold OK for apps and settings, or go Up or Right to the edge of the screen for the Settings gear. The remote's own Settings button opens the TV's menu." :
+        "Hold OK for apps and settings, or go to the Settings gear at the edge of the screen. The remote's own Settings button opens the TV's menu."]);
       document.body.appendChild(t);
       setTimeout(function () { t.style.opacity = "0"; setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 700); }, 9000);
     }
@@ -2536,11 +3070,12 @@
     function backKey(e) { return ["Escape", "Esc", "Backspace", "GoBack", "BrowserBack"].indexOf(e.key) >= 0 || e.keyCode === 27 || e.keyCode === 8 || e.keyCode === 10009 || e.keyCode === 461; }
     function ours() { return shown() && !ASK && (DESIGNER || !hooks.free || hooks.free()); }
     function keydown(e) {
-      if (window.CouchDetail && window.CouchDetail.isOpen()) { e.preventDefault(); e.stopPropagation(); window.CouchDetail.keydown(e); return; }
+      if (window.CouchDetail && window.CouchDetail.isOpen() && !(sheet && sheet.apps)) { e.preventDefault(); e.stopPropagation(); window.CouchDetail.keydown(e); return; }
       // trying it in the designer: Back with nothing open goes back to editing
       if (!sheet && DESIGNER && backKey(e) && shown()) { e.preventDefault(); e.stopPropagation(); try { window.parent.postMessage({ type: "couchtv:exit-remote" }, location.origin); } catch (x) {} return; }
       if (sheet) {
         e.preventDefault(); e.stopPropagation();
+        if (sheet.apps) { asKeydown(e); return; }
         if (backKey(e)) { closeSheet(); return; }
         var a = arrowOf(e);
         if (a) sheetKey(e, a);
@@ -2570,7 +3105,10 @@
           // Android's own long press: the held key comes again as a repeat (an ADB long press sends it at
           // once, then lets go). A repeat is a hold, so it opens the Home menu now and the key up after it
           // never opens the focused app (an ADB long press on a TCL opened Netflix, 19 Nov 2026).
-          if (e.repeat && okDown && !okHeld) { clearTimeout(okT); if (okSoon) { clearTimeout(okSoon); okSoon = null; } okHeld = true; okSwallow = true; okLast = Date.now(); holdMenu(); }
+          // A second down with no up between can only be the key still held, so it counts as a hold
+          // whether or not the browser marks it as a repeat: the TCL's WebView did not (20 Nov 2026,
+          // Netflix opened again with 0.13.6, which waited for e.repeat).
+          if (okDown && !okHeld) { clearTimeout(okT); if (okSoon) { clearTimeout(okSoon); okSoon = null; } okHeld = true; okSwallow = true; okLast = Date.now(); holdMenu(); }
           return;
         }
         // a TV that sends a held OK as quick down and up pairs (a TCL did): a down soon after an up is
@@ -2582,6 +3120,7 @@
       }
     }
     function keyup(e) {
+      if (sheet && sheet.apps) { if (okKey(e)) { e.preventDefault(); e.stopPropagation(); asKeyup(); } return; }
       if (okSwallow && okKey(e)) okLast = Date.now();
       if (window.CouchDetail && window.CouchDetail.isOpen() && !okDown) { e.preventDefault(); e.stopPropagation(); window.CouchDetail.keyup(e); return; }
       if (!okDown || !okKey(e)) return;
@@ -2608,7 +3147,21 @@
       focus: function (id, i) { cur = { id: String(id), i: typeof i === "number" ? i : -1 }; last = null; paint(); },
       moving: function () { return !!MOVING; },
       sheetOpen: function () { return !!sheet; },
-      back: function () { if (window.CouchDetail && window.CouchDetail.isOpen()) { window.CouchDetail.close(); return true; } if (sheet) { closeSheet(); return true; } return false; },
+      // Add apps for one container by "<object id>|<kind>" (Home settings); done(changed) after Back
+      appSheet: function (key, done) { return appSheet(appSheetCtx(key), done); },
+      // the phone code changed (the on-TV app, Auth.onPin): an open Edit on your phone draws its new QR
+      phoneAgain: function () { if (document.querySelector('.cw[data-face="1"]')) { PLINK.at = 0; askPhone(); } if (sheet && sheet.phone) { if (sheet.arrive) setupCard(); else phoneSheet(sheet.phone); } },
+      // a design that needs setting up has just arrived: "Set up your widgets" and the phone page's code
+      setupCard: function () { setupCard(); },
+      // the Android apps' Back (tv.back(), never a key): the same as the Back key in keydown. Add apps saves
+      // on Back (a move in progress is put down first), and a Hold OK Move ends with "Moved."
+      back: function () {
+        if (sheet && sheet.apps) { var S = sheet.apps; if (S.moving) { var mk = S.moving; S.moving = null; asDraw(S, mk); } else asDone(S); return true; }
+        if (window.CouchDetail && window.CouchDetail.isOpen()) { window.CouchDetail.close(); return true; }
+        if (sheet) { closeSheet(); return true; }
+        if (MOVING && ours()) { MOVING = null; say("Moved."); return true; }
+        return false;
+      },
       detail: function () { var t = target(); if (t) openDetail(t); },
       // the designer's Remote path: from every stop, where each press goes
       paths: function () {
@@ -2633,6 +3186,8 @@
 
   window.CouchDesign = {
     home: home,
+    // the key "Use this design?" keeps a yes under (app.js: a design the account sent to its own linked TV, with Undo)
+    hashOf: hashOf,
     on: function () { return ON; },
     // the video background: app.js holds it while the home is not on screen (name: "away", "idle",
     // "off"); state() says what it is doing and why ({ state, why, ref }); loops() the built in ones
@@ -2658,6 +3213,54 @@
     fontOf: function (name) { return fontOf(name); }, fontsOf: function (d) { return fontsOf(sanitize(d)); },
     // the apps changed on this TV with the remote (Hold OK), by "<object id>|<kind>"
     appEdits: function () { return JSON.parse(JSON.stringify(EDITS)); },
+    // What the design on screen uses, for Home settings (app.js) and the phone's Home settings page: the
+    // home's own parts it shows, whether it has its own background, and its widget kinds. { on: false }
+    // with no design on screen. Names and kinds only, nothing private.
+    uses: function () {
+      if (!(D && ON)) return { on: false };
+      var el = obj(D.elements), kinds = {}, glass = false, bg = obj(D.background);
+      var shown = function (k) { if (obj(el[k]).hidden === true) return false; try { return !this.hides(k); } catch (e) { return true; } }.bind(this);
+      list(D.objects).forEach(function (o) {
+        o = obj(o);
+        if (o.type !== "widget") { kinds["obj:" + o.type] = 1; return; }
+        [o].concat(list(o.items)).forEach(function (it) { kinds[obj(it).kind] = 1; if (wpanel(obj(it)) === "glass") glass = true; });
+      });
+      return { on: true, parts: { clock: obj(el.clock).hidden !== true, date: shown("date"), weather: shown("weather"), people: shown("people"),
+        quick: shown("quick"), keep_watching: shown("keep_watching"), dock: obj(el.dock).hidden !== true },
+        background: !!(bg.image || bg.colour || bg.video), kinds: Object.keys(kinds).filter(function (k) { return k.indexOf("obj:") < 0; }),
+        objects: Object.keys(kinds).filter(function (k) { return k.indexOf("obj:") === 0; }).map(function (k) { return k.slice(4); }), glass: glass };
+    },
+    // every widget on the home now, a stack's widgets too: [{ key: "<id>|<kind>", id, kind, label, x, y, w, h }]
+    widgetList: function () { return widgetList(); },
+    // the phone's "Widgets on your screen": the design's look and each widget as the design has it (its box,
+    // opts and style, a stack's items), so the phone can draw the same widget. Only what the design holds.
+    screen: function () {
+      if (!(D && ON)) return null;
+      var cp = function (x) { return JSON.parse(JSON.stringify(x === undefined ? null : x)); };
+      return { look: cp(obj(D.look)), widgets: list(D.objects).map(obj).filter(function (o) { return o.type === "widget" && o.kind; }).map(function (o) {
+        return { id: o.id, kind: o.kind, x: +o.x || 0, y: +o.y || 0, w: +o.w || 0, h: +o.h || 0, opts: cp(obj(o.opts)), style: cp(obj(o.style)),
+          items: o.kind === "stack" ? list(o.items).map(function (it) { it = obj(it); return { kind: it.kind, opts: cp(obj(it.opts)), style: cp(obj(it.style)) }; }) : undefined };
+      }) };
+    },
+    // the design's containers of apps, and changing one's apps the way Hold OK does (null: its own apps again)
+    appWidgets: function () { return appWidgets(); },
+    // Add apps, the sheet with every app on this TV, for one of them (Home settings opens it over itself)
+    appSheet: function (key, done) { return NAV.appSheet(key, done); },
+    setApps: function (key, keys) {
+      var w = appWidgets().filter(function (a) { return a.key === key; })[0];
+      if (!w) return { ok: false, error: "That app row is not on this design any more." };
+      if (keys === null) delete EDITS[key];
+      else {
+        if (!Array.isArray(keys)) return { ok: false, error: "No apps were sent." };
+        var A = window.CouchApps, seen = {}, clean = [];
+        keys.forEach(function (k) { if (pkgOk(k) && KEEP.indexOf(k) < 0) { var id = (A && !A.get(k) && A.idOf(k)) || k; if (!seen[id]) { seen[id] = 1; clean.push(id); } } });
+        if (clean.length > w.max) return { ok: false, error: "That holds " + w.max + (w.max === 1 ? " app." : " apps.") };
+        EDITS[key] = clean;
+      }
+      saveEdits();
+      if (D && ON) objects(D);
+      return { ok: true };
+    },
     wact: function () { return WACT.slice(); },
     wopts: function () { return JSON.parse(JSON.stringify(WOPT)); },
     wstyle: function () { return JSON.parse(JSON.stringify(WSTYLE)); },
@@ -2669,7 +3272,8 @@
     // which of these widget kinds are on the home (air and surf ask their own free services only then)
     wantsKinds: function (kinds) { var on = {}; if (D && ON) list(D.objects).forEach(function (o) { o = obj(o); if (o.type === "widget") [o].concat(list(o.items)).forEach(function (it) { if (kinds.indexOf(obj(it).kind) >= 0) on[obj(it).kind] = 1; }); }); return Object.keys(on); },
     // the web widgets on the home, each with its options (widget-web.js asks only for these)
-    widgetsOf: function (kinds) { var out = []; if (D && ON) list(D.objects).forEach(function (o) { o = obj(o); if (o.type === "widget") [o].concat(list(o.items)).forEach(function (it) { it = obj(it); if (kinds.indexOf(it.kind) >= 0) out.push({ kind: it.kind, opts: obj(it.opts) }); }); }); return out; },
+    // (each with its id, "<stack id>/<its place>" for a widget in a stack, so its own settings can be read)
+    widgetsOf: function (kinds) { var out = []; if (D && ON) list(D.objects).forEach(function (o) { o = obj(o); if (o.type === "widget") [o].concat(list(o.items)).forEach(function (it, i) { it = obj(it); if (kinds.indexOf(it.kind) >= 0) out.push({ id: i ? o.id + "/" + (i - 1) : o.id, kind: it.kind, opts: obj(it.opts) }); }); }); return out; },
     wantsForecast: function () { return !!(D && ON && list(D.objects).some(function (o) { o = obj(o); return o.type === "widget" && [o].concat(list(o.items)).some(function (it) { return ["weather", "bigtemp", "hourly", "week", "rain", "uv", "sun", "air", "surf", "date"].indexOf(it.kind) >= 0; }); })); },
     nogo: function (part) { var pb = PART_BOX.filter(function (x) { return x[0] === part; })[0], n = pb && document.querySelector(pb[1]); return !!(n && n.getAttribute("data-nogo")); },
     // where the remote starts on the dock: the first app, as couch-tv does; with no app showing (a
@@ -2695,7 +3299,8 @@
         else if (needsConfirm(design)) askFirst(design);   // nothing of it is applied until Use this design
         else apply(design);
       }
-      document.addEventListener("keydown", function () { if (ON) ROOT.classList.add("cd-keys"); }, true);
+      focusAfterAnswer();
+      document.addEventListener("keydown", firstKey, true);
       if (DESIGNER) {
         ROOT.classList.add("cd-edit");   // editing: no focus shown until "Try it with the remote"
         // trying it with the remote: OK on an app flashes it and tells the designer what would open
@@ -2755,6 +3360,8 @@
     iconSets: function () { return ICON_SET_LABELS.map(function (l) { return { id: l[0], label: l[1], full: !!ICON_FULL[l[0]] }; }); },
     // the gate itself, for tests and for the designer to show what a TV will accept
     sanitize: sanitize,
+    // the style rules a clean design gives the home (for tests: nothing is drawn)
+    css: function (clean) { return css(obj(clean)); },
     // flags are found in the design as written (the gate takes those words out of the clean copy)
     check: function (design) { var clean = sanitize(design); return { clean: clean, notes: NOTES.slice(), flags: flags(obj(design)) }; },
     // what each part of a design asks of the TV: [what, weight, key], the speed meter's list
@@ -2762,10 +3369,20 @@
     cost: function (design, raw) { return cost(raw ? obj(design) : sanitize(design)); },
     // Home settings, Look: the row that turns designs back on after Back switched them off
     off: function () { return offNow(); },
+    // Home settings, Designs (app.js designerRows): the design is held back on this TV, switched off with
+    // Back held or answered Keep my home; resume() brings it back (the same as Your design On did)
+    held: function () { return offNow() || !!(PENDING && store("couchtv.design.no") === hashOf(PENDING)); },
+    resume: function () { setOff(false); if (PENDING && store("couchtv.design.no") === hashOf(PENDING)) { store("couchtv.design.ok", hashOf(PENDING)); store("couchtv.design.no", null); } },
+    // an honest line when the design's video shows only its still picture, and why ("" when it plays)
+    videoNote: videoNote,
+    // Home settings, Designs, Show the still picture instead: kept on this TV (on: true or false), and
+    // whether the design has a video background at all
+    videoStill: function (on) { if (on === undefined) return store(STILL_KEY) === "1"; store(STILL_KEY, on ? "1" : null); if (VP) VP.update(); return !!on; },
+    hasVideo: function () { return !!(VP && VP.state().ref); },
     settingsRow: function (restart) {
       var off = offNow() || (PENDING && store("couchtv.design.no") === hashOf(PENDING));
       // an honest line when the design's video shows only its still picture, and why
-      var vs = VP ? VP.state() : null, vnote = vs && vs.why && (vs.state === "still" || vs.state === "failed") ? ". Video background: its still picture shows, " + vs.why : "";
+      var vnote = videoNote();
       return { kind: "toggle", key: "design-on", label: "Your design", value: off ? "Off" : "On",
         sub: off ? "Switched off, or not chosen yet. Turn it on to see it." : "Hold Back for 5 seconds to switch it off" + vnote,
         act: function () { if (off) { setOff(false); if (PENDING) { store("couchtv.design.ok", hashOf(PENDING)); store("couchtv.design.no", null); } } else setOff(true); if (restart) restart(); } };
@@ -2839,7 +3456,12 @@
         .filter(function (it) { return hidden.indexOf(it.package) < 0; });
       var lim = D && D.elements && D.elements.dock && D.elements.dock.max_apps;
       if (lim) max = Math.min(max || 10, lim);
-      return out.filter(function (it) { return !free(it); }).slice(0, Math.max(1, max || 10)).concat(out.filter(free));
+      // the input tiles pinned on this TV (an HDMI port as its own tile, set on the TV or the phone) stay
+      // in a design's dock as they do in the standard one: after its apps, taking dock places, never
+      // pushed out by the design's own order (they are this TV's, so no design names them)
+      var pin = function (it) { return /^input:/.test(it.package || ""); }, pins = shown.filter(pin);
+      var apps = out.filter(function (it) { return !free(it) && !pin(it); });
+      return apps.slice(0, Math.max(1, (max || 10) - pins.length)).concat(pins, out.filter(free));
     }
   };
 })();

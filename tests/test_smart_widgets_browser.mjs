@@ -1,7 +1,7 @@
 // The smart home and music widgets (group C: Control Centre, camera, doorbell, energy, sensor, speakers,
 // Up next queue), in a real browser at 1920x1080, against a pretend Home Assistant (mock.js ?ha=1,
 // the launcher's window.TVHA stand in) and a pretend bridge. Nothing real is ever asked.
-//  1. every size of each, as couch-tv Studio draws it (demo), as a TV with readings, long names and big numbers, or align left draws it, and as a
+//  1. every size of each, as Couch TV Studio draws it (demo), as a TV with readings, long names and big numbers, or align left draws it, and as a
 //     TV with nothing set up draws it: words 23 px and up, nothing past its box, the set up card when
 //     nothing is set up, and never a reading on a TV that has none;
 //  2. on a TV: the widgets fill from Home Assistant; OK opens each layer; a switch, a volume and play
@@ -63,7 +63,7 @@ async function openOn(page, id) {
 
 console.log("Running smart home and music widget browser tests...");
 
-// 1. every size, five ways: couch-tv Studio's demo, a TV with readings, a TV with very long names and
+// 1. every size, five ways: Couch TV Studio's demo, a TV with readings, a TV with very long names and
 // big numbers, a TV with the design set to align left, and a TV with nothing set up.
 // seagey, 18 Nov 2026: "Make sure each widget fits in each container correctly things aren't cut off and
 // all icons etc are default centre align unless it's changed in the designer." So, for each widget at
@@ -156,23 +156,26 @@ async function drawAll(page, shots) {
 }
 
 // 2. on a TV, against the pretend Home Assistant
-{ // Control Centre: fills from Home Assistant; OK opens every switch; a switch reaches it; the garage is never switched
+{ // Control Centre: fills from Home Assistant; OK opens every switch; a switch reaches it; a garage door never shows
   const page = await home([["controls", 0, 0, 8, 4], ["app", 10, 0, 2, 2, { apps: ["com.netflix.ninja"] }]], "&ha=1");
   await page.waitForFunction(() => /Lounge/.test(document.querySelector('.cw-o[data-obj="w0"] .cw').textContent), null, { timeout: 8000 });
   ok(/On 80%/.test(await text(page)), "controls: the lounge light reads On 80%");
   await openOn(page);
   ok((await cur(page)).name === "controls", "controls: OK opens Control Centre");
-  await page.waitForFunction(() => document.querySelectorAll(".cwd-toggle").length >= 6, null, { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelectorAll(".cwd-toggle").length >= 5, null, { timeout: 5000 });
+  const names = await page.evaluate(() => [...document.querySelectorAll(".cwd-toggle")].map((e) => e.textContent));
+  ok(names.length === 5 && !names.some((t) => /Garage|Big roller/.test(t)), "controls: a garage door never shows, by its name or by what Home Assistant calls it (owner's rule): " + names.join(" | "));
+  ok(!/Garage|Big roller/.test(await text(page)), "controls: nor on the widget itself");
   ok((await cur(page)).focusName === "Lounge", "controls: lands on the first switch");
   await press(page, "Enter", 600);
   ok(await page.evaluate(() => window.MOCK_HA_LAST) === "set light.lounge off", "controls: OK switched the lounge light off through Home Assistant");
   await page.evaluate(() => { window.MOCK_HA_LAST = ""; });
-  for (let k = 0; k < 8 && (await cur(page)).focusName !== "Garage"; k++) await press(page, "ArrowRight", 200);
-  for (let k = 0; k < 3 && (await cur(page)).focusName !== "Garage"; k++) await press(page, "ArrowDown", 200);
-  ok((await cur(page)).focusName === "Garage", "controls: the remote reaches the garage");
-  await press(page, "Enter", 600);
+  const names2 = [];
+  for (let k = 0; k < 12; k++) { names2.push((await cur(page)).focusName); await press(page, k < 6 ? "ArrowRight" : "ArrowDown", 150); }
+  ok(!names2.some((n) => /Garage|Big roller/.test(n || "")), "controls: the remote never reaches a garage door: " + names2.join(","));
   ok(await page.evaluate(() => window.MOCK_HA_LAST) === "", "controls: the garage door was never asked to open");
-  ok(/never opened from the TV/.test(await page.evaluate(() => document.querySelector(".cwd-msg").textContent)), "controls: and the TV says why");
+  const asked = await page.evaluate(() => window.smartHome.request("set", "cover.garage", "open"));
+  ok(asked && asked.ok === false && await page.evaluate(() => window.MOCK_HA_LAST) === "", "controls: asked anyway, it is refused");
   await press(page, "Escape", 600);
   ok(!(await page.evaluate(() => window.CouchDetail.isOpen())), "controls: Back closes it");
   ok(page.errors.length === 0, "controls: no page errors (" + page.errors.join("; ") + ")");
@@ -249,14 +252,16 @@ for (const [kind, layer, size] of [["energy", "energy", [8, 4]], ["sensor", "sen
   await page.close();
   page = await home([["queue", 0, 0, 4, 6]], "");
   await page.waitForFunction(() => document.querySelector('.cw-o[data-obj="w0"] .cw').getAttribute("data-setup"), null, { timeout: 9000 });
-  ok(/Needs Spotify connected/.test(await text(page)), "queue: not connected says what it needs");
+  // (0.13.10) the setup face: its line says what it shows, then how to set it up (no phone page here)
+  ok(/Your Spotify queue/.test(await text(page)) && /Press OK to set it up|Set up on your phone/.test(await text(page)), "queue: not connected says what it is and how to set it up: " + await text(page));
   await page.close();
 }
 { // no Home Assistant on this TV: every smart home widget is its setup card, and nothing is asked
   const page = await home([["controls", 0, 0, 4, 4], ["camera", 4, 0, 4, 4], ["doorbell", 8, 0, 4, 4], ["energy", 12, 0, 4, 4], ["sensor", 0, 4, 4, 4], ["speakers", 4, 4, 4, 4]], "");
   await page.waitForTimeout(1500);
   const cards = await page.evaluate(() => [...document.querySelectorAll(".cw-o .cw")].map((c) => c.getAttribute("data-setup") + ":" + c.textContent));
-  ok(cards.length === 6 && cards.every((c) => /Needs Home Assistant/.test(c)), "no Home Assistant: six setup cards (" + cards.join(" | ") + ")");
+  // (0.13.10) each is its setup face: its name, its line, and how to set it up
+  ok(cards.length === 6 && cards.every((c) => /^[a-z]+:/.test(c) && !/^null:/.test(c) && /Press OK to set it up|Set up on your phone/.test(c)), "no Home Assistant: six setup cards (" + cards.join(" | ") + ")");
   await page.close();
 }
 

@@ -1,7 +1,7 @@
-// Share this home (Home settings, couch-tv Studio). Turns the home this TV shows now (made on the TV,
-// from the phone, the scenes or config.json, or a couch-tv Studio design) into a couch-tv Studio design,
+// Share this home (Home settings, Designs). Turns the home this TV shows now (made on the TV,
+// from the phone, the scenes or config.json, or a Couch TV Studio design) into a Couch TV Studio design,
 // hands it to the design store, and shows a QR code and a short code. On a phone,
-// <store>/design/?from=<code> opens it in couch-tv Studio, to change it and share or sell it.
+// <store>/design/?from=<code> opens it in Couch TV Studio, to change it and share or sell it.
 //
 // What leaves the TV is only what a design is made of: the look settings (scenes from the app's own
 // set, clock, glass, Keep watching and Now playing on or off), the dock's apps by their Android
@@ -19,6 +19,16 @@
 
   function obj(v) { return v && typeof v === "object" && !Array.isArray(v) ? v : {}; }
   function copy(v) { return JSON.parse(JSON.stringify(v)); }
+  // a photo put in a Photo or Art frame widget (or a smart stack's) is the household's own too: it stays
+  // on the TV, and the shared widget shows the photos added on the other TV
+  function ownWidgetPhotos(d) {
+    (Array.isArray(d.objects) ? d.objects : []).forEach(function (o) {
+      [o].concat(o && Array.isArray(o.items) ? o.items : []).forEach(function (w) {
+        var op = w && w.opts;
+        if (op && typeof op === "object" && op.image !== undefined && !(typeof op.image === "string" && BUILT_IN_BG.test(op.image))) delete op.image;
+      });
+    });
+  }
 
   // snap: what app.js knows about the home now (homeSnapshot): {
   //   scenes: [ids], builtIn: [ids of the app's own scenes], scene_seconds, clock24, clock_style,
@@ -42,6 +52,7 @@
       if (d.background && !Object.keys(bg).length) delete d.background;
       // smart home controls name this house's own devices
       (Array.isArray(d.objects) ? d.objects : []).forEach(function (o) { if (o && typeof o === "object") { delete o.entity; delete o.entities; } });
+      ownWidgetPhotos(d);
     } else {
       var home = {};
       var built = Array.isArray(snap.builtIn) ? snap.builtIn : [];
@@ -99,6 +110,7 @@
     if (bg.depth_image !== undefined && !(bg.image && typeof bg.depth_image === "string" && BUILT_IN_BG.test(bg.depth_image))) delete bg.depth_image;
     if (bg.video !== undefined && !(bg.image && typeof bg.video === "string" && BUILT_IN_VID.test(bg.video))) delete bg.video;
     if (d.background && !Object.keys(bg).length) delete d.background;
+    ownWidgetPhotos(d);
     var keys = Object.keys(d).filter(function (k) { return k !== "v"; });
     if (!keys.length) return { error: "There is nothing on this home to share yet." };
     var hits = privateHits(d, secrets);
@@ -107,10 +119,10 @@
   }
 
   var MSG = {
-    offline: "Could not reach couch-tv Studio. Check the TV is online, then try again.",
+    offline: "Could not reach Couch TV Studio. Check the TV is online, then try again.",
     slow: "Too many shares from this home for now. Try again in an hour.",
-    refused: "couch-tv Studio could not take this home. Try again later.",
-    off: "Sharing is not switched on at couch-tv Studio yet. Try again after the next update."
+    refused: "Couch TV Studio could not take this home. Try again later.",
+    off: "Sharing is not switched on at Couch TV Studio yet. Try again after the next update."
   };
   function fail(k) { var e = new Error(MSG[k]); e.kind = k; return e; }
 
@@ -133,13 +145,18 @@
       var code = j && typeof j.code === "string" && /^[2-9A-HJ-NP-TV-Z]{5}-[2-9A-HJ-NP-TV-Z]{5}$/.test(j.code) ? j.code : "";
       var token = j && typeof j.token === "string" && /^CTV1-[A-Za-z0-9_-]{43}$/.test(j.token) ? j.token : "";
       if (!code || !token) throw fail("refused");
-      return { code: code, token: token, link: base + "/design/?from=" + token, page: base.replace(/^https:\/\//, "") + "/design" };
+      // Couch TV Studio's own store: the link goes to its website's address (the store's old address only
+      // forwards there); a store named in config.json is its own website
+      var G = window.CouchDesigner, site = G && G.STUDIO_SITE && base === G.DEFAULT_STORE ? G.STUDIO_SITE : base;
+      return { code: code, token: token, link: site + "/design/?from=" + token, page: site.replace(/^https:\/\//, "") + "/design" };
     });
   }
 
   // ---- on screen: the QR, the short code, and how to open it ----
   var box = null;
-  function show(res) {
+  // opts.back: this screen also has the TV's phone inbox open (app.js shareHome), so the phone's Send to my
+  // TV comes straight back while it stays open
+  function show(res, opts) {
     close();
     box = document.createElement("div");
     box.className = "share-home";
@@ -151,9 +168,10 @@
     var col = document.createElement("div");
     col.setAttribute("style", "max-width:46rem");
     var line = function (txt, css) { var n = document.createElement("div"); n.textContent = txt; n.setAttribute("style", css); col.appendChild(n); return n; };
-    line("Open this home in couch-tv Studio", "font-size:3rem;line-height:3.75rem;font-weight:700");
+    line("Open this home in Couch TV Studio", "font-size:3rem;line-height:3.75rem;font-weight:700");
     line("Point your phone's camera at the code. Or go to " + res.page + " and type this code:", "margin-top:1.25rem;font-size:1.75rem;line-height:2.375rem;color:rgba(255,255,255,0.82)");
     line(res.code, "margin-top:1.5rem;font-size:4.5rem;font-weight:700;letter-spacing:0.08em;font-variant-numeric:tabular-nums");
+    if (opts && opts.back) line("Change it on your phone, then press Send to my TV there: it comes straight back to this TV, which asks you before it changes anything. Keep this screen open until then.", "margin-top:1.25rem;font-size:1.75rem;line-height:2.375rem;color:#fff;font-weight:600");
     line("The code works once, for 30 minutes. Only the look and your apps left this TV. People's names, photos, places, smart home keys, AI keys and calendar links stay here.", "margin-top:1.5rem;font-size:1.5rem;line-height:2.125rem;color:rgba(255,255,255,0.66)");
     line("Press Back or OK to close.", "margin-top:1.5rem;font-size:1.4375rem;color:rgba(255,255,255,0.6)");
     box.appendChild(qr);

@@ -48,7 +48,7 @@ const ANSWERS = {
 // per widget: the design's widget, what proves the real answer is drawn, its layer
 const CASES = [
   { kind: "news", opts: { feed: "bbc" }, box: [0, 0, 8, 4], says: () => WW.parseRss(fix("rss-bbc.xml"), 12)[0].title, layer: "news" },
-  { kind: "sports", opts: { league: "nba", team: "Knicks" }, box: [0, 0, 8, 4], routes: [["https://site.api.espn.com/**", "espn-nba.json"]], says: () => "Knicks", layer: "sports" },
+  { kind: "sports", opts: { league: "nba", team: "Knicks" }, box: [0, 0, 8, 4], routes: [["https://site.api.espn.com/**", "espn-nba.json"]], says: () => "Knicks", layer: "sports", maxAsks: 2 },
   { kind: "stocks", opts: { tickers: ["BHP.AX", "^AXJO"] }, box: [0, 0, 4, 6], says: () => "$54.34", layer: "stocks" },
   // the commute's places are the TV's own (Home settings), never the design's
   { kind: "commute", opts: { arrive_h: 8, arrive_m: 30 }, box: [0, 0, 8, 4], routes: [["https://router.project-osrm.org/**", "osrm-route.json"]], says: () => "27", layer: "commute",
@@ -113,13 +113,19 @@ for (const c of CASES) {
     ok(/POST \/api\/continue\/open .*"who":"person2"/.test(calls), "picks: Play opens the show as Person 2's (" + calls.replace(/\n/g, "; ").slice(0, 200) + ")");
   }
   if (c.kind === "commute") {
-    // Home settings, couch-tv Studio: the Commute rows, with the TV's own places, said to stay on the TV
+    // Home settings, Designs: the Commute rows, with the TV's own places, said to stay on the TV
     await page.evaluate(() => window.tv.settingsKey()); await page.waitForTimeout(300);
     await press(page, "Enter", 400);
     let found = false;
-    for (let i = 0; i < 16 && !found; i++) { found = (await page.evaluate(() => document.getElementById("set-head").textContent)) === "couch-tv Studio"; if (!found) await press(page, "ArrowDown", 120); }
+    for (let i = 0; i < 16 && !found; i++) { found = (await page.evaluate(() => document.getElementById("set-head").textContent)) === "Designs"; if (!found) await press(page, "ArrowDown", 120); }
+    // the Commute is one row in Widgets on this home (its own settings page), with the place set on this TV
+    const listed = await page.evaluate(() => document.getElementById("settings").innerText);
+    ok(found && /Widgets on this home/i.test(listed) && /Commute, /.test(listed) && /Where to: Parramatta/.test(listed), "commute: Couch TV Studio lists the Commute in Widgets on this home, Where to Parramatta (" + listed.replace(/\s+/g, " ").slice(0, 600) + ")");
+    await press(page, "ArrowRight", 200);
+    for (let i = 0; i < 20 && !/^Commute, /.test(await page.evaluate(() => (document.querySelector("#set-rows .srow.focus") || {}).textContent || "")); i++) await press(page, "ArrowDown", 100);
+    await press(page, "Enter", 400);
     const txt = await page.evaluate(() => document.getElementById("settings").innerText);
-    ok(found && /Commute/i.test(txt) && /Where to/.test(txt) && /Parramatta/.test(txt) && /Riverside/.test(txt) && /Kept on this TV only/.test(txt) && /Forget where you drive to/.test(txt), "commute: Home settings, couch-tv Studio has Commute, from the town to the place, kept on the TV (" + found + ": " + txt.replace(/\s+/g, " ").slice(0, 400) + ")");
+    ok(/Where to/.test(txt) && /Parramatta/.test(txt) && /Never in a design, never sent to Couch TV/.test(txt) && /Forget where you drive to/.test(txt), "commute: its page has Where to, the place, kept on the TV, and Forget (" + txt.replace(/\s+/g, " ").slice(0, 400) + ")");
     await page.screenshot({ path: path.join(SHOTS, "commute-settings.png") });
     ok(!/Parramatta/.test(await page.evaluate(() => localStorage.getItem("tvdesigner.design") + localStorage.getItem("mock:tvhome.settings"))), "commute: the place is in neither the design nor the settings the bridge keeps");
   }

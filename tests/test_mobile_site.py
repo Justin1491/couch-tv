@@ -33,6 +33,14 @@ class MobileSiteTests(unittest.TestCase):
         self.assertTrue(any(b"/icons/cinematic-192.png" in content for content in bundles))
         self.assertIn(b"couch", self.get("/bridge/shim.js")[0].lower())
 
+    def test_bridge_serves_phone_settings_and_its_scripts(self):
+        html = self.get("/setup")[0].decode()
+        for name in ("shim.js", "connect-check.js"):
+            with self.subTest(name=name):
+                path = "/ontv/" + name
+                self.assertIn('src="' + path + '"', html)
+                self.assertEqual(self.get(path)[0], (ROOT / "on-tv/web" / name).read_bytes())
+
     def test_manifest_icons_serve_the_expected_image_bytes(self):
         body, content_type = self.get("/manifest.webmanifest")
         self.assertEqual(content_type, "application/manifest+json")

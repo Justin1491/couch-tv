@@ -13,8 +13,8 @@ android {
         applicationId = "app.couchtv.launcher"
         minSdk = 23          // Android 6.0 (older Mi TVs); Fire OS 6 (7.1) sticks install it too
         targetSdk = 34
-        versionCode = 22
-        versionName = "0.13.6"
+        versionCode = 29
+        versionName = "0.13.13"
         // Where the bridge might be: ./gradlew assembleRelease -PbridgeUrls=http://my-computer.local:5400
         // (comma separated, more than one is fine). The last one that answered is remembered on the TV.
         // Without it, apply.sh tells the app the address when it installs (the "bridge" extra), and
@@ -61,6 +61,16 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    // One APK for every TV (couch-tv-home.apk), native libraries compressed, the same as the on-TV app:
+    // nothing native here today, so this changes nothing until one comes (scripts/check-release-apks.py).
+    packaging { jniLibs { useLegacyPackaging = true } }
+    // Matter (MatterPage.kt): the on-TV app's controller code and library, shared, not copied
+    // (on-tv/android/matter/README.md)
+    sourceSets["main"].java.srcDir("../../../on-tv/android/app/src/main/java/dev/couchtv/ontv/matter")
+    sourceSets["main"].jniLibs.srcDir("../../../on-tv/android/matter/jni")
+    sourceSets["main"].assets.srcDir("../../../on-tv/android/matter/assets")
+    // Smart home (Home Assistant, signing in from a phone): shared with the on-TV app (on-tv/android)
+    sourceSets { getByName("main") { java.srcDir("../shared/java") }; getByName("test") { java.srcDir("../shared/test") } }
     lint {
         checkReleaseBuilds = false
         abortOnError = false
@@ -85,6 +95,10 @@ abstract class BundleTvWeb : DefaultTask() {
     @get:InputFile
     abstract val configJson: RegularFileProperty
 
+    /** on-tv/web: the phone's Home settings page (setup.html, shim.js), served by PhoneServer.kt with no computer. */
+    @get:InputDirectory
+    abstract val phonePage: DirectoryProperty
+
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
@@ -98,8 +112,13 @@ abstract class BundleTvWeb : DefaultTask() {
             val rel = f.relativeTo(src).path
             // development only, or not part of the page
             if (rel == "mock.js" || rel.endsWith(".md") || f.name.startsWith(".")) return@forEach
+            // the Loop look's footage (loop/, up to 80 MB, made by scripts/make-loop.sh) is streamed from the
+            // bridge, never carried in the app: the same rule as the bridge's offline manifest, so the posters
+            // (loop/*.jpg) still ship and a Loop home with no bridge shows a still
+            if (rel.startsWith("loop/") && (!rel.endsWith(".jpg") || rel.contains("/."))) return@forEach   // and never a run's .staging-<pid>/
             f.copyTo(File(dest, rel), overwrite = true)
         }
+        for (n in listOf("setup.html", "shim.js")) File(phonePage.get().asFile, n).copyTo(File(out, "www/ontv/" + n), overwrite = true)
         File(dest, "config.js").writeText("window.COUCH_CONFIG = " + JsonOutput.toJson(publicConfig(configJson.get().asFile)) + ";\n")
     }
 
@@ -141,6 +160,11 @@ abstract class BundleTvWeb : DefaultTask() {
 }
 
 dependencies {
+    // Matter controller jars (Apache 2.0), the same build as the native library
+    implementation(fileTree(mapOf("dir" to "../../../on-tv/android/matter/libs", "include" to listOf("*.jar"))))
+    // The phone's Home settings page with no computer at home (PhoneServer.kt): the same small web server
+    // as the on-TV app (BSD 3-clause)
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
     // Unit tests for the plain Kotlin rules (FireWatchTest), run with testDebugUnitTest (EPL 1.0).
     testImplementation("junit:junit:4.13.2")
     // The real org.json for the smart home tests (HaReadingsTest, HomeAssistantTest): android.jar only
@@ -156,6 +180,7 @@ val configFile: File = (project.findProperty("configJson") as String?)?.let { fi
 val bundleTvWeb = tasks.register<BundleTvWeb>("bundleTvWeb") {
     web.set(rootProject.layout.projectDirectory.dir("../web"))
     configJson.set(configFile)
+    phonePage.set(rootProject.layout.projectDirectory.dir("../../on-tv/web"))
     outputDir.set(layout.buildDirectory.dir("generated/tvweb"))
 }
 

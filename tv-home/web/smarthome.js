@@ -49,19 +49,22 @@
     INFO.scenes = Array.isArray(INFO.scenes) ? INFO.scenes : [];
     // the smart home widgets (HomeAssistant.kt info()): names and entities only
     ["controls", "cameras", "sensors", "speakers"].forEach(function (k) { INFO[k] = Array.isArray(INFO[k]) ? INFO[k] : []; });
+    // Matter devices shared from Google Home, Apple Home, SmartThings or Alexa (matter.js): the same lists
+    if (window.CouchMatter) window.CouchMatter.merge(INFO);
+    INFO.controls = INFO.controls.filter(houseSafe); INFO.scenes = INFO.scenes.filter(houseSafe);
     INFO.energy = INFO.energy === true; INFO.doorbell = INFO.doorbell === true; INFO.doorbell_camera = INFO.doorbell_camera === true;
     return INFO;
   }
   // anything at all set up for this TV (the widgets need no climate or scenes)
   function enabled() {
-    if (!native()) return false;
+    if (!native() && !matterOn()) return false;
     var i = info();
     return i.climate.length > 0 || i.scenes.length > 0 || i.controls.length > 0 || i.cameras.length > 0 || i.sensors.length > 0 ||
       i.speakers.length > 0 || i.energy || i.doorbell;
   }
   // The tile shows only when there is something for this screen (a doorbell alone has no screen).
   function available() {
-    if (!native()) return false;
+    if (!native() && !matterOn()) return false;
     var i = info();
     return i.climate.length > 0 || i.scenes.length > 0;
   }
@@ -76,7 +79,73 @@
     return DIRECT.api("POST", "/api/ha", { action: action, entity: entity || "", value: value == null ? "" : String(value) }, 20000)
       .then(function (r) { return r && r.result && typeof r.result === "object" ? r.result : { ok: false }; }, function () { return { ok: false, error: "bridge" }; });
   }
+  // Nothing that opens the house ever shows on the TV: a lock, an alarm, a garage door, gate or door,
+  // nor a scene or script named for one (HomeAssistant.kt and bridge/smarthome.py OPENS_HOUSE, the same
+  // words). A blind Home Assistant itself calls a garage door, gate or door comes back "blocked" when it
+  // is read: from then on it is left out of every list too (Control Centre, its pick list, the phone).
+  // the same test as bridge/smarthome.py OPENS_HOUSE (and HaReadings.kt, home-config.py), written without
+  // lookbehind for older TV browsers: garage, gate, door, lock, alarm or disarm anywhere in a blind's,
+  // switch's, script's or scene's id, joined words too (frontgate, backdoor, smartlock, unlock), but not
+  // gateway, doorbell, indoor, outdoor, clock or block; and every lock and alarm panel
+  // (tests/fixtures/opens_house_ids.json holds the ids every copy is tested with)
+  function opensHouse(e) {
+    e = String(e || "");
+    if (/^(lock|alarm_control_panel)\./.test(e)) return true;
+    if (!/^(cover|switch|script|scene)\.[a-z0-9_]*$/.test(e)) return false;
+    var re = /garage|gate|door|lock|alarm|disarm/g, m, w, i, after;
+    while ((m = re.exec(e))) {
+      w = m[0]; i = m.index; after = e.slice(i + w.length); re.lastIndex = i + 1;
+      if (w === "gate" && after.slice(0, 3) === "way") continue;
+      if (w === "door" && (after.slice(0, 4) === "bell" || /[._](in|out)$/.test(e.slice(0, i)))) continue;
+      if (w === "lock" && /[._][cb]$/.test(e.slice(0, i))) continue;
+      return true;
+    }
+    return false;
+  }
+  var OPENERS = {};
+  function houseSafe(x) { var e = x && typeof x.entity === "string" ? x.entity : ""; return !!e && !x.blocked && !OPENERS[e] && !opensHouse(e); }
+  function safeControls(r) {
+    if (!r || !r.ok || !Array.isArray(r.controls)) return r;
+    r.controls.forEach(function (c) { if (c && c.blocked && typeof c.entity === "string") OPENERS[c.entity] = true; });
+    if (INFO) INFO.controls = INFO.controls.filter(houseSafe);
+    r.controls = r.controls.filter(houseSafe);
+    return r;
+  }
   function ask(action, entity, value) {
+    if (action === "controls") return askMatter(action, entity, value).then(safeControls);
+    if (action === "scene") return askMatter(action, entity, value).then(function (r) { return sceneRefused(entity, r); });
+    return askMatter(action, entity, value);
+  }
+  // a scene or script picked earlier that the TV or computer refuses to run (it opens the house): its
+  // button goes from every list at once, as the bridge's info() leaves it out from then on
+  function sceneRefused(entity, r) {
+    if (r && r.ok === false && r.error === "refused" && typeof entity === "string" && entity) {
+      OPENERS[entity] = true;
+      if (INFO) INFO.scenes = INFO.scenes.filter(houseSafe);
+      changed("info", native() ? native().info() : "");
+    }
+    return r;
+  }
+  function matterOn() { return !!(window.CouchMatter && window.CouchMatter.on()); }
+  // a Matter device goes to its controller (matter.js); a list (rooms, switches, sensors) is the
+  // launcher's or bridge's with Matter's added, the way the computer's Hue and AirTouch are
+  function askMatter(action, entity, value) {
+    var M = window.CouchMatter;
+    if (!M || !M.on()) return askAny(action, entity, value);
+    if (entity && M.owns(entity)) return M.ask(action, entity, value);
+    var key = M.reads(action);
+    if (!key || entity) return askAny(action, entity, value);
+    var home = native() ? askAny(action, "", value) : Promise.resolve({ ok: false, error: "off" });
+    return Promise.all([home, M.read(action)]).then(function (a) {
+      var list = { rooms: "climate", controls: "controls", sensors: "sensors" }[key];
+      var mine = a[0] && a[0].ok ? (a[0][key] || []).filter(function (x) { return !(x && M.owns(x.entity)); })
+        : info()[list].filter(function (x) { return !M.owns(x.entity); }).map(function (x) { return { entity: x.entity, name: x.name, ok: false }; });
+      var far = a[1] && a[1].ok ? a[1][key] || [] : [];
+      if (!(a[0] && a[0].ok) && !(a[1] && a[1].ok)) return a[0] || { ok: false };
+      var o = { ok: true }; o[key] = mine.concat(far); return o;
+    });
+  }
+  function askAny(action, entity, value) {
     if (DIRECT && window.TVHA) {
       if (DIRECT_RE.test(entity || "")) return askBridge(action, entity, value);
       if (action === "climate" || action === "controls") {
@@ -407,9 +476,13 @@
 
   // ---------------- a TV whose home a computer runs ----------------
   // No launcher there, so the bridge on the home computer talks to Home Assistant for the TV
-  // (bridge/smarthome.py, /api/ha): the same asks, the same allow lists, and the token stays on that
-  // computer (bridge/data/), never in the page. app.js calls useBridge(api) when it runs from a bridge.
+  // (bridge/smarthome.py, /api/ha): the same asks, the same allow lists, and the keys stay on that
+  // computer (bridge/data/), never in the page. The on-TV app's own server answers the same /api/ha.
+  // app.js calls useBridge(api) when it runs from either.
   var BRIDGE = null, BINFO = "{}", BSTATUS = '{"set":false}';
+  // the server says it serves the phone page for the QR code (status.phone): the on-TV app and the
+  // bridge both do; an older bridge does not, and then the TV keeps its typed set up screen
+  var BRIDGE_PHONE = false;
   // a Google TV or Android TV with a computer at home: only the computer's own Hue and AirTouch
   function useDirect(api) {
     if (!window.TVHA || DIRECT || typeof api !== "function") return;
@@ -422,6 +495,7 @@
     }, function () {});
   }
   function useBridge(api) {
+    if (window.CouchMatter) window.CouchMatter.use(api);   // Matter devices through the same server
     if (window.TVHA) { useDirect(api); return; }
     if (BRIDGE || typeof api !== "function") return;
     var post = function (path, body, id, cb) {
@@ -433,7 +507,8 @@
       setupStatus: function () { return BSTATUS; },
       setupCheck: function (id, url, token) { post("/api/ha/check", { url: url, token: token }, id, setupReply); },
       setupSave: function (id, picks) { var p = null; try { p = JSON.parse(picks); } catch (e) {} post("/api/ha/save", { picks: p }, id, function (i, r) { bridgeInfo(); setupReply(i, r); }); },
-      setupForget: function (id) { post("/api/ha/forget", {}, id, function (i, r) { bridgeInfo(); setupReply(i, r); }); }
+      setupForget: function (id) { post("/api/ha/forget", {}, id, function (i, r) { bridgeInfo(); setupReply(i, r); }); },
+      phone: function (id) { post("/api/ha/phone", {}, id, setupReply); }
     };
     BRIDGE.api = api;
     bridgeInfo();
@@ -443,6 +518,7 @@
     BRIDGE.api("GET", "/api/ha/info", null, 15000).then(function (r) {
       if (!r || typeof r !== "object") return;
       BINFO = JSON.stringify(r.info || {}); BSTATUS = JSON.stringify(r.status || { set: false });
+      BRIDGE_PHONE = !!(r.status && r.status.phone);
       reload();
     }, function () {});
   }
@@ -450,7 +526,7 @@
   function reload() {
     INFO = null;
     LIVE.controls = LIVE.sensors = LIVE.speakers = LIVE.energy = LIVE.bell = null; LIVE.at = {};
-    changed("info", native() ? native().info() : "");
+    changed("info", (native() ? native().info() : "") + (window.CouchMatter ? window.CouchMatter.signature() : ""));
   }
 
   // ---------------- set up on the TV (Home settings, Smart home) ----------------
@@ -471,13 +547,26 @@
     // checks an address and token; an empty token checks again with the one kept on the TV
     check: function (url, token) { return setupAsk(function (id) { native().setupCheck(id, String(url || ""), String(token || "")); }); },
     save: function (picks) { return setupAsk(function (id) { native().setupSave(id, JSON.stringify(picks || {})); }).then(function (r) { if (r.ok) reload(); return r; }); },
-    forget: function () { return setupAsk(function (id) { native().setupForget(id); }).then(function (r) { reload(); return r; }); }
+    forget: function () { return setupAsk(function (id) { native().setupForget(id); }).then(function (r) { reload(); return r; }); },
+    // set up from a phone (HaPhone.kt): the launcher, or the on-TV app's server. A computer's bridge
+    // does not serve the phone page, so there the TV keeps its own screens.
+    canPhone: function () { var n = native(); return !!(n && n.phone) && (n !== BRIDGE || BRIDGE_PHONE); },
+    // { ok, url, seen, set, host, count }: the address for the QR code and what is kept now. Asking
+    // again while the screen is open keeps the same address.
+    phone: function () { return setupAsk(function (id) { native().phone(id); }); }
   };
+  // a phone signed in, saved or disconnected: read what is set up again, and tell the open screen
+  var phoneWatchers = [];
+  function phoneChanged() {
+    if (BRIDGE) bridgeInfo(); else reload();
+    phoneWatchers.forEach(function (f) { try { f(); } catch (e) {} });
+  }
 
   window.smartHome = {
     // Hue or AirTouch was set up on the home computer from this TV: read its list again
     rebridge: function (api) { if (window.TVHA) { DIRECT = null; reload(); useDirect(api); } else bridgeInfo(); },
     useBridge: useBridge, setup: setup, setupReply: setupReply, reload: reload,
+    phoneChanged: phoneChanged, onPhone: function (f) { if (typeof f === "function" && phoneWatchers.indexOf(f) < 0) phoneWatchers.push(f); },
     enabled: enabled, live: live, still: still, stillOk: stillOk,
     available: available, open: open, close: close, move: move, ok: ok, paint: paint, reply: reply,
     isOpen: function () { return S.open; }, icon: ICONS.home,
@@ -501,6 +590,24 @@
       }
       return Promise.resolve({ ok: false, error: "refused" });
     },
-    scenes: function () { return available() ? info().scenes.map(function (s) { return { entity: s.entity, name: s.name }; }) : []; }
+    scenes: function () { return available() ? info().scenes.map(function (s) { return { entity: s.entity, name: s.name }; }) : []; },
+    // what a widget's own device setting can pick from (app.js, Widgets on this home and the phone):
+    // only what this TV already shows from Home Assistant (Home settings, Smart home), as
+    // [[entity, name], ...] for one Home Assistant domain or a list of them ("climate", ["scene", "script"])
+    devices: function (domain) {
+      if (!native()) return [];
+      var want = Object.prototype.toString.call(domain) === "[object Array]" ? domain : [domain], i = info(), out = [], seen = {};
+      [i.climate, i.controls, i.cameras, i.sensors, i.speakers, i.scenes].forEach(function (l) {
+        (Array.isArray(l) ? l : []).forEach(function (d) {
+          var e = d && typeof d.entity === "string" ? d.entity : "", dom = e.split(".")[0];
+          if (!e || seen[e] || want.indexOf(dom) < 0) return;
+          seen[e] = true;
+          out.push([e, String(d.name || e.split(".").slice(1).join(".").replace(/_/g, " ")).slice(0, 40)]);
+        });
+      });
+      return out;
+    }
   };
+  // the house test, for the tests (tests/test_ws2_smarthome.mjs runs every id in tests/fixtures/opens_house_ids.json)
+  window.smartHome.opensHouse = opensHouse;
 })();

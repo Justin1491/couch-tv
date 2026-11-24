@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import socket
+import time
 
 from adb_shell.adb_device_async import AdbDeviceTcpAsync
 from adb_shell.auth.sign_pythonrsa import PythonRSASigner
@@ -174,6 +175,7 @@ class TV:
         self.picture_cfg = config.picture_cfg(cfg.get("picture"))
         # Wake-on-LAN is tried when a mac is set, unless "wake_on_lan": false.
         self.wake_on_lan = cfg.get("wake_on_lan", True) is not False
+        self.phone_keyboard = cfg.get("phone_keyboard", True) is not False  # false: TV keeps its own on-screen keyboard
         # Per-TV state the server keeps (what is playing, sleep timer, picture mode, ...).
         self.state = {"playing": {"item": None}, "media_now": {}, "seen_playing": {},
                       "sleep": {"ends": None, "handle": None}, "waking": {"on": False},
@@ -189,8 +191,23 @@ class TV:
         self._dev = None
         self._signer = None
         self._task = None
+        self._adb_lost_at = None   # monotonic time of the last failed adb connect, None after a good one
+        self._adb_retry = None     # the one background reconnect started by retry_adb_soon
 
     # ---------- state ----------
+    # How long a failed adb connect counts as "adb is down" (the bridge retries every few seconds
+    # while it is down, so a real outage keeps this fresh; an old failure is tried again).
+    ADB_LOST_FOR = 60.0
+
+    @property
+    def adb_known_down(self):
+        """True when the last adb connect failed recently and none has worked since (a Google TV
+        closes port 5555 after a restart or deep sleep). Never probes the network. Not for adb_only
+        TVs, where adb is the only link and the run loop reconnects."""
+        if self.adb_only or self.adb_ok or self._adb_lost_at is None:
+            return False
+        return (time.monotonic() - self._adb_lost_at) < self.ADB_LOST_FOR
+
     @property
     def is_on(self):
         if self.adb_only:
@@ -315,7 +332,7 @@ class TV:
 
     async def _connect_once(self, ip, timeout=10):
         """One connect attempt to a known address. Raises on failure."""
-        remote = AndroidTVRemote(CLIENT_NAME, CERT, KEY, ip)
+        remote = AndroidTVRemote(CLIENT_NAME, CERT, KEY, ip, enable_ime=self.phone_keyboard)
         remote.add_is_on_updated_callback(self._changed)
         remote.add_is_on_updated_callback(lambda on: self.log.info("TV reports %s", "on" if on else "standby"))
         remote.add_current_app_updated_callback(self._changed)
@@ -513,15 +530,39 @@ class TV:
                 self._signer = PythonRSASigner(pub, priv)
             await self._adb_close()
             dev = AdbDeviceTcpAsync(self.ip, self.adb_port, default_transport_timeout_s=9)
-            ok = await asyncio.wait_for(dev.connect(rsa_keys=[self._signer], auth_timeout_s=10), 25)
+            # Held on self._dev from the start, so a failed connect is closed below and its socket
+            # does not stay open on the TV (left open, they piled up and kept the TV's "Allow" from going through).
+            self._dev = dev
+            # 60 s for the person to press Allow on the TV: if the link closes first, the TV drops the
+            # answer ("Always allow" is not saved) and asks again on the next try.
+            ok = await asyncio.wait_for(dev.connect(rsa_keys=[self._signer], auth_timeout_s=60), 75)
+            if not ok:
+                await self._adb_close()
             self._dev = dev if ok else None
             self.adb_ok = bool(ok)
+            self._adb_lost_at = None if ok else time.monotonic()
         except Exception as e:
             self.log.info("adb not available: %s %s", type(e).__name__, e)
             await self._adb_close()
             self.adb_ok = False
+            self._adb_lost_at = time.monotonic()
         self._changed()
         return self.adb_ok
+
+    def retry_adb_soon(self):
+        """Start one adb reconnect in the background, never waited on (a request that found adb down
+        answers at once; after someone switches Network debugging off and on, the next one uses adb
+        again). One at a time: while one runs, this does nothing."""
+        if self.adb_only or (self._adb_retry and not self._adb_retry.done()):
+            return self._adb_retry
+        task = asyncio.ensure_future(self.adb_connect())
+
+        def done(t):
+            if not t.cancelled() and t.exception():
+                self.log.info("adb reconnect: %s %s", type(t.exception()).__name__, t.exception())
+        task.add_done_callback(done)
+        self._adb_retry = task   # kept, so it is not garbage collected while it runs
+        return task
 
     async def adb_ready(self):
         if self.adb_ok:

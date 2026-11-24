@@ -30,10 +30,11 @@ assert(/if \(!covered\(\)\) \{ if \(!screenOffActive\) renderQuick\(\); refreshB
 assert(/if \(zone !== "settings" && active\(\) && sceneMayChange\(\)\)/.test(app), 'scenes wait while covered and in the dark');
 assert(/setTimeout\(followWhoTick, 3000\)/.test(app) && !/setInterval\(followWho, 3000\)/.test(app), 'the profile poll is a backing-off tick');
 assert(/if \(!SMART_IDLE\.enabled \|\| covered\(\)/.test(app), 'smart idle waits while covered');
-assert(/resume: function \(\) \{ PAGE_PAUSED = false; clock\(\);/.test(app), 'tv.resume redraws the clock first');
+// (front: whether the page was paused, so a refresh after a phone save is not the home coming to the front)
+assert(/resume: function \(\) \{ var front = PAGE_PAUSED; PAGE_PAUSED = false; clock\(\);/.test(app), 'tv.resume redraws the clock first');
 
 let clockCalls = 0;
-const tick = { active: () => true, clock: () => { clockCalls++; }, clockMinute: '', NIGHT: true, glassShown: '21:07', Date: class extends Date { constructor() { super(2026, 10, 16, 21, 7, 30); } } };
+const tick = { active: () => true, refreshBingScene() {}, clock: () => { clockCalls++; }, clockMinute: '', NIGHT: true, glassShown: '21:07', Date: class extends Date { constructor() { super(2026, 10, 16, 21, 7, 30); } } };
 vm.runInNewContext(`${extractFunction('clockTick')}\nthis.tick = clockTick;`, tick);
 tick.tick(); assert.strictEqual(clockCalls, 1, 'a new minute redraws');
 tick.clockMinute = '21:7'; tick.tick(); assert.strictEqual(clockCalls, 1, 'the same minute does not');

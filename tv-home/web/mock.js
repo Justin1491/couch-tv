@@ -8,16 +8,21 @@
 //   quick=sleep,look    tvs[].quick, in order (sleep, picture, look, soundscape, input)
 //   soundscape=rain     home.soundscape: the sound its button starts with (rain, fire, waves, brown)
 //   picture=1           this TV has a picture mode switch (Calibrated and Dynamic)
-//   look=oled           home.look (night, oled, classic)       clock=24h   home.clock     dock=6   home.dock_size
+//   look=oled           home.look (night, oled, classic, loop)   clock=24h   home.clock     dock=6   home.dock_size
+//                       look=loop: the Loop look with no loop files (home.loop has no variants), so the page
+//                       shows backgrounds/scene-night.jpg as a stand-in for the clip, to check the layout,
+//                       with the clock behind the peak (depth=0: without the depth cut-out)
 //   scenes=fog,dawn     home.scenes     secs=8      home.scene_seconds     sunsync=1   home.sun_sync
 //   sunrotate=25        home.sun_rotate_minutes (own scenes tagged "when")     datebars=1   home.date_bars
 //   myscenes=[...]      home.my_scenes, as JSON (docs/MAKE-A-SCENE.md), for your own scenes
+//   iconset=solid       home.icon_set (g24): Settings and More apps drawn from an icon set
 //   lang=it             home.language (en, es, es-MX, it, de, tr, sr-Latn-RS, pl, pt); without it, the browser's own language
 //   glass=on            home.glass (on, lite: no blur)      video=<link>   home.video_url, an MP4 or MOV
 //   moving=off          home.moving_tiles: the focused tile's slow sway (off, or on)
 //   dock=mac            home.dock: the Mac-style dock (mac, or classic)
 //   ambient=1           home.ambient_music: the full screen music view (needs music=1; ambient=off: off)
 //   lighter=1           home.lighter: Lighter home for a slow box (no blur, no soft shadows, a still photo)
+//   showclock=off       home.show_clock: no clock on the home   hires=always|off   home.hi_res (the 4K pictures)
 //   icons=glass         home.glass_icons: Apple style clear app icons on glass
 //   amount=1..5         home.glass_amount, how clear the glass is (1 frosted, 3 the default, 5 very clear)
 //   clockstyle=liquid   home.clock_style: the Night clock as liquid glass
@@ -30,6 +35,7 @@
 //   inputs=4            the Input button lists four HDMI ports (one eARC), as the launcher reads them
 //   gfocus=glass        home.glass_focus: with glass app icons, the focused app stays glass
 //   banners=1           home.dock_banners: the Night dock shows each app's wide TV banner
+//   kwstyle=poster      home.keep_watching_style: the Night row as Classic poster tiles
 //   music=1             Now playing: a pretend song in Spotify (music=paused: paused; music=noart: no cover)
 //   newapp=1            an app turns up that this TV has not seen before (the New dot)
 //   down                the bridge is not answering      offline=1   the saved copy, no bridge at all
@@ -44,11 +50,13 @@
 //                       "Recently on <app>" (YouTube: two pretend videos, the way the bridge sends them)
 //   update=1            Home settings, Updates, with a pretend 0.4 waiting (update=latest: none
 //                       newer; update=allow: the TV has not let Home install apps yet;
-//                       update=ask: nobody has answered "tell you about new versions?" yet)
+//                       update=ask: nobody has answered "tell you about new versions?" yet;
+//                       update=ontv: the on-TV app's steps and QR code; update=ontv-self: its
+//                       Update to button; update=ontv-space: that button, then short of space)
 //   remoteart=1         the real show posters from JustWatch (otherwise every picture is from this server)
 //   wx=24,2             pretend weather: 24 degrees, Open-Meteo code 2 (partly cloudy)
 //   place=Riverside    weather.place, the name shown beside the weather
-//   design=local        design: couch-tv Studio's current design (tools/tv-designer), read from
+//   design=local        design: Couch TV Studio's current design (tools/tv-designer), read from
 //                       this browser's localStorage ("tvdesigner.design"); designer=1 takes live edits
 (function () {
   var q = location.search;
@@ -69,7 +77,13 @@
       '<circle cx="' + Math.round(w * 0.22) + '" cy="' + Math.round(ht * 0.86) + '" r="' + Math.round(ht * 0.42) + '" fill="#000" opacity=".16"/></svg>';
     return "data:image/svg+xml," + encodeURIComponent(svg);
   };
-  var arg = function (name) { var m = q.match(new RegExp("[?&]" + name + "=([^&]*)")); return m ? decodeURIComponent(m[1]) : null; };
+  // a query string writes a space as "+" (URLSearchParams, Couch TV Studio's preview: "Your+town", launch audit 0.13.9)
+  var arg = function (name) { var m = q.match(new RegExp("[?&]" + name + "=([^&]*)")); if (!m) return null; try { return decodeURIComponent(m[1].replace(/\+/g, " ")); } catch (e) { return null; } };
+  // the Home settings keys the bridge keeps (bridge/server.py clean_settings); keep the two lists alike
+  var BRIDGE_KEYS = ["lang", "place", "wx_show", "wx_unit", "wx_every", "look", "idle_photo_seconds", "keep_photo", "keep_photo_pick", "glass", "glass_icons",
+    "moving_tiles", "dock", "lighter", "glass_amount", "clock_style", "now_playing", "keep_watching", "keep_watching_style", "spotify", "ambient_music", "sun_sync", "ambient_weather",
+    "ambient_sun_grade", "nav_sound", "start_focus", "glass_focus", "video", "video_url", "scene_order", "scenes_off", "scene_seconds", "clock", "photos",
+    "hidden_apps", "quick", "soundscape", "smart_idle", "input_tile", "shelf_follows_app", "widgets", "widgets_design", "widgets_base", "show_clock", "hi_res", "icon_set"];
   if (arg("reset")) {
     try { Object.keys(localStorage).forEach(function (k) { if (k.indexOf("mock:") === 0) localStorage.removeItem(k); }); } catch (e) {}
   }
@@ -90,6 +104,7 @@
   }
   if (arg("quick") !== null) cfg.tvs[0].quick = arg("quick").split(",").filter(Boolean);
   if (arg("banners")) cfg.home.dock_banners = true;
+  if (arg("kwstyle")) cfg.home.keep_watching_style = arg("kwstyle");   // home.keep_watching_style: card or poster (#192)
   if (arg("inputs")) {
     window.MOCK_INPUTS = [
       { id: "mock/hdmi1", label: "HDMI 1", type: "hdmi", devices: ["PlayStation 5"] },
@@ -100,6 +115,15 @@
   }
   if (arg("picture")) cfg.tvs[0].picture_modes = ["Calibrated", "Dynamic"];
   if (arg("look")) cfg.home.look = arg("look");
+  // the Loop look: what the bridge sends when make-loop.sh has not run, no variants and no blur copy (docs/LOOP.md),
+  // and depth on (depth=0: off), with loop.json's meta: the page then stands the Night look's whole frame
+  // cut-out, backgrounds/scene-night-fg.webp, over the backgrounds/scene-night.jpg stand-in, at the full
+  // screen and with no motion, to check the layering and where the clock sits. That cut-out has no scrim
+  // baked in, so it looks brighter than the TV's, whose make-loop.sh cut-out carries it
+  if (arg("look") === "loop") {
+    cfg.home.loop = { variants: [], blur: false, fg: arg("depth") !== "0",
+      meta: { still: true, seconds: 34, fps: 30, zoom: 0, sway: 0, fg: { x: 0, y: 0, w: 1920, h: 1080 } } };
+  }
   if (arg("idle")) cfg.home.idle_photo_seconds = arg("idle") === "off" ? 0 : Number(arg("idle"));
   if (arg("smartidle")) {
     cfg.home.smart_idle = { enabled: arg("smartidle") !== "off", home_idle_minutes: 15, home_action: "ambient_clock", paused_idle_minutes: 30, quiet_hours: { enabled: false, start: "23:00", end: "06:00", idle_minutes: 15 } };
@@ -112,13 +136,21 @@
   if (arg("scenes")) cfg.home.scenes = arg("scenes").split(",");
   if (arg("secs")) cfg.home.scene_seconds = parseInt(arg("secs"), 10);
   if (arg("sunsync")) cfg.home.sun_sync = arg("sunsync") === "1" || arg("sunsync") === "true";
+  // zoom=1   home.scene_zoom
+  if (arg("zoom")) cfg.home.scene_zoom = arg("zoom") === "1" || arg("zoom") === "true";
   if (arg("sunrotate")) cfg.home.sun_rotate_minutes = parseInt(arg("sunrotate"), 10);   // home.sun_rotate_minutes
   if (arg("datebars")) cfg.home.date_bars = arg("datebars") !== "off";   // home.date_bars
   if (arg("myscenes")) try { cfg.home.my_scenes = JSON.parse(arg("myscenes")); } catch (e) {}
+  if (arg("iconset")) cfg.home.icon_set = arg("iconset");   // g24
+  // greeting=1   home.greeting; styles=person1:gentle,person2:electric   home.person_styles
+  if (arg("greeting")) cfg.home.greeting = true;
+  if (arg("styles")) cfg.home.person_styles = arg("styles").split(",").reduce(function (o, kv) { var p = kv.split(":"); if (p[1]) o[p[0]] = p[1]; return o; }, {});
   if (arg("glass")) cfg.home.glass = arg("glass");
   if (arg("moving")) cfg.home.moving_tiles = arg("moving") !== "off";
   if (arg("dock")) cfg.home.dock = arg("dock");
   if (arg("lighter")) cfg.home.lighter = arg("lighter") !== "off";
+  if (arg("showclock")) cfg.home.show_clock = arg("showclock") !== "off";   // home.show_clock
+  if (arg("hires")) cfg.home.hi_res = arg("hires") === "always" ? "always" : arg("hires") === "off" ? false : true;   // home.hi_res
   if (arg("ambient")) cfg.home.ambient_music = arg("ambient") !== "off";   // the full screen music view (off unless set)
   if (arg("icons") === "glass") cfg.home.glass_icons = true;
   if (arg("gfocus")) cfg.home.glass_focus = arg("gfocus");   // glass: the focused app stays glass (#32)
@@ -158,6 +190,7 @@
     try { var dz = JSON.parse(localStorage.getItem("tvdesigner.design") || "null"); if (dz && typeof dz === "object") cfg.design = dz; } catch (e) {}
   }
   if (arg("follow")) cfg.home.shelf_follows_app = arg("follow") !== "off";   // home.shelf_follows_app
+  if (arg("inputtile")) cfg.home.input_tile = arg("inputtile") !== "off";   // home.input_tile (#154)
   if (arg("ontv")) cfg.mode = "on-tv";   // ?ontv=1: served by the on-TV app (no computer behind it)
   window.COUCH_CONFIG = cfg;
 
@@ -171,10 +204,25 @@
       checked: Date.now() - 20 * 3600000, auto: kind !== "ask", answered: kind !== "ask", busy: "", progress: 0, error: "" };
     // ?update=ontv: the on-TV app from a phone, which cannot install an update itself (OnTvUpdate.kt):
     // it hands over the steps instead
-    if (kind === "ontv") {
-      up.manual = true; up.code = "8180170";
-      up.how = "This app came from your phone, so it cannot install an update by itself. Put it on again the same way:";
-      up.steps = ["Open Downloader on this TV (in your apps).", "Type 8180170 in its box and press Go.", "Press Install. Your settings stay."];
+    // ?update=ontv-self: the on-TV app with its own ADB link connected, which installs it by itself
+    // (Update.kt); ?update=ontv-space: the same, but the TV is short of space, so the steps come back
+    var self = kind === "ontv-self" || kind === "ontv-space";
+    if (self) { up.self = true; up.can_install = true; up.manual = false; }
+    if (kind === "ontv" || self) {
+      up.self = true; up.help_url = "https://couchtv.joshuaseage.com/help/update-couch-tv/";
+      if (!self) up.manual = true;
+      up.code = "8180170";
+      up.how = "Couch TV cannot install an update by itself on this TV right now. Put the new version on the same way as before, over this one. Your settings stay.";
+      // the real app's eight steps (UpdateRules.kt), so a preview shows how long the page really is
+      up.steps = [
+        "Press Home, then open Downloader from your apps. Not there? Find Downloader by AFTVnews in the TV's app store and install it first.",
+        "If Downloader opens on a news page, press Up again and again until the Downloader button at the top left turns light. Then press Right twice, to the # button, and press OK.",
+        "Type 8180170 and press the tick (or Go). If the TV asks whether Downloader may install apps, allow it.",
+        "Press Install, then Done. Your settings stay.",
+        "If it says App not installed, the TV is usually short of space. In Downloader, open Files, delete the old couch-tv-ontv files, then type 8180170 again.",
+        "Open Couch TV again from your apps.",
+        "If the code gives the version you already have, type this address in the box instead: github.com/Seagey/couch-tv/releases/latest/download/couch-tv-ontv.apk",
+        "Next time it is one button: open Couch TV, press Settings, Phone remote, then Set it up. After that, Home settings, Updates, Update to."];
     }
     var tell = function () { if (window.tv && window.tv.update) window.tv.update(JSON.parse(JSON.stringify(up))); };
     window.MOCK_UPDATER = {
@@ -191,10 +239,54 @@
           if (up.progress < 100) { tell(); return; }
           clearInterval(timer);
           up.busy = "installing"; tell();
-          setTimeout(function () { up.busy = ""; up.progress = 0; up.error = "cancelled"; tell(); }, 3000);
+          setTimeout(function () {
+            up.busy = ""; up.progress = 0;
+            if (kind === "ontv-space") { up.error = "space"; up.can_install = false; up.manual = true; }
+            else if (kind === "ontv-self") { up.current = up.updated = up.latest; up.available = false; }   // the app would restart here
+            else up.error = "cancelled";
+            tell();
+          }, 3000);
         }, 300);
       },
       auto: function (on) { up.auto = !!on; up.answered = true; tell(); }
+    };
+  }
+
+  // ---------- Make Home open Couch TV (the on-TV app's HomeKey.kt), for ?homekey= ----------
+  // ready: one press, downloads, installs, switches the watch on, done. steps: no link, the QR code.
+  // done: already done. watch: the Home button version is on, its watch is off. fail: the watch never connects.
+  if (arg("homekey")) {
+    var hkKind = arg("homekey");
+    var hks = { view: hkKind === "watch" || hkKind === "fail" ? "ready" : hkKind, phase: "", progress: 0, error: "",
+      watch_apk: hkKind === "watch", help_url: "https://couchtv.joshuaseage.com/help/home-button/" };
+    // fire: a Fire TV that blocks the link. otherkey, updbusy: a try that stopped, with its reason. slow: pm install still going
+    if (hkKind === "fire") { hks.view = "steps"; hks.fire_tv = true; hks.fire_blocked = true; }
+    if (hkKind === "otherkey" || hkKind === "updbusy" || hkKind === "slow") { hks.view = "ready"; hks.error = hkKind === "otherkey" ? "other_key" : hkKind === "slow" ? "slow" : "update_busy"; }
+    var hkTell = function () { if (window.tv && window.tv.homekey) window.tv.homekey(JSON.parse(JSON.stringify(hks))); };
+    window.MOCK_HOMEKEY = {
+      state: function () { return JSON.stringify(hks); },
+      start: function () {
+        if (hks.view !== "ready") return;
+        hks.error = ""; hks.view = "busy";
+        var end = function () {
+          hks.phase = "switching"; hks.progress = 0; hkTell();
+          setTimeout(function () {
+            hks.phase = "";
+            if (hkKind === "fail") { hks.view = "ready"; hks.error = "not_bound"; }
+            else { hks.view = "done"; hks.watch_apk = true; }
+            hkTell();
+          }, 1200);
+        };
+        if (hks.watch_apk) { end(); return; }
+        hks.phase = "downloading"; hkTell();
+        var timer = setInterval(function () {
+          hks.progress += 20;
+          if (hks.progress < 100) { hkTell(); return; }
+          clearInterval(timer);
+          hks.phase = "installing"; hkTell();
+          setTimeout(end, 1200);   // the app would close and open again here
+        }, 300);
+      }
     };
   }
 
@@ -239,8 +331,9 @@
         min: 16, max: 30, step: 0.5, modes: ["off", "cool", "heat", "auto"] }
     ];
     if (ha === "scenes") rooms = [];
+    // the last two open the house: the TV never lists them (smarthome.js houseSafe)
     var scenes = [{ entity: "scene.movie_night", name: "Movie night" }, { entity: "scene.lights_off", name: "Lights off" },
-      { entity: "script.good_morning", name: "Good morning" }];
+      { entity: "script.good_morning", name: "Good morning" }, { entity: "script.open_garage", name: "Open garage" }, { entity: "scene.disarm_alarm", name: "Disarm alarm" }];
     var reply = function (id, r) { setTimeout(function () { if (window.smartHome) window.smartHome.reply(id, r); }, 150); };
     var room = function (e) { return rooms.filter(function (r) { return r.entity === e; })[0]; };
     // the smart home widgets (HomeAssistant.kt widgets()): the same answers, made up. ?ha=1 has them all;
@@ -252,7 +345,9 @@
         { entity: "fan.bedroom", name: "Ceiling fan", ok: true, kind: "fan", state: "on", on: true, level: 33 },
         { entity: "cover.blinds", name: "Blinds", ok: true, kind: "cover", state: "closed", on: false, level: 0 },
         { entity: "switch.heater", name: "Heater", ok: false, kind: "switch" },
-        { entity: "cover.garage", name: "Garage", ok: true, kind: "cover", state: "closed", on: false, blocked: true }],
+        { entity: "cover.garage", name: "Garage", ok: true, kind: "cover", state: "closed", on: false, blocked: true },
+        // a garage door Home Assistant calls one, with a name that does not say so: "blocked" when read
+        { entity: "cover.big_roller", name: "Big roller", ok: true, kind: "cover", state: "closed", on: false, blocked: true }],
       cameras: [{ entity: "camera.backyard", name: "Backyard" }, { entity: "camera.driveway", name: "Driveway" }],
       sensors: [{ entity: "sensor.pool", name: "Pool", ok: true, value: "26.4", num: 26.4, unit: "°C", cls: "temperature" },
         { entity: "sensor.rain_today", name: "Rain gauge", ok: true, value: "12", num: 12, unit: "mm" }],
@@ -336,6 +431,75 @@
       setupSave: function (id, picks) { kept = JSON.parse(picks); window.MOCK_HA_SAVED = kept; sreply(id, { ok: true }); },
       setupForget: function (id) { kept = null; sreply(id, { ok: true }); }
     };
+    // ?hasetup=phone: the launcher with its phone set up (HaPage.kt phone(), HaPhone.kt): the QR address,
+    // and MOCK_HA_PHONE_SIGN_IN() plays a phone that signed in and saved the lamp
+    if (arg("hasetup") === "phone") {
+      var seen = false, again = false;
+      window.TVHA.phone = function (id) {
+        sreply(id, { ok: true, url: "http://192.168.1.50:5401/ha/?k=preview-key-only", seen: seen, set: !!kept, host: kept ? "homeassistant.local" : "", count: kept ? 1 : 0, signin_again: again });
+      };
+      window.MOCK_HA_PHONE_SIGN_IN = function () { seen = true; again = false; kept = { controls: [{ entity: "light.lounge", name: "Lounge lamp" }] }; if (window.smartHome) window.smartHome.phoneChanged(); };
+      // MOCK_HA_SIGNED_OUT(): Home Assistant refused the TV's refresh token (HomeAssistant.kt signin_again)
+      window.MOCK_HA_SIGNED_OUT = function () { again = true; };
+    }
+  }
+
+  // ---------- a pretend Matter controller (matter.js, the Matter contract's /api/matter/*) ----------
+  // ?matter=1: a light, a plug, a fan, a blind, a thermostat and two sensors already shared, plus a lock
+  // and a garage door the page must never show. The code 34970112332 (the test code of Matter's
+  // example light) adds one more light; any other right code answers "expired". ?matter=empty: nothing
+  // shared yet. ?matter=down: the controller does not answer.
+  var mt = arg("matter");
+  if (mt) {
+    var MD = mt === "empty" ? [] : [
+      { id: "matter:1:1", name: "Lounge lamp", domain: "light", state: "on", attributes: { brightness: 204 } },
+      { id: "matter:2:1", name: "Heater plug", domain: "switch", state: "off", attributes: {} },
+      { id: "matter:3:1", name: "Ceiling fan", domain: "fan", state: "on", attributes: { percentage: 50 } },
+      { id: "matter:4:1", name: "Study blind", domain: "cover", state: "closed", attributes: { current_position: 0 } },
+      { id: "matter:5:1", name: "Hallway", domain: "climate", state: "heat", attributes: { current_temperature: 18.5, temperature: 21, min_temp: 7, max_temp: 30, target_temp_step: 0.5, hvac_modes: ["off", "heat", "cool", "auto"], hvac_action: "heating" } },
+      { id: "matter:6:1", name: "Nursery temperature", domain: "sensor", state: "22.4", attributes: { unit_of_measurement: "°C", device_class: "temperature" } },
+      { id: "matter:6:2", name: "Nursery humidity", domain: "sensor", state: "48", attributes: { unit_of_measurement: "%", device_class: "humidity" } },
+      { id: "matter:7:1", name: "Front door lock", domain: "lock", state: "locked", attributes: {} },
+      { id: "matter:8:1", name: "Garage", domain: "cover", state: "closed", attributes: { device_class: "garage" } }
+    ];
+    window.MOCK_MATTER_LOG = [];
+    window.MOCK_MATTER = function (method, path, body) {
+      window.MOCK_MATTER_LOG.push(method + " " + path + (body ? " " + JSON.stringify(body) : ""));
+      var dev = function (id) { return MD.filter(function (d) { return d.id === id; })[0]; };
+      return new Promise(function (resolve, reject) {
+        setTimeout(function () {
+          if (mt === "down") return reject(new Error("bridge_down"));
+          // ?matter=nodeold: the home computer's Node.js is too old (bridge/matter.py's reason key); ?matter=androidold: an Android 6 TV (the on-TV app's reason key)
+          if (path.indexOf("/api/matter/devices") === 0) return resolve(mt === "nodeold" || mt === "androidold" ? { ok: true, devices: [], ready: false, reason: mt === "nodeold" ? "node_old" : "android_old", note: "Node.js 18 or newer is needed (found 16)." } : { devices: JSON.parse(JSON.stringify(MD)), ready: true });
+          if (path === "/api/matter/commission") {
+            var code = String(body && body.code || "");
+            if (code === "34970112332" || /^MT:/.test(code)) {
+              var node = 20 + MD.length;
+              MD.push({ id: "matter:" + node + ":1", name: "Matter light", domain: "light", state: "off", attributes: {} });
+              return resolve({ ok: true, device_ids: ["matter:" + node + ":1"] });
+            }
+            // 20000000000: a lock shared by mistake (the bridge's answer, 400 not_allowed)
+            return reject(new Error(code === "20000000000" ? "not_allowed" : "expired"));
+          }
+          var d = dev(body && body.id);
+          if (!d) return reject(new Error("refused"));
+          if (path === "/api/matter/remove") { MD.splice(MD.indexOf(d), 1); return resolve({ ok: true }); }
+          if (path === "/api/matter/rename") { d.name = String(body.name); return resolve({ ok: true }); }
+          if (path === "/api/matter/command") {
+            var a = body.action, v = body.value;
+            if (a === "on" || a === "off") d.state = d.domain === "climate" && a === "on" ? "heat" : a;
+            else if (a === "toggle") d.state = d.state === "on" ? "off" : "on";
+            else if (a === "position") { d.attributes.current_position = v; d.state = v > 0 ? "open" : "closed"; }
+            else if (a === "target") d.attributes.temperature = v;
+            else if (a === "mode") d.state = v;
+            else return reject(new Error("refused"));
+            return resolve({ ok: true, state: d.state });
+          }
+          reject(new Error("refused"));
+        }, 80);
+      });
+    };
+    if (window.CouchMatter) window.CouchMatter.use(window.MOCK_MATTER);
   }
 
   // ---------- a pretend bridge ----------
@@ -370,6 +534,18 @@
     return new Promise(function (resolve, reject) {
       setTimeout(function () {
         if (down) return reject(new Error("The computer isn't answering."));
+        // ?ontv=1: Home settings' Change this on your phone QR (the on-TV app's /api/phone-link)
+        // ?phonepage=bridge: the home computer serves the page (bridge/phonepage.py); bridge2: for its
+        // second TV (?tv=); anything else that is not the on-TV app: an older computer with no such page
+        if (path.indexOf("/api/phone-link") === 0 && arg("phonepage") === "bridge") return resolve({ ok: true, url: "http://my-computer.local:5400/setup#pin=482913", pin_expires_in: 170 });
+        if (path.indexOf("/api/phone-link") === 0 && arg("phonepage") === "bridge2") return resolve({ ok: true, url: "http://my-computer.local:5400/setup?tv=bedroom#pin=482913", pin_expires_in: 170 });
+        if (path.indexOf("/api/phone-link") === 0) {
+          if (cfg.mode !== "on-tv") return reject(new Error("no such endpoint"));
+          // the tests change the code (mock:phonePin) or make the call fail (mock:phoneLinkFail)
+          var mp = null, mf = null; try { mp = localStorage.getItem("mock:phonePin"); mf = localStorage.getItem("mock:phoneLinkFail"); } catch (e) {}
+          if (mf) return reject(new Error("Too many wrong codes. Wait 10 min, then try again."));
+          return resolve({ ok: true, url: "http://tv.example:5400/setup#pin=" + (/^\d{6}$/.test(mp || "") ? mp : "482913"), pin_expires_in: 170, phones: 1 });
+        }
         // Now playing (#31): ?music=1, a song that previous and next step through, play and pause toggle
         if (path.indexOf("/api/weather") === 0 && arg("wx")) {
           var wp = arg("wx").split(",");
@@ -407,7 +583,9 @@
           // the videos next to the items, as GET /api/continue sends them (bridge/API.md): made-up titles, no picture
           var videos = empty ? [] : [
             { id: "v1", title: "How a Sydney ferry is built", kind: "video", app: app("youtube", "YouTube", "com.google.android.youtube.tv"), poster: null, backdrop: null, progress: null },
-            { id: "v2", title: "Sourdough for beginners", kind: "video", app: app("youtube", "YouTube", "com.google.android.youtube.tv"), poster: null, backdrop: null, progress: null }
+            { id: "v2", title: "Sourdough for beginners", kind: "video", app: app("youtube", "YouTube", "com.google.android.youtube.tv"), poster: null, backdrop: null, progress: null },
+            // a live stream carries live: true (the Loop look's card says "YouTube · Live")
+            { id: "v3", title: "Harbour webcam", kind: "video", live: true, app: app("youtube", "YouTube", "com.google.android.youtube.tv"), poster: null, backdrop: null, progress: null }
           ];
           return resolve({ ok: true, items: mine, videos: videos });
         }
@@ -442,9 +620,18 @@
         }
         if (path.indexOf("/api/play") === 0) return resolve({ ok: true, note: body.title + " is playing." });
         if (path.indexOf("/api/settings") === 0) {
-          if (method === "POST") store.set("api.settings", { settings: body.settings || {}, updated: new Date().toISOString() });
+          if (method === "POST") {
+            // as the on-TV app does (Server.kt): a TV that saves an older copy than the server's keeps the
+            // server's town and photos, which the phone's Home settings page may have changed since
+            var was = store.get("api.settings"), next = Object.assign({}, body.settings || {});
+            // a computer at home (the bridge, server.py clean_settings) keeps only the keys it knows: a
+            // preview drops the rest the same way, so a key the bridge would lose shows up here first
+            if (!arg("ontv")) Object.keys(next).forEach(function (k) { if (BRIDGE_KEYS.indexOf(k) < 0) delete next[k]; });
+            if (body.seen && was && was.updated && body.seen !== was.updated) ["place", "photos"].forEach(function (k) { if (was.settings && k in was.settings) next[k] = was.settings[k]; else delete next[k]; });
+            store.set("api.settings", { settings: next, updated: new Date(Math.max(Date.now(), was && was.updated ? Date.parse(was.updated) + 1 : 0)).toISOString() });
+          }
           var st = store.get("api.settings") || { settings: {}, updated: null };
-          return resolve({ ok: true, settings: st.settings, updated: st.updated });
+          return resolve({ ok: true, settings: st.settings, updated: st.updated, mode: arg("phonepage") ? "bridge" : undefined });
         }
         if (path.indexOf("/api/sleep") === 0) {
           if (method === "POST") sleepEnds = body.minutes ? new Date(Date.now() + body.minutes * 60000).toISOString() : null;

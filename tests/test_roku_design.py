@@ -267,6 +267,31 @@ class Gate(unittest.TestCase):
         self.assertNotIn("background", got[0])
         self.assertEqual(got[1]["background"]["image"], "kept:0.jpg")
 
+    def test_a_smart_stack_item_keeps_its_own_photo_like_a_widget_on_its_own(self):
+        jpeg = fixture("every-object.json")["background"]["image"]
+        d = {"objects": [
+            {"id": "s1", "type": "widget", "kind": "stack", "x": 0, "y": 0, "w": 600, "h": 400, "items": [
+                {"kind": "photo", "opts": {"image": jpeg, "fit": "contain", "caption": "Beach"}},
+                {"kind": "artframe", "opts": {"image": "kept:3.jpg", "mat": "#ffffff"}},
+                {"kind": "photo", "opts": {"image": "https://evil.example/x.jpg"}},
+                {"kind": "photo", "opts": {"image": "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUg=="}},
+                {"kind": "photo", "opts": {"image": "backgrounds/scene-night.jpg"}}]},
+            {"id": "p1", "type": "widget", "kind": "photo", "x": 700, "y": 0, "w": 400, "h": 400,
+             "opts": {"image": "kept:1.jpg"}}]}
+        got = run_brs([("sanitize", [d, True]), ("layout", [d, CTX])])
+        items_ = got[0]["objects"][0]["items"]
+        self.assertEqual(len(items_), 5)
+        self.assertEqual(items_[0]["opts"]["image"], jpeg)                 # a real JPEG inside the design
+        self.assertEqual(items_[0]["opts"]["fit"], "contain")
+        self.assertEqual(items_[1]["opts"]["image"], "kept:3.jpg")         # one this Roku filed itself
+        self.assertNotIn("image", items_[2]["opts"])                      # a link: refused
+        self.assertNotIn("image", items_[3]["opts"])                      # says JPEG, is a PNG: refused
+        self.assertEqual(items_[4]["opts"]["image"], "backgrounds/scene-night.jpg")
+        self.assertEqual(got[0]["objects"][1]["opts"]["image"], "kept:1.jpg")   # a widget on its own, as before
+        # the stack shows its first item, and that item draws its photo, whole (fit), not the empty card
+        posters = [i for i in got[1]["layout"]["front"] if i["k"] == "poster"]
+        self.assertTrue(any(p["u"] == jpeg and p["mode"] == "fit" and p["w"] == 600 for p in posters), posters)
+
 
 @unittest.skipUnless(BRS.exists(), "run `npm ci --prefix roku` for the BrightScript interpreter")
 class Time(unittest.TestCase):
@@ -373,12 +398,16 @@ class Layout(unittest.TestCase):
 
     def test_widgets_drawn_or_shown_as_a_titled_card(self):
         t = texts(self.every["layout"])
-        self.assertIn("Lounge", t)                 # the aircon widget: its own label
-        self.assertIn("Air conditioning", t)       # and its kind, in plain words
-        self.assertIn("News", t)
+        j = " ".join(t)
+        self.assertNotIn("Lounge", j)              # the aircon widget: never a label from the design
+        self.assertIn("Aircon:", j)                # its name, and that it is not on this TV
+        self.assertIn("not on this TV", j)
+        self.assertIn("Headlines:", j)
         self.assertIn("Bedroom", t)                # the smart object
         self.assertIn("Smart home", t)             # the section
-        self.assertIn("Waxing gibbous", t)         # the stack shows its first widget
+        # the stack (moon, then weather) shows one widget at a time, the next each minute: at 21:05 (minute
+        # 1265 of the day) the weather, not the moon (tests/test_ws_native.py RokuStack)
+        self.assertNotIn("Waxing gibbous", t)
         self.assertNotIn("hologram", " ".join(t).lower())
         self.assertIn("Photo", t)                  # a photo whose picture was refused: its card
 
@@ -505,6 +534,9 @@ sub testHook()
     out.bad = m.status.text
     designFetched(200, c.answer)
     out.kept = m.reg.exists("fetched")
+    ft = m.reg.read("fetched")
+    out.fetched = { len: Len(ft), data: Instr(1, ft, "data:") > 0, design: {} }
+    if ft <> "" then out.fetched.design = ParseJson(ft)
     out.asked_first = m.reg.read("ok") <> "1"
     m.reg.write("ok", "1")
     designRefresh()
@@ -517,6 +549,14 @@ sub testHook()
     print "RESULT " + FormatJson(out)
 end sub
 '''
+
+
+def scene_today(year=False):
+    """Today's date as the scene draws it ("Friday 20 November"): the scene reads the real clock
+    (roDateTime, local time), not NOW."""
+    import datetime
+    t = datetime.datetime.now()
+    return f"{t:%A} {t.day} {t:%B}" + (f" {t.year}" if year else "")
 
 
 def run_scene(design, answer):
@@ -534,6 +574,13 @@ def run_scene(design, answer):
         (ch / "components" / "TestHook.brs").write_text(HOOK)
         draw = (ch / "components" / "DesignDraw.brs").read_text()
         draw = draw.replace('CreateObject("roRegistrySection", "couchtv-design")', "testRegistry()")
+        # brs has no cachefs: volume, so the kept photos go to its tmp: one, under their own name
+        for f in ("DesignDraw.brs", "DesignLib.brs"):
+            p = ch / "components" / f
+            src = draw if f == "DesignDraw.brs" else p.read_text()
+            assert src.count('"cachefs:/couchtv-design-"') == 1, f
+            p.write_text(src.replace('"cachefs:/couchtv-design-"', '"tmp:/cachefs-couchtv-design-"'))
+        draw = (ch / "components" / "DesignDraw.brs").read_text()
         (ch / "components" / "DesignDraw.brs").write_text(draw)
         home = (ch / "components" / "HomeScene.brs").read_text()
         home = home.replace("    loadAll()\nend sub", "    loadAll()\n    testHook()\nend sub", 1)
@@ -570,7 +617,7 @@ class Scene(unittest.TestCase):
         self.assertEqual(p["dBg"]["count"], {"Group": 1})
         self.assertEqual(p["zones"]["dock"], 5)          # four apps and Settings
         self.assertEqual(p["zones"]["wapps"], 0)
-        self.assertIn("Thursday 19 November", p["top"]["text"])
+        self.assertIn(scene_today(), p["top"]["text"])   # the scene runs on the real clock
         self.assertIn("23°C  Partly cloudy", p["top"]["text"])
         self.assertIn("Netflix", p["focus"]["name"])
 
@@ -578,13 +625,13 @@ class Scene(unittest.TestCase):
         c = self.r["config"]
         self.assertFalse(c["scenes"])                    # its own background hides the scene
         self.assertTrue(any(u.startswith("tmp:/couchtv-design-") and u.endswith(".jpg") for u in c["dBg"]["uris"]))
-        for words in ("Good evening", "Welcome home\nRelax", "Lounge", "Air conditioning", "“Be kind”", "Bedroom"):
+        for words in ("Good evening", "Welcome home\nRelax", "Aircon:", "not on this TV", "“Be kind”", "Bedroom"):
             self.assertIn(words, c["dFront"]["text"] + c["dBack"]["text"])
         self.assertGreater(c["zones"]["wapps"], 3)       # the design's app tiles are stops for the remote
         self.assertEqual(c["zones"]["dock"], 4)          # Prime Video hidden, Settings still there
         self.assertEqual(c["zones"]["people"], 0)        # the design hides the people
         self.assertAlmostEqual(c["dockxf"], 0.5)         # made small, never gone
-        self.assertIn("Thursday 19 November 2026", c["top"]["text"])   # the full format
+        self.assertIn(scene_today(True), c["top"]["text"])   # the full format
         self.assertIn("Springfield  23°C", c["top"]["text"])            # with its place, without words
 
     def test_remote_reaches_the_design_apps_and_back_to_the_dock(self):
@@ -609,6 +656,50 @@ class Scene(unittest.TestCase):
         self.assertTrue(off["clock"]["visible"])
         self.assertEqual(off["zones"]["dock"], 5)
         self.assertIn("not a design code", self.r["nocode"])
+
+
+def big_jpeg(fill):
+    """A real JPEG (the fixture's) with bytes after its end, so its data address is longer than the
+    15000 characters the registry may hold for a whole design; picture readers stop at the JPEG's end."""
+    import base64
+    small = fixture("every-object.json")["background"]["image"]
+    raw = base64.b64decode(small.split(",", 1)[1]) + bytes([fill]) * 13000
+    return "data:image/jpeg;base64," + base64.b64encode(raw).decode()
+
+
+@unittest.skipUnless(BRS.exists(), "run `npm ci --prefix roku` for the BrightScript interpreter")
+class SceneWidgetPhotos(unittest.TestCase):
+    """A design got by code with a photo in a smart stack item and one in a Photo widget, each too big to
+    keep in the registry inline: designKeep files both in cachefs: and the kept design draws both."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.stack_photo, cls.own_photo = big_jpeg(1), big_jpeg(2)
+        answer = {"ok": True, "design": {"objects": [
+            {"id": "st", "type": "widget", "kind": "stack", "x": 100, "y": 100, "w": 600, "h": 400, "items": [
+                # one item: a stack of two takes turns each minute on a Roku, and this scene runs on the
+                # real clock, so the photo would show only on every other minute
+                {"kind": "photo", "opts": {"image": cls.stack_photo, "caption": "Beach"}}]},
+            {"id": "ph", "type": "widget", "kind": "artframe", "x": 800, "y": 100, "w": 500, "h": 500,
+             "opts": {"image": cls.own_photo}}]}}
+        cls.r = run_scene(fixture("every-object.json"), answer)
+
+    def test_both_photos_are_filed_and_the_design_is_kept(self):
+        self.assertGreater(len(self.stack_photo), 15000)
+        self.assertTrue(self.r["kept"])             # before the fix: "This TV has no room to keep that design."
+        f = self.r["fetched"]
+        kept = f["design"]
+        self.assertLessEqual(f["len"], 15000)
+        self.assertFalse(f["data"])                  # no picture left inline in the registry
+        self.assertEqual(kept["objects"][0]["items"][0]["opts"]["image"], "kept:1.jpg")
+        self.assertEqual(kept["objects"][0]["items"][0]["opts"]["caption"], "Beach")
+        self.assertEqual(kept["objects"][1]["opts"]["image"], "kept:2.jpg")
+
+    def test_the_kept_design_draws_both_photos_from_their_files(self):
+        uris = self.r["code"]["dFront"]["uris"] + self.r["code"]["dBack"]["uris"]
+        self.assertIn("tmp:/cachefs-couchtv-design-1.jpg", uris)   # the smart stack's first item
+        self.assertIn("tmp:/cachefs-couchtv-design-2.jpg", uris)   # the Art frame widget
+        self.assertIn("Beach", self.r["code"]["dFront"]["text"] + self.r["code"]["dBack"]["text"])
 
 
 if __name__ == "__main__":

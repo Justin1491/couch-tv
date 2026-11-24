@@ -206,6 +206,8 @@ struct DesignPart: Equatable {
     var type = DesignType()
     var format: String?          // clock 12h/24h, date short/numeric/weekday/day_month/full
     var style: String?           // clock glass/solid
+    var at: String?              // clock "scene": where each built in scene puts it (behind the hills, on the water)
+    var behind: Bool?            // clock behind the hills of a built in scene
     var panel: String?
     var placeName: Bool?
     var words: Bool?
@@ -226,6 +228,8 @@ struct DesignPart: Equatable {
         if key == "clock" {
             p.format = DesignGate.pick(s["format"], ["12h", "24h"])
             p.style = DesignGate.pick(s["style"], ["glass", "solid"])
+            p.at = DesignGate.pick(s["at"], ["scene"])
+            p.behind = DesignGate.bool(s["behind"])
         }
         if key == "date" { p.format = DesignGate.pick(s["format"], DesignDates.keys) }
         if key == "weather" { p.placeName = DesignGate.bool(s["place"]); p.words = DesignGate.bool(s["words"]) }
@@ -483,6 +487,7 @@ struct DesignHome: Equatable {
     var clock: String?
     var keepWatching: Bool?
     var dockSize: Int?
+    var scenes: [String] = []    // the built in scenes the design keeps (one, or several taking turns); none is all
 }
 
 /// A whole design, after the gate. Only what is listed here reaches the screen.
@@ -501,7 +506,13 @@ struct Design: Equatable {
         var d = Design()
         let hm = DesignGate.dict(raw["home"])
         d.home = DesignHome(clock: DesignGate.pick(hm["clock"], ["12h", "24h"]), keepWatching: DesignGate.bool(hm["keep_watching"]),
-                            dockSize: DesignGate.int(hm["dock_size"], 1, 10))
+                            dockSize: DesignGate.int(hm["dock_size"], 1, 10),
+                            scenes: DesignGate.list(hm["scenes"]).prefix(20).compactMap { x -> String? in
+                                guard let s = x as? String, s.count <= 40,
+                                      s.allSatisfy({ ($0.isASCII && ($0.isLowercase || $0.isNumber)) || $0 == "_" || $0 == "-" }), !s.isEmpty
+                                else { return nil }
+                                return s
+                            })
         let el = DesignGate.dict(raw["elements"])
         for k in DesignPart.keys where el[k] != nil { d.elements[k] = DesignPart.read(k, DesignGate.dict(el[k])) }
         d.background = DesignBackground.read(DesignGate.dict(raw["background"]))
@@ -525,6 +536,10 @@ struct Design: Equatable {
     }
 
     func part(_ key: String) -> DesignPart? { elements[key] }
+
+    /// The home's own clock drawn by the built in scenes (clock.at "scene", no background of the design's own):
+    /// the Night home, with the clock behind the hills and on the water of the Waterline scene.
+    var sceneClock: Bool { background == nil && shows("clock") && part("clock")?.at == "scene" }
 
     /// A home part shows unless the design hides it.
     func shows(_ key: String) -> Bool { !(elements[key]?.place.hidden ?? false) }
@@ -837,5 +852,45 @@ enum DesignCode {
             d["background"] = bg
         }
         return d
+    }
+}
+
+// MARK: Get a design from your phone (DesignStore.swift asks; tv-home/web/design-code.js openInbox, takeInbox)
+
+/// A one time inbox at couch-tv Studio: the QR holds `link`; the phone puts a design code in it, and this
+/// Apple TV asks for it every `every` seconds while the screen showing the QR is open, and only then.
+/// Only a code ever comes back, and it is got exactly as a typed one: "Use this design?" first, always.
+struct DesignInbox: Equatable {
+    let id: String
+    let link: String
+    let expires: Date
+    let every: Double
+
+    static func validId(_ s: String) -> Bool {
+        s.count == 22 && s.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
+    }
+
+    /// The store's answer to "open", or nil when it is not one.
+    static func read(_ data: Data, base: String, now: Date = Date()) -> DesignInbox? {
+        guard let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let id = j["id"] as? String, validId(id) else { return nil }
+        let secs = min(1800, max(60, (j["expires_in"] as? Double) ?? 600))
+        let every = min(30, max(3, (j["poll_every"] as? Double) ?? 4))
+        return DesignInbox(id: id, link: base + "/design/#inbox=" + id, expires: now.addingTimeInterval(secs), every: every)
+    }
+
+    enum Take: Equatable { case waiting, code(String), gone, problem(String) }
+
+    /// The store's answer to "take": a code (read as a typed one), still waiting, or run out.
+    static func readTake(status: Int, data: Data) -> Take {
+        if status == 404 { return .gone }
+        guard status == 200, let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return .problem("Could not reach couch-tv Studio. Check the Apple TV is online, or type the code instead.")
+        }
+        if j["state"] as? String == "ok" {
+            guard let c = j["code"] as? String, let code = DesignCode.read(c) else { return .gone }
+            return .code(code)
+        }
+        return .waiting
     }
 }

@@ -2,7 +2,7 @@
 //  1. OK on each widget opens its layer; the remote moves inside it (Right then Left comes back);
 //     Back closes it, the widget shows again and the home keeps its focus.
 //  2. What the layers do reaches the TV: aircon warmer and fan, a scene, a timer, Hold OK's Open.
-//  3. Every widget kind at every size in widget-caps.js, as couch-tv Studio draws it, as a TV with its
+//  3. Every widget kind at every size in widget-caps.js, as Couch TV Studio draws it, as a TV with its
 //     data draws it, and as a TV with nothing set up draws it: nothing past its box, no words under 23 px.
 // Needs Playwright (Chromium). Without it the test says so and passes:
 //   COUCHTV_PLAYWRIGHT=<a folder whose node_modules has playwright> node tests/test_widget_detail_browser.mjs
@@ -37,7 +37,7 @@ async function home(widgets, q) {
   const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
   page.errors = [];
   page.on("pageerror", (e) => page.errors.push(String(e)));
-  const design = { v: 1, background: { colour: "#26303f" }, objects: widgets.map((x, i) => { const R = rect(x[1], x[2], x[3], x[4]); return Object.assign({ id: "w" + i, type: "widget", kind: x[0], x: R.x, y: R.y, w: R.w, h: R.h }, x[5] ? { opts: x[5] } : {}); }) };
+  const design = { v: 1, background: { colour: "#26303f" }, objects: widgets.map((x, i) => { const R = rect(x[1], x[2], x[3], x[4]); return Object.assign({ id: "w" + i, type: "widget", kind: x[0], x: R.x, y: R.y, w: R.w, h: R.h }, x[5] ? { opts: x[5] } : {}, x[6] || {}); }) };
   await page.goto(BASE + "?mock=1&reset=1");
   await page.evaluate((d) => { localStorage.clear(); localStorage.setItem("tvdesigner.design", JSON.stringify(d)); }, design);
   await page.goto(BASE + "?mock=1&design=local" + (q || ""));
@@ -74,11 +74,22 @@ for (const [layer, w, q] of CASES) {
   ok(c && c.name === layer, label + ": OK opens " + layer + " (got " + (c && c.name) + ")");
   ok(await page.evaluate(() => { const p = document.querySelector(".cwd-panel"); const r = p.getBoundingClientRect(); return r.width >= 1700 && r.height >= 900; }), label + ": the layer fills the screen");
   ok(await page.evaluate(() => getComputedStyle(document.querySelector('.cw-o[data-obj="w0"] .cw')).visibility === "hidden"), label + ": the widget has grown into the layer");
+  // 0.13.12: Open-Meteo's data is CC BY 4.0, so the layers it fills credit it, quietly, in plain text, inside the panel
+  const credit = await page.evaluate(() => { const c = document.querySelector(".cwd-panel .cwd-credit"), p = document.querySelector(".cwd-panel");
+    if (!c) return null; const r = c.getBoundingClientRect(), q = p.getBoundingClientRect();
+    return { text: c.textContent, link: !!c.querySelector("a"), inside: r.bottom <= q.bottom && r.right <= q.right && r.width > 0, size: parseFloat(getComputedStyle(c).fontSize) }; });
+  if (["forecast", "air", "surf"].indexOf(layer) >= 0) {
+    ok(credit && credit.text === "Weather data by Open-Meteo.com" && !credit.link && credit.inside && credit.size <= 24,
+      label + ": the quiet Open-Meteo credit (" + JSON.stringify(credit) + ")");
+  } else ok(!credit, label + ": no weather credit on a layer that shows no weather");
   if (c.stops > 1 && layer !== "photos") {
     const before = c.focusName;
     await press(page, "ArrowRight"); const r1 = await cur(page);
-    if (r1.focusName !== before) { await press(page, "ArrowLeft"); ok((await cur(page)).focusName === before, label + ": Right then Left comes back"); }
-    else { await press(page, "ArrowDown"); const d1 = await cur(page); if (d1.focusName !== before) { await press(page, "ArrowUp"); ok((await cur(page)).focusName === before, label + ": Down then Up comes back"); } }
+    // one check on every path: a move and its opposite come back (or nothing moved, so nothing to undo)
+    let back = true, how = "nothing moved";
+    if (r1.focusName !== before) { await press(page, "ArrowLeft"); back = (await cur(page)).focusName === before; how = "Right then Left"; }
+    else { await press(page, "ArrowDown"); const d1 = await cur(page); if (d1.focusName !== before) { await press(page, "ArrowUp"); back = (await cur(page)).focusName === before; how = "Down then Up"; } }
+    ok(back, label + ": " + how + " comes back");
     ok(await page.evaluate(() => document.querySelectorAll(".cwd-f").length === 1), label + ": one focus ring");
   }
   // the home never moves under an open layer
@@ -139,9 +150,12 @@ for (const [layer, w, q] of CASES) {
   // tests, 19 Nov 2026), then All apps, then Open for the widget's own page
   const page = await home([["scenes", 0, 0, 8, 4]], "&ha=1");
   await page.keyboard.down("Enter"); await page.waitForTimeout(900); await page.keyboard.up("Enter"); await page.waitForTimeout(300);
-  const items = await page.evaluate(() => [...document.querySelectorAll(".cw-menu .cw-mi")].map((n) => n.textContent));
+  // (Edit on the TV and Edit on your phone, the widget's own settings, sit right after Settings when its kind has any:
+  // tests/test_design_settings_browser.mjs tests it; this test is about the rest of the order)
+  const items = await page.evaluate(() => [...document.querySelectorAll(".cw-menu .cw-mi")].map((n) => n.textContent).filter((t) => t !== "Edit on the TV" && t !== "Edit on your phone"));
   ok(items[0] === "Settings" && items[1] === "All apps" && items[2] === "Open Scenes", "hold OK: Settings, All apps, then Open Scenes (" + items.join(", ") + ")");
-  await press(page, "ArrowDown", 200); await press(page, "ArrowDown", 200);
+  const openAt = await page.evaluate(() => [...document.querySelectorAll(".cw-menu .cw-mi")].map((n) => n.textContent).indexOf("Open Scenes"));
+  for (let k = 0; k < openAt; k++) await press(page, "ArrowDown", 200);
   await press(page, "Enter", 800);
   ok((await cur(page) || {}).name === "scenes", "hold OK: Open opens the layer");
   await page.close();
@@ -196,6 +210,57 @@ for (const [layer, w, q] of CASES) {
   await page.close();
 }
 
+{ // 0.13.9, the owner: "Holding OK on any widget allows you to edit it." Every kind, and a widget in a stack:
+  // a kind with settings the TV offers has Edit on the TV right after Settings; one with none says so in a
+  // line and has no Edit item. A TV the computer runs (this mock) never has Edit on your phone.
+  const probe = await home([["clock", 0, 0, 4, 2]]);
+  const kinds = await probe.evaluate(() => { const C = window.CouchWidgetCaps;
+    return C.kinds().filter((k) => k !== "stack").map((k) => ({ kind: k, has: C.settings(k).some((s) => s && s.pre === true && (!Array.isArray(s.where) || s.where.indexOf("tv") >= 0 || s.where.indexOf("phone") >= 0)) })); });
+  await probe.close();
+  const holdMenuOf = async (page, id) => {
+    await page.evaluate((x) => window.CouchDesign.nav.focus(x, 0), id); await page.waitForTimeout(120);
+    await page.keyboard.down("Enter"); await page.waitForTimeout(900); await page.keyboard.up("Enter"); await page.waitForTimeout(250);
+    const m = await page.evaluate(() => ({ items: [...document.querySelectorAll(".cw-sheet .cw-mi")].map((e) => e.textContent), note: (document.querySelector(".cw-sheet .cw-note") || {}).textContent || "" }));
+    await press(page, "Escape", 200);
+    return m;
+  };
+  const wrong = [];
+  let withSet = 0, without = 0; const skippedLook = [];
+  for (let p = 0; p < kinds.length; p += 20) {
+    const part = kinds.slice(p, p + 20);
+    const page = await home(part.map((k, i) => [k.kind, (i % 4) * 4, Math.floor(i / 4) * 2, 4, 2]));
+    // only a widget the remote can land on can be held (a widget that only shows something, like Quote,
+    // is not a stop while the home has others to press)
+    const stopIds = await page.evaluate(() => window.CouchDesign.nav.stops().map((s) => s.id));
+    for (let i = 0; i < part.length; i++) {
+      if (stopIds.indexOf("w" + i) < 0) { skippedLook.push(part[i].kind); continue; }
+      const m = await holdMenuOf(page, "w" + i), k = part[i];
+      if (m.items[0] !== "Settings") wrong.push(k.kind + ": Settings is not first (" + m.items.join(", ") + ")");
+      if (m.items.indexOf("Edit on your phone") >= 0) wrong.push(k.kind + ": Edit on your phone on a TV the computer runs");
+      if (k.has) { withSet++; if (m.items[1] !== "Edit on the TV" || m.note) wrong.push(k.kind + ": has settings, menu " + m.items.join(", ") + " note " + m.note); }
+      else { without++; if (m.items.indexOf("Edit on the TV") >= 0 || m.note !== "Nothing to set for this widget on the TV. Change how it looks in Couch TV Studio.") wrong.push(k.kind + ": no settings, menu " + m.items.join(", ") + " note " + m.note); }
+    }
+    ok(!page.errors.length, "no page errors: " + page.errors.join("; "));
+    await page.close();
+  }
+  // 0.13.9: with every widget group merged, every kind has a setting on the TV (the owner's goal: there is
+  // no "later"), so no kind is left without one; the "Nothing to set" branch above stays for any that comes
+  ok(withSet > 5 && without === 0, "every kind tried has settings: " + withSet + " with settings, " + without + " without");
+  ok(wrong.length === 0, "Hold OK on every kind:\n  " + wrong.join("\n  "));
+  console.log("  (not a stop beside other widgets, so not held: " + skippedLook.join(", ") + ")");
+  // a widget inside a smart stack: the one showing now (headlines or markets, both with settings), by its place in the stack
+  const sp = await home([["stack", 0, 0, 6, 3, null, { turn: 600, items: [{ kind: "news" }, { kind: "stocks" }] }]], "&ontv=1");
+  const at = await sp.evaluate(() => document.querySelector('.cw-o[data-obj="w0"] .cw-stack').__at());
+  const sm = await holdMenuOf(sp, "w0");
+  ok(sm.items[0] === "Edit on your phone" && sm.items.indexOf("Edit on the TV") < 0, "a stack on the on-TV app: Edit on your phone first (" + sm.items.join(", ") + ")");
+  await sp.evaluate(() => window.CouchDesign.nav.focus("w0", 0)); await sp.waitForTimeout(120);
+  await sp.keyboard.down("Enter"); await sp.waitForTimeout(900); await sp.keyboard.up("Enter"); await sp.waitForTimeout(250);
+  await press(sp, "ArrowDown", 120); await press(sp, "ArrowUp", 120); await press(sp, "Enter", 800);   // back up to the first item, Edit on your phone
+  await sp.waitForFunction(() => document.querySelector(".cw-sheet .cw-qr"), null, { timeout: 5000 }).catch(() => {});
+  const link = await sp.evaluate(() => { const q = document.querySelector(".cw-sheet .cw-qr"); return q && q.getAttribute("data-link"); });
+  ok(link === "http://tv.example:5400/setup#pin=482913&widget=" + encodeURIComponent("w0/" + at), "its QR names the widget in the stack: " + link);
+  await sp.close();
+}
 await browser.close();
 server.close();
 console.log("OK: " + n + " checks");

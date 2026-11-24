@@ -52,6 +52,12 @@ object Adb {
     @Volatile var state: String = "off"; private set           // off | connecting | waiting_for_allow | connected | needs_pairing | failed
     @Volatile var lastError: String? = null; private set
     @Volatile var tlsPort: Int? = null; private set
+    /**
+     * The last "Allow debugging?" wait ran out with no answer at all. On a real TCL (20 Nov 2026) adbd
+     * kept an earlier question it believed was still open (it had been hidden behind another app) and
+     * never showed a new one, until the TV was restarted.
+     */
+    @Volatile var unanswered = false; private set
 
     private val mgr by lazy { Manager(ctx) }
 
@@ -70,12 +76,14 @@ object Adb {
         "connected" to connected, "route" to route, "state" to state, "error" to lastError,
         "tls_paired" to paired, "tls_port" to tlsPort, "ever_allowed" to everAllowed,
         "can_self_enable" to canWriteSecure(), "overlay" to Settings.canDrawOverlays(ctx),
-        "sdk" to Build.VERSION.SDK_INT, "probe" to lastProbe,
+        "sdk" to Build.VERSION.SDK_INT, "probe" to lastProbe, "unanswered" to unanswered,
     )
 
     /**
      * Connect if not connected. interactive=true waits up to 2 minutes for someone to press "Allow" on
-     * the TV; background calls wait 8 s and never start a pairing. preferTls tries wireless
+     * the TV; background calls wait AdbPolicy.BACKGROUND_ALLOW_SECONDS (long enough to answer a box the TV raised:
+     * an 8 s wait dropped the connection before Allow, so Allow was ignored and the box came back) and never start a
+     * pairing, and after one unanswered box they leave plain 5555 alone until someone presses Connect. preferTls tries wireless
      * debugging first (used straight after pairing).
      */
     fun ensure(interactive: Boolean = false, preferTls: Boolean = false): Boolean = synchronized(lock) {
@@ -84,15 +92,18 @@ object Adb {
         closeQuietly()
         state = "connecting"
         lastError = null
+        if (interactive) { unanswered = false; Store.putBool(AdbPolicy.BG_UNANSWERED, false) }
+        background = !interactive
         // Some Android 13+ Google TVs never show "Allow debugging?" for a new key on 5555 (seen on one
         // TV after its Google home was switched off), so do not make people wait 2 minutes there.
-        allowSeconds = if (!interactive) 8L else if (Build.VERSION.SDK_INT >= 33 && !Store.bool("adb_ok_tcp")) 45L else 120L
+        allowSeconds = AdbPolicy.allowSeconds(interactive, Build.VERSION.SDK_INT, Store.bool("adb_ok_tcp"))
         mgr.setTimeout(allowSeconds, TimeUnit.SECONDS)
         // Paired TVs use wireless debugging first. Plain 5555 is tried in the background only once it
         // has been allowed before, so a background retry never pops "Allow debugging?" over a show.
         val order = if (preferTls || paired) listOf("tls", "tcp") else listOf("tcp", "tls")
         for (r in order) {
-            val ok = if (r == "tcp") (interactive || Store.bool("adb_ok_tcp")) && tryTcp() else tryTls(interactive)
+            val ok = if (r == "tcp") AdbPolicy.mayTryTcp(interactive, Store.bool("adb_ok_tcp"), Store.bool(AdbPolicy.BG_UNANSWERED)) && tryTcp()
+                else tryTls(interactive)
             if (ok) return true
         }
         route = null
@@ -101,7 +112,8 @@ object Adb {
     }
 
     @Volatile var lastProbe: String? = null; private set
-    @Volatile private var allowSeconds = 8L
+    @Volatile private var allowSeconds = AdbPolicy.BACKGROUND_ALLOW_SECONDS
+    @Volatile private var background = true   // this ensure() is a background one (no one pressed Connect)
 
     /**
      * Plain ADB on port 5555: 127.0.0.1 first, then the TV's own network address (some adbd builds
@@ -124,14 +136,17 @@ object Adb {
                 continue
             }
             if (connectWatched(host, 5555, "tcp")) return true
+            // a background try whose box went unanswered: never raise a second box from the next address
+            if (background && Store.bool(AdbPolicy.BG_UNANSWERED)) break
         }
         if (fireBlocked) note(FIRE_BLOCKED)
         return false
     }
 
-    const val FIRE_BLOCKED = "This Fire OS blocks apps on the TV from using the TV's own ADB (Amazon's fix " +
-        "for CVE-2024-27350, in current Fire OS: 6.7.1.1, 7.6.6.9, 8.1.0.3 and newer). Nothing on the TV changes that. " +
-        "Keys and typing from the phone need option B, a computer at home that runs the bridge."
+    // Fire OS 6.7.1.1, 7.6.6.9, 8.1.0.3 and newer block an app from using the TV's own ADB (Amazon's fix for
+    // CVE-2024-27350). Nothing on the TV changes that; a home computer running the bridge still can.
+    const val FIRE_BLOCKED = "Amazon switched this off in a Fire TV update, so Couch TV cannot press keys on this Fire TV by itself. " +
+        "For keys and typing from the phone, you need a home computer running Couch TV."
 
     /**
      * Runs the library's connect with our own watchdog (its timeout plus 10 s). If it hangs, the
@@ -147,22 +162,45 @@ object Adb {
             val ok = f.get(limitMs, TimeUnit.MILLISECONDS)
             Log.i(TAG, "$r $host:$port: library connect returned $ok after ${System.currentTimeMillis() - started} ms")
             if (ok) return onConnected(r)
-            note("$host:$port: no answer to \"Allow debugging?\" in time (or the TV refused)." +
-                if (Build.VERSION.SDK_INT >= 33) " On Android 13+ the TV may never ask: pair wireless debugging on the setup page instead." else " Press Connect again.")
+            // the whole 2 minute wait went by with no Allow and no refusal: nobody pressed, Cancel, or the TV
+            // never showed the question at all (see unanswered). Said once, in place of the note below.
+            if (r == "tcp" && background && AdbPolicy.ranOut(System.currentTimeMillis() - started, allowSeconds)) {
+                // The TV showed its box for a background check and nobody answered (launch audit, 24 Nov 2026: after
+                // Update to, the box came back again and again). Not again from the background: the next box waits for
+                // Let the phone press keys, Connect.
+                Store.putBool(AdbPolicy.BG_UNANSWERED, true)
+                note("No answer to \"Allow USB debugging?\". Press Let the phone press keys, then Connect.")
+            } else if (r == "tcp" && allowSeconds >= 120 && AdbPolicy.ranOut(System.currentTimeMillis() - started, allowSeconds)) {
+                unanswered = true
+                note(SetupWords.NOT_ASKED)
+            } else { Log.i(TAG, "$host:$port: no answer to Allow debugging in time (or the TV refused)")
+                note("No answer to \"Allow USB debugging?\" in time." +
+                if (Build.VERSION.SDK_INT >= 33) " On Android 13 or newer the TV may never ask: use the newer TVs steps in Home settings on your phone." else " Press Let the phone press keys again.") }
         } catch (e: java.util.concurrent.TimeoutException) {
+            if (r == "tcp" && background) Store.putBool(AdbPolicy.BG_UNANSWERED, true)   // the box stood the whole wait
             note("$host:$port: library connect hung for ${limitMs / 1000} s, closed it")
-            // getAdbConnection() waits on the lock the hung connect() holds, so reach the field directly
-            runCatching {
-                val fld = AbsAdbConnectionManager::class.java.getDeclaredField("mAdbConnection").apply { isAccessible = true }
-                (fld.get(mgr) as? java.io.Closeable)?.close()
-            }.onFailure { Log.w(TAG, "could not close the hung connection: ${it.message}") }
-            f.cancel(true)
         } catch (e: java.util.concurrent.ExecutionException) {
             val c = e.cause ?: e
             note("$host:$port: ${c.javaClass.simpleName}: ${c.message}")
         } catch (e: Throwable) { note("$host:$port: ${e.javaClass.simpleName}: ${e.message}") }
-        closeQuietly()   // a half-open connection would make the next connect() return false at once
+        giveUpCleanly(f, "$r $host:$port")
         return false
+    }
+
+    /**
+     * The app stops waiting for Allow: its own socket to adbd is closed at once, whether the library's connect()
+     * returned or still hangs, and nothing of it is left running. A half-open connection would make the next
+     * connect() return false at once, and one left waiting kept adbd's question "pending" on a TCL (AllowWait).
+     */
+    private fun giveUpCleanly(f: java.util.concurrent.Future<Boolean>, what: String) {
+        // getAdbConnection() waits on the lock a hung connect() holds, so reach the field directly
+        runCatching {
+            val fld = AbsAdbConnectionManager::class.java.getDeclaredField("mAdbConnection").apply { isAccessible = true }
+            (fld.get(mgr) as? java.io.Closeable)?.close()
+        }.onFailure { Log.w(TAG, "could not close the connection: ${it.message}") }
+        f.cancel(true)
+        closeQuietly()
+        Log.i(TAG, "$what: gave up waiting, connection closed")
     }
 
     /**
@@ -201,7 +239,7 @@ object Adb {
         if (!paired || Build.VERSION.SDK_INT < 30) return false
         selfEnableWireless()
         val port = discover(AdbMdns.SERVICE_TYPE_TLS_CONNECT, if (interactive) 10_000 else 6_000)
-        if (port == null) { note("wireless debugging not found (is it switched on, and is the TV on Wi-Fi?)"); return false }
+        if (port == null) { note("Wireless debugging is not on. Check it is switched on in Developer options, and that the TV is on Wi-Fi."); return false }
         tlsPort = port
         Log.i(TAG, "wireless debugging on port $port")
         return connectWatched("127.0.0.1", port, "tls")
@@ -217,12 +255,12 @@ object Adb {
      * code" dialog. port is optional: found by mDNS when left out.
      */
     fun pair(code: String, port: Int?): Map<String, Any?> = synchronized(lock) {
-        if (Build.VERSION.SDK_INT < 30) return mapOf("ok" to false, "error" to "Wireless debugging needs Android 11 or newer. Use network debugging on port 5555.")
+        if (Build.VERSION.SDK_INT < 30) return mapOf("ok" to false, "error" to "This TV is older than Android 11: use the older TVs steps.")
         val p = port ?: discover(AdbMdns.SERVICE_TYPE_TLS_PAIRING, 10_000)
-            ?: return mapOf("ok" to false, "error" to "Could not find the pairing dialog. Open Developer options > Wireless debugging > Pair device with pairing code on the TV, or type the port shown there.")
+            ?: return mapOf("ok" to false, "error" to "Couldn't find the code screen. On the TV open Developer options, Wireless debugging, Pair device with pairing code, and leave it open. Or type the port number it shows.")
         return try {
             val ok = mgr.pair("127.0.0.1", p, code.trim())
-            if (!ok) mapOf("ok" to false, "error" to "Pairing was refused. Check the code and try again.")
+            if (!ok) mapOf("ok" to false, "error" to "That code didn't work. Check the code and try again.")
             else {
                 Store.putBool("adb_tls_paired", true)
                 lastError = null
@@ -230,12 +268,13 @@ object Adb {
             }
         } catch (e: Exception) {
             Log.w(TAG, "pair", e)
-            mapOf("ok" to false, "error" to "Pairing failed: ${e.javaClass.simpleName}: ${e.message}")
+            mapOf("ok" to false, "error" to "That didn't work. Check the code and try again.")
         }
     }
 
     private fun onConnected(r: String): Boolean {
-        route = r; state = "connected"; lastError = null
+        route = r; state = "connected"; lastError = null; unanswered = false
+        Store.putBool(AdbPolicy.BG_UNANSWERED, false)
         Store.putBool("adb_ok_once", true)
         if (r == "tcp") Store.putBool("adb_ok_tcp", true)
         Log.i(TAG, "connected over $r")
@@ -244,7 +283,8 @@ object Adb {
         //  - write secure settings: lets the app switch wireless debugging back on after a reboot
         //  - usage access: the Home button watch for Fire OS 6, which never connects the accessibility watcher (#50)
         //  - read TV listings: lets Keep watching read Android's Watch Next rows (WatchNext.kt)
-        io.execute {
+        // Play: none of these grants (PlayRules.changesTvRules); key presses, typing and opening apps stay
+        if (PlayRules.changesTvRules(BuildConfig.FLAVOR)) io.execute {
             runCatching { shell("appops set ${BuildConfig.APPLICATION_ID} SYSTEM_ALERT_WINDOW allow", 8000) }
             runCatching { shell("appops set ${BuildConfig.APPLICATION_ID} GET_USAGE_STATS allow", 8000) }
             if (Build.VERSION.SDK_INT >= 30) runCatching { shell("pm grant ${BuildConfig.APPLICATION_ID} android.permission.WRITE_SECURE_SETTINGS", 8000) }
@@ -256,7 +296,7 @@ object Adb {
 
     /** Android 11+ turns wireless debugging off after a reboot. With the secure-settings grant, turn it back on. */
     fun selfEnableWireless(): Boolean {
-        if (Build.VERSION.SDK_INT < 30 || !canWriteSecure()) return false
+        if (Build.VERSION.SDK_INT < 30 || !canWriteSecure() || !PlayRules.changesTvRules(BuildConfig.FLAVOR)) return false
         return try {
             val cr = ctx.contentResolver
             if (Settings.Global.getInt(cr, Settings.Global.ADB_ENABLED, 0) != 1) Settings.Global.putInt(cr, Settings.Global.ADB_ENABLED, 1)
@@ -281,7 +321,7 @@ object Adb {
         } catch (e: Exception) { null } finally { runCatching { mdns.stop() } }
     }
 
-    private fun portOpen(port: Int, host: String = "127.0.0.1") = try {
+    fun portOpen(port: Int, host: String = "127.0.0.1") = try {
         java.net.Socket().use { it.connect(java.net.InetSocketAddress(host, port), 400); true }
     } catch (e: Exception) { false }
 
@@ -338,6 +378,45 @@ object Adb {
             runCatching { stream.close() }
             throw IllegalStateException("ADB command timed out: ${service.take(60)}")
         }
+    }
+
+    /**
+     * Copies a file onto the TV over ADB's sync service (what `adb push` uses), as ADB's shell user, so
+     * `pm install` can read it from /data/local/tmp. Throws with Android's own words when the TV says no
+     * (short of space, say).
+     */
+    fun push(file: java.io.File, remote: String, timeoutMs: Long = 180_000) {
+        val s = stream("sync:")
+        val f = io.submit<Unit> {
+            val out = s.openOutputStream()
+            val inp = java.io.DataInputStream(s.openInputStream())
+            fun head(id: String, n: Int) = java.nio.ByteBuffer.allocate(8).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                .put(id.toByteArray(Charsets.US_ASCII)).putInt(n).array()
+            // SEND "path,mode": a plain file, rw-r--r--
+            val spec = "$remote,${0x8000 or 0x1a4}".toByteArray()
+            out.write(head("SEND", spec.size) + spec)
+            file.inputStream().use { fin ->
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val n = fin.read(buf)
+                    if (n < 0) break
+                    out.write(head("DATA", n)); out.write(buf, 0, n)
+                }
+            }
+            out.write(head("DONE", (System.currentTimeMillis() / 1000).toInt()))
+            out.flush()
+            val id = ByteArray(4).also { inp.readFully(it) }.toString(Charsets.US_ASCII)
+            val len = java.nio.ByteBuffer.wrap(ByteArray(4).also { inp.readFully(it) }).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+            if (id != "OKAY") {
+                val why = if (id == "FAIL" && len in 1..4096) ByteArray(len).also { inp.readFully(it) }.toString(Charsets.UTF_8) else id
+                throw java.io.IOException("push failed: $why")
+            }
+            runCatching { out.write(head("QUIT", 0)); out.flush() }
+        }
+        try { f.get(timeoutMs, TimeUnit.MILLISECONDS) }
+        catch (e: java.util.concurrent.ExecutionException) { throw (e.cause as? Exception) ?: e }
+        catch (e: java.util.concurrent.TimeoutException) { f.cancel(true); throw java.io.IOException("push timed out") }
+        finally { runCatching { s.close() } }
     }
 
     // A long-lived shell for key presses, so a press does not wait for a new stream and its output.

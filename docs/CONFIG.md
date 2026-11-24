@@ -32,6 +32,7 @@ settings), and what is chosen there wins on that TV. See
 | `adb_only` [false] | Fire TV on Fire OS only (a Cube or a stick): `true` when the TV has no Android TV Remote protocol (`scripts/check-tv.py <tv address> --adb` says so: ports 6466 and 6467 closed, Fire OS read). The bridge then drives the TV over ADB alone: keys (`input keyevent`), typing (`input text`, letters, digits and plain punctuation only), links (`am start`), power and the app in front (read every few seconds). There is no code pairing: the TV's "Allow USB debugging?" for the bridge computer is the pairing, `paired` is implied, and `bridge/pair_tv.py <tv id>` only checks ADB. No volume level (the volume keys still work). Current Fire OS blocks apps on the TV from using the TV's own ADB, but not a computer, so this is the way to the full phone remote on a Fire TV. Seen working on a Fire TV Cube (3rd gen, Fire OS 7, Android 9). |
 | `mac` | The TV's network (MAC) address, for turning it on from the phone. |
 | `wake_on_lan` [true] | `false` stops the bridge sending Wake-on-LAN packets to this TV, even with a `mac`. |
+| `phone_keyboard` [true] | `false` keeps the TV's own on-screen keyboard for text boxes instead of "Use the keyboard on your mobile device". The cost: the TV then stops reporting which app is in front over this link, so the current app can show as empty. |
 | `paired` | Set by `bridge/pair_tv.py`. Leave it alone. |
 | `keep_disabled` | The keep-off list for this TV (see `bridge/API.md`). |
 | `close_on_off` | Android TVs, option B: apps the bridge force-stops when this TV turns off, for example `["com.disney.disneyplus"]`. For an app that signs you out when it wakes before the TV is back on the Wi-Fi. |
@@ -45,6 +46,8 @@ settings), and what is chosen there wins on that TV. See
 | `extend_devmode` [true] | LG only: press Developer Mode's Extend once a day while the TV is on, so the app is not removed. With no bridge, the couch-tv app asks once a week with a question on screen that stays until it is answered, and the `extend` quick button does it on demand. |
 | `leave_inputs` [false] | LG, Roku, VIDAA and Philips only: an HDMI or external input counts as in use (a computer or a console on it). The TV coming on there is left alone, and the daily Extend never switches away from it. |
 | `back_to_couch` [false] | LG only: when an app closes to LG's home (Back out of Netflix, say), couch-tv opens again a second later. Home pressed while couch-tv is open still reaches LG's home. |
+| `back_to_couch_inputs` [false] | LG only, with `back_to_couch`: an app that closes straight to an HDMI or external input reopens couch-tv too. Holding Back in Netflix on an LG OLED65CX (webOS 5) closes it to the input used last, an Apple TV on HDMI 2, with no LG home in between. An input picked from LG's input screen, from couch-tv's input tile or from the phone is left alone, and `leave_inputs` turns it off. A box on that input that takes the screen by itself over HDMI-CEC while an app is open (an Apple TV woken by its own remote) looks the same, so couch-tv comes back over it: switch to the input again. |
+| `home_helper` [false] | LG only: start the Home button Helper (`app.couchtv.helper`, installed by hand: [LG.md](LG.md#the-home-button-helper-opt-in)) each time the TV comes on, so the Magic Remote's Home opens couch-tv. Without the Helper installed, the start fails and the bridge notes it in the hook log; nothing else changes. |
 | `ares_device` [the TV's `id`] | LG only: this TV's name in LG's ares tools (`ares-setup-device`). |
 | `ares_launch` [found on the PATH] | LG only: the full path to `ares-launch`, for a bridge that cannot find it (started by launchd, for example). |
 | `port` [LG 3000, then 3001; Roku 8060; VIDAA 36669, then 36668; VIZIO 7345, then 9000; Panasonic 55000; TiVo OS 56789] | LG, Roku, VIDAA, VIZIO, Panasonic and TiVo OS only: the network remote's port, if your TV only answers on one of them (a Roku's is 8060 unless something else changed it). |
@@ -57,7 +60,7 @@ The round buttons at the top right of the home. Any of these, in the order you l
 |---|---|---|
 | `sleep` | Sleep timer: 15, 30, 60 or 90 minutes, then the TV turns off. With `bedtime_dim` on, the couch-tv home dims into a warm bedtime amber during the final 15 minutes. With no bridge, the TV launcher app keeps the timer and opens the screensaver at the end. | The bridge or the TV launcher app |
 | `picture` | Flips between the TV's two picture modes in `picture.modes`. | The bridge, ADB, and a `picture` entry |
-| `look` | Cycles the home through the Night scenes, OLED (the Classic grid on pure black) and the Classic look. This TV remembers the choice. | Nothing |
+| `look` | Cycles the home through the Night scenes, OLED (the Classic grid on pure black), the Classic look and Loop ([LOOP.md](LOOP.md); with no loop files yet it shows its scrim over a dark ground). This TV remembers the choice. | Nothing |
 | `soundscape` | Ambient sleep sounds: each press goes Gentle rain, Fireplace, Ocean waves, Brown noise, off. Made on the TV itself with Web Audio, so there are no sound files and nothing to download. It plays only after someone presses it, stops when an app or the screensaver comes in front, fades over the last 15 minutes of a sleep timer and stops when the timer runs out. Not in the default buttons. | Nothing |
 | `headphones` | Opens the TV's own Bluetooth settings screen, where headphones are paired and picked. Nothing is read from the request and no device addresses leave the bridge. Not in the default buttons. | The bridge and ADB, or the TV home launcher or on-TV app |
 | `screen_off` | Audio-only / Screen off mode: turns off the display (pitch black canvas for OLEDs and drops hardware backlight on Android TV) while sleep soundscapes, Spotify, and sleep timers keep playing in the dark. Pressing any button on the remote wakes the screen and is absorbed so no unwanted actions occur. | Nothing |
@@ -66,6 +69,7 @@ The round buttons at the top right of the home. Any of these, in the order you l
 | `network` | Opens the TV's own network settings (Wi-Fi and the network). Not in the default buttons. | The on-TV app (option C) |
 | `tvsettings` | Opens the TV's own Settings on its main menu (the same as Home settings, TV settings). Not in the default buttons. | The TV home launcher, or the bridge |
 | `screensaver` | Starts the TV's own screensaver: Google TV's Ambient mode, with the Google Photos albums. Android only lets the system start a dream, so the button cuts the screen timeout to a few seconds and nudges the idle timer until the TV naps by itself; the photos then come up a few seconds later and the timeout goes back to what it was the moment the screensaver covers the home. A second press can never leave the TV on the short timeout. | The TV home app on an Android TV or Google TV, and the "modify system settings" app-op that `apply.sh` grants |
+| `reminder` | Reminders said into the remote's mic: Android's own speech screen ("Speak now") listens, and couch-tv reads the time out of what was said ("call the plumber tomorrow at 6 pm"), with a card to check or change the day and time before saving. The next few show at the top right of the home; a due one pops up over the plain home with Done and Snooze. Kept on this TV only (no bridge needed), and the words go only to the TV's own voice service. English phrasing for now. Not in the default buttons. | The TV home app, and a TV with a voice remote |
 | `extend` | LG only: presses Developer Mode's **Extend**, so LG does not remove couch-tv when the Developer Mode session runs out. The home also asks once a week whether to do it (see `extend_devmode`). It opens LG's Developer Mode app, which sends the Extend; press Home to come back to the home. | The couch-tv app on an LG TV |
 
 A button that cannot work right now is left out, the same way the sleep timer always disappeared
@@ -139,8 +143,19 @@ out the same way. The phone's People sheet keeps these marks when it renames or 
   On a Fire TV the bridge knows Amazon's builds of YouTube, Prime Video and HBO Max (other package
   names than the Google TV ones), so it opens the one the TV has and their shows reach Keep watching.
   YouTube videos are kept as a list of their own that the home shows only for the YouTube tile, never
-  in the shared row or the household's taste: a video is written by the name YouTube gave it, with no
-  picture, and opening it searches YouTube for that name.
+  in the shared row or the household's taste: a video is written by the name YouTube gave it (and the
+  channel and length the app reported). Opening it plays the exact video when YouTube's public
+  results page is sure of it from the title and the channel or the length, resumed from the
+  account's own history; otherwise (unsure, or a line with neither channel nor length) it searches
+  YouTube for the name. Once the video is found the card shows YouTube's own thumbnail for it, which
+  the TV fetches straight from YouTube's image host, the way it already fetches JustWatch posters;
+  the found id is kept in `bridge/data/video-ids.json` with the video's length, so a bridge restart
+  does not lose it, and a channel's second video of the same title (another length) is looked up
+  afresh and kept beside the first rather than given its id. The bridge fetches YouTube's results page two at a
+  time at most, and a video the lookup stays unsure of is asked about less and less often (ten
+  minutes, then twice as long each time, up to once a day) while its card sits in the row. A live
+  stream's card says so: the Loop look's row shows "YouTube · Live" under it. The thumbnail on a real
+  TV's screen is not yet tested; the lookup and the watch link are (a Fire TV Cube).
 - **With no computer (option A),** Keep watching is Android's own Watch Next list, plus the
   Continue Watching channel of apps that put nothing in Watch Next but keep a home screen row of
   their own instead: so far Stremio. Both are read the same read only way, with no account and no
@@ -265,39 +280,52 @@ release opens the app rather than the show.
   "clock": "12h",
   "dock_size": 10,
   "hide_packages": [],
+  "show_packages": [],
   "language": "en"
 }
 ```
 
 | Key | What it does |
 |---|---|
-| `look` ["night"] | `night`: the scenes with the big glass clock. `oled`: the Classic grid of app banners on pure black (no photo, no video, no scenes), with a glowing focus ring and a one or two pixel nudge of the home once a minute against burn-in. Night and Classic are unchanged, and nothing goes black unless this is chosen. `classic`: your photos (or five built in) behind a grid of app banners, changing every 90 seconds unless `keep_photo` is on. The `look` quick button cycles Night, OLED and Classic on each TV, and `?theme=` overrides them for a preview. |
+| `look` ["night"] | `night`: the scenes with the big glass clock. `loop`: one video of a place, graded for dawn, day, dusk and night, under a centred clock, bare thumbnails and a dock with no bar; option B only, and it needs the footage made by `scripts/make-loop.sh` ([LOOP.md](LOOP.md)). `oled`: the Classic grid of app banners on pure black (no photo, no video, no scenes), with a glowing focus ring and a one or two pixel nudge of the home once a minute against burn-in. Night and Classic are unchanged, and nothing goes black unless this is chosen. `classic`: your photos (or five built in) behind a grid of app banners, changing every 90 seconds unless `keep_photo` is on. The `look` quick button cycles Night, OLED, Classic and Loop on each TV, whether or not the loop files are there, and `?theme=` overrides them for a preview. A couch-tv Studio `design` is not drawn in the Loop look; it shows again in the other looks. |
+| `loop` (read only) | Built by the bridge, not read from `config.json`: `{"variants": [...], "blur": true, "version": "...", "meta": {...}, "fg": true}`, the Loop look's variants whose `.mp4` is in `tv-home/web/loop/` (in the order `dawn`, `day`, `dusk`, `night`), whether every one of them has its blurred glass copy, a mark of the files that the home puts on their addresses, `meta` the folder's `loop.json` (the loop's length and motion, or null), and `fg` true when `meta` has the cut-out's rectangle and every variant has its `-fg.png` (the clock behind the peak). The bridge reads the folder afresh on every request, so after `scripts/make-loop.sh` no restart is needed. Empty when there are no files; when `look` here is `loop`, the bridge also says so once in its log as it starts (a Loop look picked on the TV logs nothing). [LOOP.md](LOOP.md). |
 | `scenes` [all five] | Which Night scenes take turns, and in what order. Any of `night`, `golden`, `water`, `fog`, `dawn`, and the ids of your own scenes. One scene stays put. |
+| `bing_daily_background` [`false`] | On the Android TV home app, `true` selects Bing’s US Picture of the Day as the Night background. The TV checks for the new photo while Home is visible and keeps the last downloaded picture if it is offline. A scene selection made in Home settings takes precedence. |
 | `my_scenes` [none] | Your own scenes from any photo, each with its clock designed: where it sits, its size and font, the date above or below it, light or dark text, `cutout` for the skyline in front of the clock, and `video` for a looping clip behind it. Made with `tv-home/tools/make-scene.py`; [MAKE-A-SCENE.md](MAKE-A-SCENE.md) has every key. They take turns after the scenes in `scenes` unless they are listed there. Option A needs the app rebuilt with the scene's pictures inside (that guide says how). |
 | `scene_seconds` [20] | How long each scene shows. 5 or more. |
 | `clock` [the language's usual clock: `24h` in Italian, German, Turkish, French, Serbian, Polish, Czech, Brazilian Portuguese, Dutch, Romanian and Simplified Chinese, `12h` in the others] | `12h` (5:30 pm) or `24h` (17:30). |
 | `idle_photo_seconds` [`0`] | `0` leaves rows on. `5`, `10`, `15`, `30` or `60` fades out the app dock, Keep watching and profile controls after that many seconds without input. The clock, weather and background scenes stay visible. Any remote button wakes the rows without opening the focused app. Home settings, Look, Hide rows when idle wins over it. |
 | `keep_photo` [`false`] | Classic look only. `true` stops the background changing and holds one photo, the one showing when it was switched on. In Home settings, Look, Keep one photo you can then pick which photo it holds, and the TV remembers it after a restart (if that photo is later removed it goes back to the usual photo for the time of day). Night and OLED are unaffected. Home settings wins over it. |
 | `hide_packages` [none] | Android package names never shown on the home or in More apps, for a maker's own clutter (help apps, file browsers, screen sharing tools). `survey-tv.py` lists every TV app with its package name. For example `["com.example.tvhelp"]`. |
+| `show_packages` [none] | Android package names to show even though the home hides them by default (the Google TV app, `com.google.android.videos`, for example: `["com.google.android.videos"]`). The Android TV home app also uses it to include apps that have a regular Android launcher entry. |
 | `updates` [none: the TV asks once] | The answer to "tell you when a new couch-tv version is out?", asked at setup: `notify` (the TV home looks on GitHub once a week and puts a dot on the gear tile) or `manual` (nothing by itself; Home settings, Updates, Check for updates now). Used only until the TV has an answer; after that the switch in Home settings, Updates wins. Option C has no updates. |
 | `glass` [`off`] | Glass panels behind the clock, Keep watching and the apps: `on` (clear, softly blurred, with a light edge), `lite` (the same panels with no blur, for older or slower TVs) or `off`. Home settings, Look, Glass panels wins over it. |
+| `icon_set` [`"builtin"`] | How the home's own tiles (Settings, More apps, Inputs, Screens) are drawn: `"builtin"`, or one of couch-tv's icon sets, `"line"`, `"solid"`, `"duotone"`, `"tile"`, `"glass"`, `"playful"`. Home settings, Look, Icon style wins over it. Your own app icons are [tv-home/tools/app-icons.sh](TV-HOME.md#your-own-app-icons). |
 | `glass_icons` [`false`] | `true`: Apple style clear app icons. Each app's symbol is cut from its own background and drawn in light glass on a glass tile, and the app you are on shows its own colours. An icon that will not cut cleanly (a photo) is shown grey and half see-through instead. Works with `glass` on or off, and the phone remote's app grid follows it. Home settings, Look, Glass app icons wins over it. |
 | `moving_tiles` [`true`, or `false` when `glass` is `lite`] | The focused tile's slow sway and the light that slides across it. `false` holds it still, which stops the black box that flickers around the focused tile on some slow TVs (a TCL with a weak GPU). Home settings, Look, Moving tiles wins over it, and a TV set to reduce motion (Developer options, Animator duration scale) already holds it still. |
 | `dock` [`classic`] | The Night look's dock. `mac` makes it a Mac-style dock: the focused app and its neighbours grow in a wave (the focused one 1.55 times, then 1.45, 1.25 and 1.05), all standing on one line, the dock stays centred and its tray grows with them, and the app's name shows in a small bubble above it instead of a white ring. OK presses the icon in and it hops as the app opens. A dock too wide for the screen shrinks as a whole. Home settings, Look, Mac-style dock wins over it; Lighter home holds it off. |
-| `lighter` [`false`; `true` on an old or low end TV] | For a slow box (a Xiaomi Mi Box, a Fire stick) where moving along the rows stutters. `true` turns off every blur, the soft shadows under tiles and panels, the slow drift of the photo and the focused tile's sway, and asks for smaller Keep watching pictures. The layout and colours stay. Home settings, Look, Lighter home wins over it. On a TV whose WebView is too old for CSS grid (Android 6 and older, for example a Mi TV 4A with 1 GB of memory) it starts **on** until someone chooses otherwise, in Home settings or by writing `"lighter": false` here. When it is not set (here or in Home settings), the TV also checks itself: 1 GB of memory or less (`navigator.deviceMemory`) turns it on, 4 GB or more leaves it off, and in between (or when the WebView does not say) it measures its frame time for 1.5 s with something moving, a few seconds after the home opens, and keeps the answer for a week. On a 2 GB Android 11 TV the blur held the home to 22 frames a second whenever a tile was focused. Other TVs start with it off. On every TV the focused tile's sway and glint hold still 6 s after the focus last moved, so a home left alone draws nothing. |
+| `lighter` [`false`; `true` on an old or low end TV] | For a slow box (a Xiaomi Mi Box, a Fire stick) where moving along the rows stutters. `true` turns off every blur, the soft shadows under tiles and panels, the slow drift of the photo and the focused tile's sway, and asks for smaller Keep watching pictures. The layout and colours stay. Home settings, Look, Lighter home wins over it. On a TV whose WebView is too old for CSS grid (Android 6 and older, for example a Mi TV 4A with 1 GB of memory) it starts **on** until someone chooses otherwise, in Home settings or by writing `"lighter": false` here. When it is not set (here or in Home settings), the TV also checks itself: 1 GB of memory or less (`navigator.deviceMemory`) turns it on, 8 GB or more leaves it off, and anything else (4 GB included, since 0.13.9: a 4 GB Google TV Streamer, Homatics or TCL stuttered and never got it, #197, #213) measures its frame time for 1.5 s with something moving, 20 s after the home opens (only while the home is showing), and keeps the answer for a week. A TV that passes that but stutters while the focus moves along a row gets it too, on the second start within a week that stutters (one bad stretch is only a strike): arrow presses from 30 s after the home opens are timed (90 frames, nothing runs between presses), and that answer is kept for 30 days. A frame is slow when it takes over 22 ms, or 1.3 times the screen's own frame time measured at rest just before, so a smooth 30, 25 or 24 Hz screen is not taken for a slow TV. A reading over 250 ms means the screen was not being drawn (a Samsung Frame in Art Mode) and is measured again, never kept. A slow reading turns it on, and the home says so once: "This TV is a bit slow, so Lighter home is on. Home settings, Look and scenes to change it." While it is on, the Moving tiles and Mac-style dock rows say "Off while Lighter home is on", and OK there asks "Turn off Lighter home?". On a 2 GB Android 11 TV the blur held the home to 22 frames a second whenever a tile was focused. Other TVs start with it off. On every TV the focused tile's sway and glint hold still 6 s after the focus last moved, so a home left alone draws nothing. |
 | `render_height` [`0`: the screen's own size] | Draws the whole home at this many pixels high (for example `720`) and lets the Android TV scale it up to the screen, so a weak GPU has a quarter fewer pixels to composite. Try it when moving along the rows is slow and `lighter` did not help, even though idle the page runs at 60 frames a second. Measured on an XGIMI Elfin Flip Plus (MediaTek, Mali-G52, 1.7 GB, Android 11): with `1080` the screen showed a new frame every 33.3 ms (30 fps) in both looks, with `720` every 17 ms, and the home's memory fell from about 250 MB to 136 MB. Text and pictures are a little softer than at the screen's full size. The layout does not change: the density is lowered by the same factor. 360 to 2160; apply.sh (or the next restart of the home) sends it with the rest of `home`. |
-| `app_keys` [none] | Remote buttons that open an app, for buttons the TV hands to no app (a YouTube, Netflix or shortcut key that the maker's own service swallows, seen on an XGIMI projector). A list of `"<key>:<package>"`: the key is an Android key name (`KEYCODE_BUTTON_3`), a number (`190`) or a raw Linux scancode as `scan384`, and the package is the app to open, for example `["KEYCODE_BUTTON_3:org.smarttube.stable", "scan384:com.stremio.one"]`. Find a button's codes with `tvadb.py shell "getevent -lt"` and `logcat -s couchtv-keywatch` while pressing it. apply.sh switches the `KeyWatch` accessibility service on when the list is not empty (Android switches it off again after a reinstall: run apply.sh again). Every other key is left alone. |
-| `hi_res` [`true`] | `"always"` uses the 3840x2160 copies even when the TV draws its interface at 1080 (a 4K panel set to a 1080 interface, where the scenes looked soft). On a TCL 75C6K with 2.4 GB that cost about 65 MB more for the home's WebView (145 MB to 209 MB), with no stutter (#191). `false` keeps the 1080 copies of the built-in pictures on a 4K screen. A 4K TV normally gets the 3840x2160 copies, which a weak chip can struggle to decode and keep in memory (an LG 43SQ700S monitor). On an LG, `lg/build.py` then leaves the 4K copies out of the app too (22 MB down to under 6 MB). |
+| `app_keys` [none] | Remote buttons that open an app, for buttons the TV hands to no app (a YouTube, Netflix or shortcut key that the maker's own service swallows, seen on an XGIMI projector). A list of `"<key>:<package>"`: the key is an Android key name (`KEYCODE_BUTTON_3`), a number (`190`) or a raw Linux scancode as `scan384`, and the package is the app to open, for example `["KEYCODE_BUTTON_3:org.smarttube.stable", "scan384:com.stremio.one"]`. The package can also be `gear`, which opens couch-tv's own gear menu (Home settings, TV settings, Wi-Fi, Bluetooth, Screen off): `"scan66:gear"` makes the remote's Settings button do that where Android sends it as F8 and so never as Settings (seen on the XGIMI Elfin Flip Plus). Find a button's codes with `tvadb.py shell "getevent -lt"` and `logcat -s couchtv-keywatch` while pressing it. apply.sh switches the `KeyWatch` accessibility service on when the list is not empty (Android switches it off again after a reinstall: run apply.sh again). Every other key is left alone. |
+| `hi_res` [`true`] | `"always"` uses the 3840x2160 copies even when the TV draws its interface at 1080 (a 4K panel set to a 1080 interface, where the scenes looked soft). On a TCL 75C6K with 2.4 GB that cost about 65 MB more for the home's WebView (145 MB to 209 MB), with no stutter (#191). `false` keeps the 1080 copies of the built-in pictures on a 4K screen. A 4K TV normally gets the 3840x2160 copies, which a weak chip can struggle to decode and keep in memory (an LG 43SQ700S monitor). On an LG, `lg/build.py` then leaves the 4K copies out of the app too (22 MB down to under 6 MB). Home settings, Look, Sharp pictures on a 4K TV wins over it: Auto (the screen decides, as `true`), Off (as `false`) or Always (as `"always"`), in that order on OK. |
+| `show_clock` [`true`] | `false` hides the clock on the home: the time in the Classic, OLED and Loop looks and the big scene clock in Night; the date moves up into its place. Home settings, Look, Show the clock wins over it. A couch-tv Studio design shows its own clock, so neither applies while one is on. |
 | `glass_amount` [`3`] | How clear the glass is, `1` (frosted) to `5` (very clear): the glass panels, the glass app icons and both clocks (the frosted clock only gets more see-through at `4` and `5`). Home settings, Look, How clear wins over it, and the phone remote follows it. |
 | `glass_focus` [`colour`] | With glass app icons: the focused app shows its own colours (`colour`) or stays glass like the rest (`glass`), shown by its lift, a brighter rim and a deeper shadow. Home settings, Look, Focused app wins over it, and the phone remote follows it. |
-| `now_playing` [`true`] | Now playing: a card with the song any music app is playing, and previous, play or pause and next. `false` hides it. Needs option B or C. Home settings, Look, Now playing wins over it. Optional: with `SPOTIFY_CLIENT_ID` in `.env` and one login at `http://127.0.0.1:5400/api/spotify/login`, a song playing on the Spotify account anywhere (a phone, or a TV with no ADB) fills the card when the TV shows none, without the media buttons ([VIDAA.md](VIDAA.md), "Spotify"). The same login also fills a design's Up next widget with the next songs in the Spotify queue (the bridge's `/api/music/queue`, the standalone site's `api/now?queue=1`); no other music app shares its queue. The standalone home gets it from its own site, with a Play on TV button. |
+| `now_playing` [`true`] | Now playing: a card with the song any music app is playing, and previous, play or pause and next. `false` hides it. General media support needs option B or C. For Spotify on option A, see `spotify_player`. Home settings, Look, Now playing wins over it. Optional: with `SPOTIFY_CLIENT_ID` in `.env` and one login at `http://127.0.0.1:5400/api/spotify/login`, a song playing on the Spotify account anywhere (a phone, or a TV with no ADB) fills the card when the TV shows none, without the media buttons ([VIDAA.md](VIDAA.md), "Spotify"). The same login also fills a design's Up next widget with the next songs in the Spotify queue (the bridge's `/api/music/queue`, the standalone site's `api/now?queue=1`); no other music app shares its queue. The standalone home gets it from its own site, with a Play on TV button. |
 | `ambient_music` [`false`] | Music screen: a full screen album cover with a colour glow, a progress bar and previous, play or pause and next, which opens when a new song starts while you are on the home. Down or Back goes back to the apps. Off by default. Needs Now playing (option B or C). On the Lighter home setting (or an old WebView) the glow is a plain colour wash with no blur or animation. Home settings, Look, Ambient music screen wins over it. |
+| `spotify_player` [`false`] | On the standalone Android TV home app, `true` shows a Spotify card with an Open Spotify button. Enable **Spotify playback controls** in Android's Notification access settings to see and control Spotify's active TV session. Couch-tv uses only Spotify's media session and ignores notification contents. Sign in through Spotify on the TV. |
 | `nav_sound` [`system`] | The sound on every arrow and OK: `system` (the TV's own, which follows its system sounds switch), `soft` (a short, quiet tap) or `off`. Home settings, Look, Sound wins over it. |
 | `clock_style` [`frosted`] | The Night look's clock: `frosted` (the photo's frosted copy, as before) or `liquid` (clear glass digits that bend the photo behind them a little, with a bright rim and a soft edge). Home settings, Look, Clock style wins over it. |
+| `clock_seconds` [`false`] | `true` shows seconds next to the home clock in either time format. Home settings, Look and scenes, Show seconds wins over it. |
 | `wx_unit` [`c`] | The weather's temperature unit: `c` (Celsius) or `f` (Fahrenheit). Home settings, Weather, Units wins over it. |
 | `video_url` [none] | A looping, muted video background in place of the photo, in both looks: the address of an MP4 or MOV (`https://...`, or `http://` for a computer at home). Given here it is on; Home settings, Look switches it off or changes the link. The photo stays if the clip does not play. |
-| `sun_sync` [`false`] | Follow the sun. `true` picks the Night look's scene from the sun's height at `weather.lat` and `weather.lon`: Dawn in the morning twilight, Waterline in the day (Fog when the weather is overcast or rainy), Golden hour in the evening and Night after dark, instead of rotating every `scene_seconds`. A scene you switched off is skipped. With no place set it goes by the clock. Home settings, Look, Scenes, Follow the sun wins over it (ekagra-codes, #57). |
+| `greeting` [`false`] | `true`: in the Night look, a greeting for whoever is picked ("Good evening, Sam") and a short encouraging line under the scene's clock, new every 10 minutes, when the home comes back and when someone else is picked. It steps aside (the line first) when Keep watching needs the room, and hides on the Waterline scene. English only: it shows only while the home's language is English. |
+| `person_styles` [none] | Each person's own style for the greeting: `{ "<person id>": "gentle" }` (soft pink, a floating heart, cozy words) or `"electric"` (spaced capitals in a moving cyan to violet current, a bolt, mysterious words). It also tints that person's date and clock rim. Needs `greeting`. |
+| `scene_clips_lighter` [`false`] | `true` lets your own scenes' clips (`my_scenes[].video`) play with Lighter home on as well. A 1080p H.264 clip is decoded by the TV's hardware, so most TVs that want Lighter home for the rest of the home still play one smoothly. |
+| `scene_clips_idle` [`true`] | A playing clip keeps the screen awake, which would stop the TV's own screensaver from ever starting. So when nobody has pressed a key for the Smart Idle "Home screen idle after" time (15 minutes when that is Off), the clip pauses on its frame and the TV's screensaver is started, where the Screensaver quick button can start it; the next key plays on. `false`: clips never pause, and the home never starts the screensaver. |
+| `sun_sync` [`false`] | Follow the sun. `true` picks the Night look's scene from the sun's height at `weather.lat` and `weather.lon`: Dawn in the morning twilight, Waterline in the day (Fog when the weather is overcast or rainy), Golden hour in the evening and Night after dark, instead of rotating every `scene_seconds`. A scene you switched off is skipped. With no place set it goes by the clock. In the Loop look it picks the loop's variant the same way (night below -6 degrees, dawn while the sun rises to +10, day above, dusk as it sets back to -6), cutting at the loop's wrap; off, the Loop look shows `day` all day ([LOOP.md](LOOP.md)). Home settings, Look, Scenes, Follow the sun wins over it (ekagra-codes, #57). |
 | `sun_rotate_minutes` [`25`] | With `sun_sync` on and own scenes tagged with `when` (see [MAKE-A-SCENE.md](MAKE-A-SCENE.md)), how long each scene of the current time of day stays before the next one in that group takes its turn, 5 to 240. Without any tagged scene nothing changes. |
+| `scene_zoom` [`false`] | `true`: while a built-in scene is on screen its photo pushes in slowly and its cut-out a little faster, so the scenery seems to drift past the clock (each scene towards its own point). Off under the system's reduced motion setting; your own scenes are left still. |
 | `date_bars` [`false`] | `true` puts a thin vertical bar between the day, the place and the weather on the Night look's date line, in place of the dots (`Monday 16 November │ Sydney │ 17° Cloudy`). Off, the line is exactly as before. |
 | `ambient_weather` [`false`] | Soft rain, snow, fog and thunderstorm effects drawn over the Night look's scenes when Open-Meteo reports that weather for your place. Off unless you switch it on. It also needs Weather on, stops while an app or Settings is open, and never runs under Lighter home or on an old WebView. Home settings, Weather, Ambient weather effects wins over it (ekagra-codes, #88). |
 | `ambient_sun_grade` [`false`] | A gentle tint over the Night look's scenes that follows the sun's height at `weather.lat` and `weather.lon` (cool at night, rose at sunrise and sunset, amber in the golden hour). Off unless you switch it on, and never under Lighter home or on an old WebView. Home settings, Weather, Sunlight colour grading wins over it. |
@@ -308,6 +336,8 @@ release opens the app rather than the show.
 | `bedtime_dim` [`false`] | `true` dims the couch-tv home into a warm amber for the last 15 minutes of a sleep timer. It only darkens the couch-tv page, not an app that is playing, and not the TV's brightness or picture settings. |
 | `smart_idle` [off] | Automatic OLED protection and idle power-off: `{"enabled": false, "home_idle_minutes": 15, "home_action": "ambient_clock", "paused_idle_minutes": 30, "quiet_hours": {"enabled": false, "start": "23:00", "end": "06:00", "idle_minutes": 15}}`. `home_action` is `"ambient_clock"`, `"screen_off"`, or `"tv_off"`. Setting either minute value to `0` turns that trigger off. `home_idle_minutes` is one of `5`, `10`, `15`, `30` or `60` (the same steps as Home settings), and `paused_idle_minutes` one of `10`, `15`, `20`, `30`, `45` or `60`: any other number is not an error, it is quietly read as the default (15 and 30), so `"home_idle_minutes": 2` behaves as 15. Paused-media auto-off works on Android TV (Option B and Option C) and Roku; it never turns off HDMI inputs or games with no media session, and is not available on Samsung or LG. Home settings, Smart Idle (under Look) wins over it. Off unless `enabled` is `true`. It sits beside, not over, `idle_photo_seconds` (above): that only fades the rows out, the ambient clock covers the whole screen in black after a longer wait, and the OLED look's burn in nudge is unchanged. Quiet hours are checked in the `weather.timezone` zone, else the TV's own. Option C reads only the settings made on the TV, not this file. |
 | `keep_watching` [`true`] | `false` hides the whole Keep watching row, heading and all: the layout closes the gap, the remote skips it and the home stops asking the bridge for it. A song still shows its Now playing card in the Night look. Home settings, Look, Show Keep watching wins over it. Works on the Android, LG, Samsung and Roku homes. |
+| `keep_watching_style` [`card`] | The Night look's Keep watching row. `poster` shows the Classic look's plain 16:9 poster tiles instead of the wide cards with the title beside the picture: each tile is two dock columns wide, so about six fit across where three cards did, and the focused one shows its title and episode under it. Now playing still comes first in the row, and the remote moves along it and down to the app under a tile as before. The Classic look always has posters; the Loop look, the TV's own Spotify row and a couch-tv Studio design keep their own shapes. Home settings, Look, Keep watching as posters wins over it. |
+| `input_tile` [`false`] | `true` puts an **Inputs** tile first in the dock (Night, OLED and Classic), which opens couch-tv's own Input menu (each HDMI port by the TV's name, then Bluetooth and Network), so HDMI is one press from the apps, for a simple home (#154). It takes one dock place, like a pinned input, so the dock stays as wide as before. It shows only where the Input menu works (the TV lists its inputs, or a bridge or the on-TV app can open them) and not in a couch-tv Studio design. Home settings, Keep watching has the same switch and wins over this. With `keep_watching` set to `false` it makes the simplest home: the apps and the inputs. |
 | `shelf_follows_app` [`false`] | `true` makes the Keep watching row follow the app the remote is on: while the outline is on an app tile in the dock or the grid (not More apps, Settings, an input, a Screen or a tool), the row shows only that app's cards under the heading "Recently on <app>", and under the YouTube tile that person's YouTube videos, which the bridge sends next to the row (`videos` in `GET /api/continue`, option B) and the row never shows otherwise. The filter stays while the remote goes up from that tile into the row, and the whole row comes back on any other tile or anywhere else on the home. An app with nothing on the go changes nothing: the whole row stays. Works with Android's Watch Next list too (option A, no videos there). Home settings, Look, Keep watching follows the app wins over it. |
 | `start_focus` [`"people"`] | Where focus starts when the Home button is pressed or when couch-tv opens: `"people"` (as before: the profile switcher at the top left when two or more people are set up, else Keep watching if cards exist, else apps), `"keep_watching"` (the first show card in Keep watching, falling back to apps if empty), or `"apps"` (the first app in the dock or grid). Any other value is ignored and the home starts as it always has. Home settings, Look, Start on wins over it (#211). |
 | `custom_cards` [none: off] | Your own cards at the end of the Keep watching row, from a small JSON file: a file on the bridge computer (`"cards.json"`, read from the folder `config.json` is in, or an absolute path) or an `http` or `https` link (`"https://raw.githubusercontent.com/you/repo/main/cards.json"`, or a Raspberry Pi on your Wi-Fi). Display only: a title, a value, a subtitle, a picture, and an installed app or an `http(s)` link for OK; at most 8 cards, nothing in the file is ever run. Read every 10 minutes; a bad file keeps the last good cards. Example: `{"cards": [{"title": "Solar today", "value": "18.4 kWh", "app": "com.example.solar"}, {"title": "Bin night", "value": "Recycling", "url": "https://example.com/bins"}]}`. The schema and limits: [TV-HOME.md](TV-HOME.md#custom-cards). |
@@ -319,7 +349,8 @@ release opens the app rather than the show.
 
 Optional, top level, beside `home`. couch-tv Studio (a website for designing this home) writes it:
 download your design there and paste its `design` key into `config.json`. It is laid over the Night
-home by `tv-home/web/design.js`. **Without a `design` key the home is exactly as before.** Every
+home by `tv-home/web/design.js`. The Loop look draws no design (its loop is the background); pick
+another look to see it. **Without a `design` key the home is exactly as before.** Every
 value is checked on the TV, and anything it does not understand is left out.
 
 **A design is treated as untrusted.** Before anything is drawn, the home rebuilds it from an
@@ -340,7 +371,7 @@ words together at most 60% (the rest are left out); the home's own parts have si
 people and quick buttons 3x, Keep watching 1.5x); and the remote never lands on a part the design
 hides or moves mostly off the screen. **Holding Back for about 5 seconds** (or pressing it 5 times
 quickly) switches designs off on that TV and shows the normal home. They stay off, whatever design
-arrives next, until **Home settings, Look, Your design** turns them back on. **Words with a phone
+arrives next, until the **Your design** switch (Home settings, Designs) turns them back on. **Words with a phone
 number or a web address are never drawn** (`CouchDesign.flags` finds them; couch-tv Studio warns
 before download). **A design is kept cheap to draw:** at most 40 objects, 6 frosted cards (and about
 a screen and a bit of frosted area), 8 turned objects, 10 glows, a 16 px background blur, and a
@@ -369,15 +400,15 @@ colour, `#000000` for a black screen) can stand in for `background.image`; a wid
 
 | Key | What it does |
 |---|---|
-| `elements.<part>` | One of `clock`, `date`, `weather`, `people`, `quick`, `keep_watching`, `dock`. `x` and `y` move it from where it normally sits, in pixels of a 1920x1080 screen (so it lands in the same place on any TV); `scale` sizes it (0.2 to 6). `hidden: true` hides it (it shows again while the remote is on it, once a key has been pressed); `opacity` 0.1 to 1. In a design every part keeps one place whichever scene is showing, and the weather is its own part under the date. |
+| `elements.<part>` | One of `clock`, `date`, `weather`, `people`, `quick`, `keep_watching`, `dock`. `x` and `y` move it from where it normally sits, in pixels of a 1920x1080 screen (so it lands in the same place on any TV); `scale` sizes it (0.2 to 6). `hidden: true` hides it (it shows again while the remote is on it, once a key has been pressed); `opacity` 0.1 to 1. In a design every part keeps one place whichever scene is showing, and the weather is its own part under the date (unless `clock.at` is `"scene"`, below). |
 | text styles | On `clock`, `date`, `weather`, `keep_watching` (its heading) and `texts`: `font` (`inter`, `antonio`, `condensed`, `serif`, `mono`), `weight` (100 to 900), `colour` (`#rrggbb` or `rgba(...)`), `shadow` (`none`, `soft`, `strong`), `case: "upper"`. |
-| `clock` | `format` `12h` or `24h` (wins over `home.clock`). `style` `glass` (the frosted photo digits, the default) or `solid` (in `colour`). The scene's hills stand in front of the clock only with `behind: true`, because a moved clock would vanish behind them. |
+| `clock` | `format` `12h` or `24h` (wins over `home.clock`). `style` `glass` (the frosted photo digits, the default) or `solid` (in `colour`). The scene's hills stand in front of the clock only with `behind: true`, because a moved clock would vanish behind them. `at: "scene"` (with no `background`): the clock and the date stay where each built in scene puts them, as on the home with no design, so the hills stand in front of the digits and the Waterline scene shows the clock on the water with its reflection under it; the clock's `x`, `y` and `scale` are not used then, and the weather stays in the date line. A TV older than this key keeps the clock in one place (with `behind: true` still behind the hills). |
 | `date` | `format`: left out is "Tuesday 17 November"; `short` "Tue 17 Nov", `day_month` "17 November", `weekday` "Tuesday", `numeric` "17/11/2026", `full` with the year. |
 | `weather` | `place: false` hides the place name, `words: false` the words ("Partly cloudy"). |
 | `panel` | On `people`, `quick`, `keep_watching`, `dock`: `glass` (frosted, the default), `solid` (no blur, lighter for a slow TV) or `none`. |
 | `dock` | `icon_shape` `rounded`, `circle` or `square`; `icon_tone` `colour`, `mono` (black and white until focused) or `dim`. |
 | `apps` | `order`: the dock's apps, in order (only those, up to ten; the rest are behind More apps). `hidden`: apps taken off the dock. `tiles.<package>`: `x`, `y`, `scale` for one app's tile. Settings and More apps always stay. |
-| `background` | Your own picture over the scenes: `image` is a file in the app (`backgrounds/...`) or a JPEG, PNG or WebP data URL (couch-tv Studio makes these, 1920x1080); never a web address. A picture that does not load leaves the normal scenes. `darken` 0 to 0.9, `zoom` 1 to 4, `x` and `y` 0 to 100 (which part shows when zoomed), `blur` in pixels. The glass clock shows this picture through its digits. `video` (with `image`, which is then its still picture): a short muted loop played over the picture, either a file on the TV (`backgrounds/loop-rain.mp4`, `loop-fire`, `loop-ocean`, `loop-clouds`, or your own in `backgrounds/mine/`) or `store:<id>`, a video the design store keeps; never a web address. MP4 with H.264 or WebM with VP8 or VP9, at most 15 s, 1920x1080 and 8 MB (1280x720 and 4 MB for the store's 720p copy). An official couch-tv Studio gallery design's `store:` video may also have a long seamless loop, up to about 4 minutes and 24 MB at 1080p (16 MB at 720p); only a TV with 2 GB of memory or more asks for it, it falls back to the 15 s copy if the loop does not arrive within 3 minutes, and once a store video has played the TV keeps one copy (the current design's) and plays it from there. The picture shows first and stays with Lighter home, in power save, on a TV that drops frames (for a week), while an app is open, and whenever the video cannot play (Home settings, couch-tv Studio, Your design says why). `blur` is not used with a video. `loop-clouds.jpg` with `depth: true` puts the clock behind its hills. |
+| `background` | Your own picture over the scenes: `image` is a file in the app (`backgrounds/...`) or a JPEG, PNG or WebP data URL (couch-tv Studio makes these, 1920x1080); never a web address. A picture that does not load leaves the normal scenes. `darken` 0 to 0.9, `zoom` 1 to 4, `x` and `y` 0 to 100 (which part shows when zoomed), `blur` in pixels. The glass clock shows this picture through its digits. `video` (with `image`, which is then its still picture): a short muted loop played over the picture, either a file on the TV (`backgrounds/loop-rain.mp4`, `loop-fire`, `loop-ocean`, `loop-clouds`, or your own in `backgrounds/mine/`) or `store:<id>`, a video the design store keeps; never a web address. MP4 with H.264 or WebM with VP8 or VP9, at most 15 s, 1920x1080 and 8 MB (1280x720 and 4 MB for the store's 720p copy). An official couch-tv Studio gallery design's `store:` video may also have a long seamless loop, up to about 4 minutes and 24 MB at 1080p (16 MB at 720p); only a TV with 2 GB of memory or more asks for it, it falls back to the 15 s copy if the loop does not arrive within 3 minutes, and once a store video has played the TV keeps one copy (the current design's) and plays it from there. The picture shows first and stays with Lighter home, in power save, on a TV that drops frames (for a week), while an app is open, and whenever the video cannot play (Home settings, Designs, Your design says why). `blur` is not used with a video. `loop-clouds.jpg` with `depth: true` puts the clock behind its hills. |
 | `texts` | Up to eight lines of your own words: `text` (200 characters), `x`, `y` (the top left corner), `size` in pixels, and the text styles. Older designs; newer ones use `objects` of type `text`. |
 | `rotate`, `shade` | On parts (not the clock or the dock): `rotate` in degrees. On text parts and objects: `shade` `glow` (a wide dark glow) or `panel` (a dark panel behind the words; on the clock, a dark pool under the digits), to read them on a busy photo. |
 | dock layout | On `elements.dock`: `layout` `row` (the default), `column` or `grid` (with `columns`), `icon_size` and `icon_gap` in pixels (112 and 26), `labels` `focus` (the default), `always` or `off`, `label_pos` `below` or `right`, `icon_shape` also `squircle` or `none` (the app's symbol with no tile), `icon_style` `colour`, `mono`, `glass`, `outline` or `dark`. A row too long for the TV's safe area wraps onto more lines instead of running off the screen. The remote follows the shape: up and down move along a column (a side rail), left and right step off it to the shows, and More apps opens in its usual place. With `labels: "always"` a long name shows by its first word. |
@@ -397,7 +428,7 @@ each widget needs, where that is set up, which TVs can run it and the sizes it c
 OK on the card opens the whole record. It never shows pretend data. The air quality and surf widgets
 ask Open-Meteo's free air quality and marine services, only while one is on the home.
 
-**Things typed at home (Home settings, couch-tv Studio, At home).** The Family note, List, Guest
+**Things typed at home (Home settings, Designs, At home).** The Family note, List, Guest
 Wi-Fi, House guide, Agenda and Screen time widgets show what is typed on the TV itself, with the remote
 or the phone remote's Type on the TV: a note and who it is from, up to 3 lists of 40 items (OK on the
 List widget opens it, OK ticks an item), the guest network's name, password and security, up to 8 guide
@@ -445,7 +476,7 @@ link. The website home on a Hisense (no computer) has no relay, so Headlines and
 need a home computer there; Scores and Commute ask their services straight from the TV.
 
 The commute's places are never in a design: from the town in Home settings, Location, to the town or
-suburb picked in Home settings, couch-tv Studio, Commute (shown while a design has the widget). The
+suburb picked in Home settings, Designs, Commute (shown while a design has the widget). The
 second is kept on the TV only (`tvhome.commute`), not in the settings the bridge keeps, and Share
 this home stops if it would send it. A design's Commute widget carries only its label, the arrive by
 time (`arrive_h`, `arrive_m`), the minutes to spare (`buffer`, 10 unless set) and `weekdays`.
@@ -472,9 +503,11 @@ the design pointing at it. Not yet tried on a real TV.
 **Getting a design by code (`design_store`).** With `"design_store": "https://designs.example"`
 (https only, no path; `http://127.0.0.1` or `localhost` for development), Home settings, Look has
 **Get a design**: type the code couch-tv Studio's Send to my TV shows (`ABCDE-FGHJK`, or the long
-`CTV1-...` one from its QR code). The TV asks that one server, with the code and nothing else (no
-cookies, no referrer), and keeps the design in its own storage (`couchtv.design.fetched`); it wins
-over a `design` in this file until **Remove the design I got**. The only picture it takes is a JPEG
+`CTV1-...` one from its QR code). The TV asks that one server, with the code and nothing else but, from the Android apps, its
+Couch TV version and total memory in MB (`tv: { v, mem }`; from 0.13.13 also `tv.profile`: `platform`, `sdk`, `memMb`, `res`
+and `model`, the kind of TV), so Couch TV Studio can say whether a design will
+play on that TV (no serial number, no ids, no location; no cookies, no referrer), and keeps the design in its own storage (`couchtv.design.fetched`); it wins
+over a `design` in this file until **Delete this design** (Home settings, Designs). The only picture it takes is a JPEG
 inside the answer. A design got this way always shows "Use this design?" first: getting one clears
 the TV's record of any design it said yes to. Without `design_store` the rows do not show. The
 browser preview takes `?mock=1&designstore=http://127.0.0.1:5490`. English only for now.
@@ -517,21 +550,26 @@ Off unless you add it. With no `home_assistant` section (or `"enabled": false`, 
 to anything, no extra permission. It works with option A (no computer) and option B (bridge), because
 the TV app talks to Home Assistant itself.
 
-**Set up on the TV, no computer and no file.** Home settings, couch-tv Studio, **Smart home**: type
-Home Assistant's address (usually `http://homeassistant.local:8123`), paste a long-lived access token
-with the phone remote's Type on the TV, and the TV lists everything Home Assistant has that couch-tv
-can show (never locks, alarms, garage doors or gates). Tick what you want and pick **Save and show on
-the home**. The TV keeps the address and token in the app's own private store, exactly as if
-`apply.sh` had sent this section; the page never gets the token back. **Change what shows** reads Home
-Assistant again with the kept token, and **Disconnect smart home** removes both. A later `apply.sh`
-with no `home_assistant` section leaves a set up made on the TV alone; one with a section replaces it.
-**Add a device we don't list** walks through getting a device into Home Assistant first (Tuya and
-Smart Life, Google Nest, Alexa devices, Apple Home and Matter, Hue, aircon, solar, and anything with a
-web address or MQTT through Home Assistant's RESTful, MQTT or Webhook integrations).
+**Set up from a phone, no computer and no file.** Home settings, Designs, **Smart home** shows one QR
+code: "Scan with your phone to connect your home." The phone page it opens (served by the TV itself at
+`/ha`, or from the Smart home row on the phone's Home settings page) finds Home Assistant on the Wi-Fi
+(it announces `_home-assistant._tcp`) or takes a typed address, then sends the phone to Home
+Assistant's own sign in page. Nobody pastes a token: the TV is the sign in's client (its client id is
+`http://<tv address>:<port>/`, Home Assistant sends the phone back to `/ha/done`, with PKCE S256), the
+TV swaps the one time code itself and keeps only the refresh token, in the app's private store, making
+a fresh 30 minute access token in memory when it needs one. Then the phone ticks what shows (never
+locks, alarms, garage doors or gates) and saves; the TV redraws at once, and the smart home widgets'
+device settings pick from those ticks. **Disconnect** (on the TV or the phone) signs the TV out of Home
+Assistant (the refresh token is revoked) and removes everything. A set up from before, with a
+long-lived token, keeps working. The help for devices we don't list (Tuya and Smart Life, Google Nest,
+Alexa devices, Apple Home and Matter, Hue, aircon, solar, and anything with a web address or MQTT) is
+on the phone page. Best: a Home Assistant user just for the TV, not an administrator. A later
+`apply.sh` with no `home_assistant` section leaves a set up made from a phone alone; one with a
+section replaces it.
 
 **Samsung, LG, Hisense, Philips, TiVo OS and Panasonic** (a computer runs the home): the same Smart
 home screen works, and the bridge talks to Home Assistant for the TV (`bridge/smarthome.py`, `/api/ha`).
-The address, token and ticks are kept in `bridge/data/home-assistant.json` (mode 600, git ignores it);
+The bridge serves the same phone page at `/ha` (`bridge/haphone.py`). The address, the refresh token (or a typed token on an older set up) and the ticks are kept in `bridge/data/home-assistant.json` (mode 600, git ignores it);
 without one the bridge uses this section and `HOME_ASSISTANT_TOKEN`. The website home on a VIDAA with
 no computer cannot reach Home Assistant.
 
@@ -566,9 +604,9 @@ HOME_ASSISTANT_TOKEN=<the long-lived token>
 | token (needed) | `HOME_ASSISTANT_TOKEN` in `.env`. A `"token"` key in this section also works, but `.env` keeps secrets out of `config.json`. |
 | `enabled` [true] | `false` switches smart home off and keeps the rest of the section for later. |
 | `climate` | Up to 8 air conditioners or heaters (`climate.*` entities), in the order shown. `name` is optional (else Home Assistant's own name). |
-| `scenes` | Up to 10 scenes or scripts (`scene.*`, `script.*`), shown as tiles that run on OK. This is also the way to put lights, blinds or anything else on the TV: make a scene or script for it in Home Assistant. |
+| `scenes` | Up to 10 scenes or scripts (`scene.*`, `script.*`), shown as tiles that run on OK. This is also the way to put lights, blinds or anything else on the TV: make a scene or script for it in Home Assistant. Nothing that opens the house: a scene or script whose id or Home Assistant name says garage, gate, door, lock, alarm or disarm is refused (joined words too, such as frontgate, backdoor or unlock, but not gateway, doorbell, indoor, outdoor, clock or block; names in other languages are not caught), and the TV never lists or runs a scene that sets a lock, an alarm, a group, or a garage door, gate or door, nor one whose blinds or switches it cannot read. |
 | `doorbell` | `entity`: what rings, one of `event.*` (most doorbells, a new event per press), `binary_sensor.*` or `input_boolean.*` (on while ringing). `camera` (optional): a `camera.*` for the still picture. `name` (optional): the card's title. |
-| `controls` | Up to 16 lights, switches, fans and blinds (`light.*`, `switch.*`, `fan.*`, `cover.*`) for a design's **Control Centre** widget. Never a lock, an alarm, a garage door or a gate: `lock.*` and `alarm_control_panel.*` are refused, so is a `cover.*` or `switch.*` whose id says garage, gate, door or lock, and on the TV a blind Home Assistant calls a garage door, gate or door is shown but never switched. |
+| `controls` | Up to 16 lights, switches, fans and blinds (`light.*`, `switch.*`, `fan.*`, `cover.*`) for a design's **Control Centre** widget. Never a lock, an alarm, a garage door or a gate: `lock.*` and `alarm_control_panel.*` are refused, so is a `cover.*` or `switch.*` whose id says garage, gate, door, lock, alarm or disarm (joined words too, such as frontgate, backdoor or smartlock, but not gateway, doorbell, indoor, outdoor, clock or block). On the TV a blind or switch whose Home Assistant name says so, or a blind Home Assistant calls a garage door, gate or door, never shows and is never switched; door, garage door, lock, opening and window sensors are never listed either. |
 | `cameras` | Up to 4 cameras (`camera.*`) for the **Camera** widget: a still picture, new every 2 seconds, never video. |
 | `sensors` | Up to 8 sensors (`sensor.*`, the pool, a rain gauge, humidity) for the **Sensor** widget: the reading and its last 24 hours. |
 | `energy` | One sensor for the **Solar and energy** widget: `entity`, either today's energy total (kWh or Wh, the kind that counts up through the day) or power (W or kW); `name` (optional); `battery` (optional): a home battery's charge in %. |
@@ -647,7 +685,7 @@ computer on; the doorbell card that slides in over apps needs a Google TV, Andro
 
 With a computer at home, couch-tv talks to a Philips Hue bridge and an AirTouch 5 aircon console
 itself, the way Home Assistant would, on every TV it serves (Google TV and Android TV too, beside any
-Home Assistant things). Set both up on the TV: Home settings, couch-tv Studio, Smart home.
+Home Assistant things). Set both up on the TV: Home settings, Designs, Smart home.
 
 - **Philips Hue:** type the Hue bridge's address (Hue app, Settings, Bridges, the i button), press the
   round button on top of the Hue bridge, then Pair within 30 seconds. Tick up to 16 lights. They show
@@ -670,6 +708,31 @@ goes to the page. The same can be written by hand:
 with the Hue key in `.env` as `HUE_USERNAME=` (made by pressing the button and sending
 `{"devicetype": "couch-tv#home"}` to `http://<hue bridge>/api`). `zones` left out shows every zone.
 
+## Matter devices with no Home Assistant (option B)
+
+With a computer at home, devices people already have in Google Home, Apple Home, SmartThings or
+Alexa can be shared to couch-tv by Matter (the other app gives an 11 digit code), and the home
+computer joins them as one more controller. Set it up once with `scripts/matter-setup.sh` (it needs
+Node.js 22.13 or newer), then add devices from the phone page. Everything, including what was tested,
+is in [MATTER.md](MATTER.md). The section is optional; Matter is on when it is installed:
+
+```json
+"matter": {
+  "enabled": true,
+  "node": "/opt/homebrew/bin/node",
+  "test_devices": false
+}
+```
+
+- `enabled`: false switches Matter off.
+- `node`: which Node.js to use, when the first `node` on the PATH is too old.
+- `test_devices`: also accept development boards and the Matter SDK's sample apps (test
+  certificates). Leave it off for real devices.
+
+The older `server` and `port` keys are ignored (the bridge's Matter service listens on a private
+socket, never a network port). Locks, alarms, garage doors, gates and doors never show, as with Home
+Assistant. The fabric keys live in `bridge/data/matter/` (mode 700): back up `bridge/data/`.
+
 ## Guests: names and times from a bookings calendar
 
 For a holiday let or a guest room. A couch-tv Studio design's **Welcome** widget can take the guest's
@@ -677,7 +740,7 @@ name from a calendar (Guest name from: Bookings calendar): "Welcome, Sarah" from
 until check out, with "Check in from 3pm" or "Check out Sunday at 10am" under it. Between stays it shows
 the design's own words. This is the way guest-tv, our sibling project for guest TVs, does it.
 
-On the TV: Home settings, couch-tv Studio, At home, **Guests**. Paste the calendar link Airbnb
+On the TV: Home settings, Designs, At home, **Guests**. Paste the calendar link Airbnb
 (Calendar, Availability, Connect calendars, Export calendar), Booking.com or VRBO gives you, and set
 **Check in from** and **Check out by** (calendars hold days, not times). Without a bookings link the
 Agenda's own calendar is read, and there only events titled like "Stay: Sarah" count. The link, the
@@ -703,6 +766,43 @@ Where the name comes from, first that has one:
 
 Preview with no TV and no Home Assistant: `?mock=1&ha=1` (see the end of this page). The doorbell
 card is drawn by the app itself, so it cannot be previewed in a browser.
+
+## Spotify (optional, local media session)
+
+Off unless enabled. Displays what the locally installed Spotify app is playing on the TV, complete with album cover art, live local progress bar, and playback controls (previous, rewind, play/pause, fast-forward, next).
+
+Completely local and privacy-friendly: uses Android's local `MediaSessionManager` + `MediaController`. **No accounts, tokens, client IDs, or network calls to Spotify are ever used.** The cover is only the picture inside the TV's own player; a song that gives its cover only as a link shows no cover, because loading that link would reach Spotify.
+
+The Spotify rows in Home settings show only where the card works: the Couch TV home app on an Android TV, with or without a computer at home. A browser, the on-TV app and the TVs a computer runs without Android do not show them.
+
+```json
+"spotify": {
+  "enabled": true,
+  "seek_seconds": 10,
+  "hide_idle": false,
+  "title_mode": "pingpong",
+  "show_app": true,
+  "align": "classic"
+}
+```
+
+| Key | What it does |
+|---|---|
+| `enabled` [false] | `true` switches the Spotify integration on. Off by default with zero background overhead. |
+| `seek_seconds` [10] | Step in seconds for rewind and fast-forward controls: 5, 10, 15 or 30, the same four Home settings cycles through. Any other value is 10. |
+| `hide_idle` [false] | `true` hides the Now Playing card when Spotify is paused or stopped. |
+| `title_mode` ["pingpong"] | Display mode for long song titles: `"dots"` (standard `...` truncation), `"pingpong"` (ping-pong marquee sliding), or `"continuous"` (continuous scrolling marquee). |
+| `show_app` [true] | `true` displays the "SPOTIFY" label above the song title; `false` hides it and proportionally centers and sizes the playback controls and track details. |
+| `align` ["classic"] | Shelf layout alignment for the Spotify card and Keep watching items: `"classic"` aligns left starting from the screen safe margin; `"center"` centers inline with the dock/app bar. |
+
+### Permissions & Setup
+The integration reads local media sessions via a `NotificationListenerService` belonging to Couch TV (listed in Android as Couch TV Spotify Now playing). On Android TV / Google TV, grant Notification Access once over ADB:
+```sh
+adb shell cmd notification allow_listener app.couchtv.launcher/app.couchtv.launcher.SpotifyMediaListener
+```
+`apply.sh` grants this automatically when setting up the TV. The TV app will indicate whether the permission is active under **Home settings, Look, Spotify**; with a computer at home it leaves out the adb line, since the computer gives the access itself.
+
+*Note:* Media sessions are an Android system feature, so TVs without Android do not have the card.
 
 ## Plex (optional, option B)
 
@@ -785,8 +885,17 @@ called DNS rebinding). But the TV apps load from files and send `Origin: null`, 
 accept `null`, and any web page can send `null` too (from a sandboxed frame). So the origin check
 alone cannot tell the TV from a hostile page. **Only the pairing key closes that gap.** With it on:
 
-- every `/api/` call except `/api/health` and `/api/pair` needs the key
-  (`Authorization: Bearer <key>`, `X-API-Key: <key>` or `?token=<key>`);
+- every `/api/` call except `/api/health`, `/api/pair` and `/api/pair/start` needs the key
+  (`Authorization: Bearer <key>`, `X-API-Key: <key>` or `?token=<key>`). Never a cookie;
+- the phone's Home settings page (`/setup`) pairs with the 6 digit code from the TV's QR, or one asked for
+  with `/api/pair/start` (the code shows only on the TV; asking again never swaps a live code). A code lasts
+  3 minutes, works once, and 5 different wrong tries throw it away (the same wrong code again from the same
+  address is not a new try, so one phone cannot kill the QR's code). One address gets 5 different wrong codes
+  in 10 minutes, then waits (HTTP 429) until the oldest is 10 minutes old: about 720 guesses a day at most,
+  never the bridge computer itself. Both calls refuse `Origin: null` and `file:`
+  (HTTP 403), so a hostile page in a sandboxed frame cannot ask for codes or read the key. 15 wrong codes
+  within 10 minutes while a code is live, from at least three addresses (one address adds at most 5, and
+  the same wrong code again is not counted), lock code pairing for 10 minutes; the key itself is never locked;
 - after 5 different wrong keys from one address within a minute, that address gets HTTP 429 for the
   rest of that minute, whatever key it sends. The same wrong key sent again does not count, so a phone
   or TV still holding an old key does not lock itself out, and the bridge computer itself

@@ -157,7 +157,14 @@ const T = (e) => V.tier(e);
 ok(T({ lighter: true, memory: 8, screenPx: 3840 }) === "still", "Lighter home: the still picture");
 ok(T({ powerSave: true }) === "still" && /saving power/.test(V.tierWhy({ powerSave: true }).why), "power save: the still picture, and it says why");
 ok(T({ saveData: true }) === "still" && T({ reducedMotion: true }) === "still", "data saver or less motion: the still picture");
-ok(T({ memory: 1 }) === "still", "1 GB of memory (a Slow TV): the still picture");
+ok(T({ memory: 0.5 }) === "still" && /under 1 GB/.test(V.tierWhy({ memory: 0.5 }).why), "under 1 GB of memory: the still picture, and it says why");
+ok(T({ memory: 1, screenPx: 1920 }) === "720" && T({ memory: 1, screenPx: 3840 }) === "720", "1 GB (a 939 MB TCL played it at about 27 fps): the video, always the 720p copy");
+ok(T({ memory: 1, lighter: true }) === "720", "1 GB with Lighter home (on by itself there): the video still plays, the 720p copy (the gallery says it plays on 1 GB)");
+ok(T({ memory: 2, lighter: true }) === "still" && T({ memory: 4, lighter: true, screenPx: 1920 }) === "still" && T({ lighter: true }) === "still", "Lighter home on any other TV, or one that does not say: the still picture");
+ok(T({ memory: 1, slow: true }) === "still" && T({ memory: 1, powerSave: true }) === "still" && T({ memory: 1, saveData: true }) === "still" && T({ memory: 1, reducedMotion: true }) === "still", "1 GB that dropped frames last week, power or data saver, less motion: the still picture");
+ok(T({ memory: 8, screenPx: 3840, stillChosen: true }) === "still" && /chosen on this TV/.test(V.tierWhy({ stillChosen: true }).why) && T({ memory: 1, stillChosen: true }) === "still", "Show the still picture instead, chosen on this TV: the still picture on any TV, and it says why");
+ok(T({ designer: true, stillChosen: true }) === "1080", "the designer's preview plays whatever this TV chose");
+ok(1 < V.LIMIT.long.memory, "a 1 GB TV never asks for the long loop");
 ok(T({ slow: true }) === "still", "a TV that dropped frames last week: the still picture");
 ok(T({}) === "720" && T({ memory: 2, screenPx: 1920 }) === "720", "unknown, or an Everyday TV: the 720p copy");
 ok(T({ memory: 4, screenPx: 1920 }) === "1080" && T({ memory: 8, screenPx: 3840 }) === "1080", "4 GB and a 1080p screen or more: the 1080p copy");
@@ -199,5 +206,30 @@ for (const L of V.LOOPS) {
 }
 ok(V.LOOPS.length >= 3 && V.LOOPS.length <= 5, "between three and five built in loops (" + V.LOOPS.length + ")");
 ok(fs.readFileSync(path.join(web, "backgrounds/CREDITS.md"), "utf8").includes("loop-rain.mp4"), "CREDITS.md says where the loops come from");
+
+// the "slow" mark (dropped frames) holds for a week on the app version that made it; an update tries the video
+// again (the TCL test of 0.13.10: a mark from before the update kept the video off for a week)
+{
+  const box = sandbox("");
+  const mem = {};
+  box.localStorage = { getItem: (k) => (k in mem ? mem[k] : null), setItem: (k, v) => { mem[k] = String(v); }, removeItem: (k) => { delete mem[k]; } };
+  let ver = "0.13.9";
+  box.TVOS = { version: () => ver };
+  const Vb = box.CouchVideo, t0 = Date.now();
+  Vb.markSlow(t0);
+  ok(mem[Vb.SLOW_KEY] === String(t0) && mem[Vb.SLOW_VER_KEY] === "0.13.9", "a slow mark keeps the time and the app version");
+  ok(Vb.slowMarked(t0 + 86400000), "the same version: still marked a day later");
+  ok(!Vb.slowMarked(t0 + 8 * 86400000), "a week later: no longer marked");
+  ver = "0.13.10";
+  ok(!Vb.slowMarked(t0 + 86400000), "after an update: not marked, the video is tried again");
+  ok(!(Vb.SLOW_KEY in mem) && !(Vb.SLOW_VER_KEY in mem), "and the old mark is gone");
+  // an old mark with no version at all (made before 0.13.10) is dropped too once the app has a version
+  mem[Vb.SLOW_KEY] = String(t0);
+  ok(!Vb.slowMarked(t0 + 1000), "a mark from before versions were kept: dropped on an app with a version");
+  // a page with no app behind it (a browser preview): the week as before
+  box.TVOS = null;
+  Vb.markSlow(t0);
+  ok(Vb.slowMarked(t0 + 1000) && !(Vb.SLOW_VER_KEY in mem), "no app version (a preview): marked for the week as before");
+}
 
 console.log(`OK ${n} video background checks`);

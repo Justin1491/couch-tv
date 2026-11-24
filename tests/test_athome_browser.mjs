@@ -1,5 +1,5 @@
 // Things typed at home, in a real browser at 1920x1080 (the TV home in its ?mock preview):
-//  1. Home settings, couch-tv Studio, At home: a note, a list and its items, the guest Wi-Fi, a guide
+//  1. Home settings, Designs, At home: a note, a list and its items, the guest Wi-Fi, a guide
 //     entry and a calendar link typed with the remote land on the widgets straight away.
 //  2. The widgets show them at every size they come in, fitting and centred (2c): the note, the list (still to do first), a real
 //     Wi-Fi join code that reads back as the WIFI: words, the guide, today's events from the calendar,
@@ -75,17 +75,18 @@ console.log("Running at home browser tests...");
 // 1. typed in Home settings with the remote
 {
   const page = await home([["note", 0, 0, 4, 4], ["list", 4, 0, 4, 4], ["wifi", 8, 0, 8, 4], ["guide", 0, 4, 4, 4], ["agenda", 4, 4, 8, 4]]);
-  for (const k of ["note", "list", "wifi", "guide", "agenda"]) ok(/Write a note|Add a list|Add your guest Wi-Fi|Write your house guide|Add your calendar/.test(await text(page, "w" + ["note", "list", "wifi", "guide", "agenda"].indexOf(k))), k + ": with nothing typed, the widget says what to do, never pretend words");
+  for (const k of ["note", "list", "wifi", "guide", "agenda"]) // (0.13.10) a widget waiting for its words shows its name, its line and Press OK to set it up (no phone page here)
+  ok(/Write a note|Add a list|Add your guest Wi-Fi|Write your house guide|Add your calendar|Press OK to set it up|Set up on your phone/.test(await text(page, "w" + ["note", "list", "wifi", "guide", "agenda"].indexOf(k))), k + ": with nothing typed, the widget says what to do, never pretend words");
   await page.evaluate(() => window.tv.settingsKey()); await page.waitForTimeout(300); await press(page, "Enter", 300);   // the gear menu, then Home settings
   await page.waitForTimeout(400);
-  // down the sections to couch-tv Studio, into its rows, down to At home
-  for (let i = 0; i < 14 && !(await page.evaluate(() => /couch-tv Studio/.test((document.querySelector(".ssec.focus") || {}).textContent || ""))); i++) await press(page, "ArrowDown");
+  // down the sections to Couch TV Studio, into its rows, down to At home
+  for (let i = 0; i < 14 && !(await page.evaluate(() => /Designs/.test((document.querySelector(".ssec.focus") || {}).textContent || ""))); i++) await press(page, "ArrowDown");
   await press(page, "ArrowRight");
   const toRow = async (re) => { for (let i = 0; i < 40; i++) { const t = await page.evaluate(() => (document.querySelector(".srow.focus") || {}).textContent || ""); if (re.test(t)) return true; await press(page, "ArrowDown", 120); } return false; };
   const type = async (words) => { await press(page, "Enter", 250); await page.fill("#set-input", words); await press(page, "Enter", 300); };
   const atHomeRow = await toRow(/^At home/);
   if (!atHomeRow) console.log("DEBUG", await page.evaluate(() => document.getElementById("set-head").textContent + " | " + ((document.querySelector(".srow.focus") || {}).textContent || "none") + " | " + document.getElementById("set-rows").textContent.slice(0, 300)));
-  ok(atHomeRow, "Home settings, couch-tv Studio has At home");
+  ok(atHomeRow, "Home settings, Designs has At home");
   await press(page, "Enter", 300);
   ok(/At home/.test(await page.evaluate(() => document.getElementById("set-head").textContent)), "At home opens");
   ok(await toRow(/Write a note/), "a row to write the note"); await type("Dinner at 6. Feed Max!");
@@ -178,9 +179,11 @@ console.log("Running at home browser tests...");
 
 // 2b. On this day, from a photo whose name has a date two years ago today
 {
-  const page = await home([["memory", 0, 0, 4, 4], ["memory", 4, 0, 2, 2]], { "mock:tvhome.settings": { s: { photos: [{ id: "a", url: "demo/IMG_" + twoYearsAgo.replace(/-/g, "") + "_101500.jpg" }, { id: "b", url: "demo/beach.jpg" }] } } });
+  const page = await home([["memory", 0, 0, 4, 4], ["memory", 4, 0, 2, 2], ["memory", 6, 0, 2, 2, { ago: false }]], { "mock:tvhome.settings": { s: { photos: [{ id: "a", url: "demo/IMG_" + twoYearsAgo.replace(/-/g, "") + "_101500.jpg" }, { id: "b", url: "demo/beach.jpg" }] } } });
   ok(/On this day/.test(await text(page, "w0")) && /2 years ago/.test(await text(page, "w0")), "On this day: the photo from two years ago today");
-  ok((await text(page, "w1")).indexOf(String(today.getFullYear() - 2)) >= 0, "and on a tile, the year it was taken");
+  // ws2-home (0.13.9): Show how long ago is on by default, also on a tile; off shows the year it was taken
+  ok(/(^|\D)2\s*years ago/.test(await text(page, "w1")), "and on a tile, how long ago: " + await text(page, "w1"));
+  ok((await text(page, "w2")).indexOf(String(today.getFullYear() - 2)) >= 0, "and on a tile with Show how long ago off, the year it was taken: " + await text(page, "w2"));
   await page.close();
   const none = await home([["memory", 0, 0, 4, 4]], { "mock:tvhome.settings": { s: { photos: [{ id: "a", url: "demo/IMG_20200101_101500.jpg" }] } } });
   const t = await text(none, "w0");
@@ -252,7 +255,8 @@ console.log("Running at home browser tests...");
         const tag = kind + " " + id + " " + en + ": ", b = el.getBoundingClientRect(), words = el.textContent;
         if ((en === "tv" || en === "long" || en === "hindi") && el.getAttribute("data-empty")) bad.push(tag + "a setup card with data (" + words + ")");
         if (en === "unset" && !el.getAttribute("data-empty")) bad.push(tag + "shows something with nothing set (" + words + ")");
-        if (en === "unset" && /Feed Max|Shopping|salt-and-sun|Swimming|years ago|Milk/.test(words)) bad.push(tag + "pretend words (" + words + ")");
+        // (0.13.10) the list's setup face says what it is for, "Shopping or to do": a description, not a pretend item
+        if (en === "unset" && /Feed Max|Shopping(?! or to do)|salt-and-sun|Swimming|years ago|Milk/.test(words)) bad.push(tag + "pretend words (" + words + ")");
         if (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1) bad.push(tag + "the widget scrolls (" + el.scrollWidth + "x" + el.scrollHeight + " in " + el.clientWidth + "x" + el.clientHeight + ")");
         el.querySelectorAll("*").forEach((node) => {
           if (node.classList.contains("cw-bg") || node.closest("svg")) return;

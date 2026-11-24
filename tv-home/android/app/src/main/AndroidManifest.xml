@@ -4,6 +4,9 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Matter (MatterPage.kt): finding devices on the home network with mDNS needs the multicast lock -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- Android's Watch Next list: what each app says you are in the middle of (keep watching, no computer needed). -->
     <uses-permission android:name="android.permission.READ_TV_LISTINGS" />
     <!-- couch-tv Studio's Screen time widget: Android's usage numbers. Not granted on install: apply.sh
@@ -40,6 +43,11 @@
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+        </intent>
+        <!-- Explicitly shown apps can have a regular launcher activity instead of a TV entry. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
         </intent>
         <!-- The TV's own homes: the Home button watch looks for them (FireWatch.kt), and the crash
              guard hands the screen to one if couch-tv keeps crashing (CrashGuard.kt). -->
@@ -108,11 +116,17 @@
             <action android:name="android.settings.APPLICATION_DETAILS_SETTINGS" />
             <data android:scheme="package" />
         </intent>
+        <!-- Reminders: Android's speech screen (Google's "Speak now"), for the remote's mic. -->
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
     </queries>
 
+    <!-- The app's name in the TV's app list and to the TV's voice assistant ("Hey Google, open Couch TV"):
+         Couch TV, as the on-TV app is called; "Home" was too plain for the assistant to find (23 Nov 2026) -->
     <application
         android:name=".App"
-        android:label="Home"
+        android:label="Couch TV"
         android:icon="@drawable/icon"
         android:banner="@drawable/banner"
         android:theme="@style/Home"
@@ -173,6 +187,28 @@
             </intent-filter>
             <meta-data android:name="android.accessibilityservice" android:resource="@xml/key_watch" />
         </service>
+        <!-- Spotify MediaSession listener: reads and controls local Spotify playback without accounts or tokens. -->
+        <service
+            android:name=".SpotifyMediaListener"
+            android:exported="true"
+            android:label="@string/spotify_listener"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+        <service
+            android:name=".SpotifySessionAccess"
+            android:exported="false"
+            android:label="@string/spotify_session_access"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+            <meta-data android:name="android.service.notification.default_filter_types" android:value="" />
+            <meta-data android:name="android.service.notification.disabled_filter_types"
+                android:value="conversations|alerting|ongoing|silent" />
+        </service>
         <!-- TCL only (issue #94, TclPlaceholderInput.kt): an empty TV input that TCL's boot manager
              counts as a reason to let this app start and bind its services at boot. Off here and
              switched on at runtime on a TCL, so no other TV lists a new input. -->
@@ -187,6 +223,12 @@
             </intent-filter>
             <meta-data android:name="android.media.tv.input" android:resource="@xml/tcl_placeholder_input" />
         </service>
+        <!-- About every 15 minutes, even after the TV killed the app: switches the Home button
+             watch back on if it is listed as on but not running (WatchRepair.kt). -->
+        <service
+            android:name=".WatchRepair"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
         <receiver android:name=".FireWatch$Restore" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

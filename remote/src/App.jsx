@@ -9,6 +9,7 @@ import { AskSheet, MoreSheet, TypeSheet, ArrangeSheet, PeopleSheet, Onboarding }
 import { KidsSheet, PinSheet } from './Kids.jsx';
 import { usePullDown, usePageDrag } from './gestures.js';
 import { t, tBridge, useLang, setTvLang } from './i18n.js';
+import { takeDesignFromHash, nonceMatches, sentWords, canSend, NONCE_KEY, dsw } from './designSend.js';
 
 const store = {
   get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -151,6 +152,15 @@ export default function App() {
   const [screens, setScreens] = useState([]);
   const [tab, setTab] = useState('remote');
   const [sheet, setSheet] = useState(null);
+  // A link from the TV's phone Home settings page (/setup) opens one sheet: /#sheet=people, arrange, kids or more.
+  useEffect(() => {
+    const m = /(?:^#|&)sheet=(people|arrange|kids|more)(?:&|$)/.exec(window.location.hash || '');
+    if (!m) return;
+    // only sheet= comes off: a #design= and its n= (designSend.js) stay for their own effect, and so does history.state
+    const rest = window.location.hash.replace(/^#/, '').split('&').filter((p) => p && !/^sheet=/.test(p)).join('&');
+    try { window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search + (rest ? '#' + rest : '')); } catch (e) { /* old browser */ }
+    setSheet(m[1]);
+  }, []);
   // A sheet adds a history step, so the Android back button (or gesture) closes it instead of the app.
   useEffect(() => {
     const st = window.history.state;
@@ -257,6 +267,9 @@ export default function App() {
   const [wakeError, setWakeError] = useState(null);
   useEffect(() => { if (tv?.power === 'on') setWakeError(null); }, [tv?.power]);
   const onKey = (key, hold) => run(api.key(key, hold));
+  // g34: the next or the previous scene. The sheet stays open and nothing reloads; a TV whose home is
+  // not on screen changes once it is, and the phone says so
+  const onScene = (pick) => api.scene(pick).then((j) => { if (j && j.listening === false) say(t('scene_not_open')); }).catch((e) => say(tBridge(e.key, e.vars, e.message), 'err'));
   const onVolume = (a) => run(api.volume(a));
   // A fully off TV leaves the Wi-Fi; the bridge tries Wake-on-LAN for up to 25 s, then gives up.
   const onWake = async () => {
@@ -313,6 +326,29 @@ export default function App() {
   const openAsk = () => { tick(); flushSync(() => setSheet('ask')); askInput.current?.focus({ preventScroll: true }); };
   const openType = () => { tick(); flushSync(() => setSheet('type')); typeInput.current?.focus({ preventScroll: true }); };
   const sendText = (text) => run(api.text(text), t('sent_to_tv'));
+  // Send a design (designSend.js): the words to show (sent, sent but the home is not open, or failed)
+  const sendDesign = async (code) => {
+    try { const r = await api.sendDesign(code); tick(); return { ok: true, words: sentWords(r) }; }
+    catch { return { ok: false, words: dsw('failed') }; }
+  };
+  // couch-tv Studio's Send to my TV opens this page at #design=CODE. The code is taken out of the address
+  // first, so a reload or a saved bookmark never offers it again. It is sent with no tap only when Studio
+  // handed back the nonce this phone made for that trip (Choose a design in couch-tv Studio), once;
+  // any other link asks first: Send this design to the TV?
+  const [offer, setOffer] = useState(null);
+  const sendNow = (code) => sendDesign(code).then((r) => say(r.words, r.ok ? 'info' : 'err'));
+  useEffect(() => {
+    if (!/(^|[#&])design=/.test(window.location.hash)) return;
+    // on the couch-tv TV app a phone not paired yet pairs first (on-tv/web/shim.js), then the page
+    // reloads with the code still in the address
+    if (window.couchTv && typeof window.couchTv.token === 'function' && !window.couchTv.token()) return;
+    const { code, nonce, rest } = takeDesignFromHash(window.location.hash);
+    try { window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search + rest); } catch { /* old browser */ }
+    if (!code) { say(dsw('notCode'), 'err'); return; }
+    const kept = store.get(NONCE_KEY);
+    if (nonceMatches(nonce, kept)) { try { localStorage.removeItem(NONCE_KEY); } catch { /* private mode */ } sendNow(code); }
+    else setOffer(code);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sleepEnds = tv?.sleep?.ends;
   const sleepLeft = sleepEnds ? `${Math.max(0, Math.round((new Date(sleepEnds) - Date.now()) / 60000))}m` : null;
@@ -410,12 +446,22 @@ export default function App() {
         </main>
       )}
       {toast && <div key={toast.id} className={`toast glass ${toast.kind}`} role="status">{toast.text}</div>}
+      {offer && (
+        <div className="design-offer glass" role="dialog" aria-label={dsw('ask')}>
+          <p>{dsw('ask')} <b>{offer}</b></p>
+          <div className="design-offer-row">
+            <button type="button" className="pill solid" onClick={() => { const c = offer; setOffer(null); sendNow(c); }}>{dsw('askSend')}</button>
+            <button type="button" className="pill glass" onClick={() => setOffer(null)}>{dsw('askLater')}</button>
+          </div>
+        </div>
+      )}
       <AskSheet ref={askInput} open={sheet === 'ask'} onClose={() => setSheet(null)} who={who} recs={recs} onAsk={onAsk} onDone={(reply) => say(reply)} />
       <TypeSheet ref={typeInput} open={sheet === 'type'} onClose={() => setSheet(null)} onText={sendText} />
       <MoreSheet ref={moreSheet} open={sheet === 'more'} tvs={tvs} tvId={tvId || 'living-room'} onTv={(id) => { tick(); chooseTv(id); }}
         canMove={!offState && ['playing', 'paused', 'buffering'].includes(tv?.playing?.state) && Boolean(tv?.playing?.title)} onMove={onMove}
         picture={tv?.picture} pictureInfo={pictureInfo} onPicture={onPicture} onClose={() => setSheet(null)} sleepEnds={sleepEnds} sleepError={sleepError} onSleep={onSleep}
-        onKey={onKey} onText={sendText} onArrange={() => setSheet('arrange')} onPeople={() => setSheet('people')} onKids={() => setSheet('kids')} />
+        onKey={onKey} onText={sendText} onArrange={() => setSheet('arrange')} onPeople={() => setSheet('people')} onKids={() => setSheet('kids')} onDesign={sendDesign} canSendDesign={canSend((thisTv || (tvs.length === 1 ? tvs[0] : null))?.kind)}
+        kind={(thisTv || (tvs.length === 1 ? tvs[0] : null))?.kind} onScene={onScene} />
       <ArrangeSheet open={sheet === 'arrange'} onClose={() => setSheet(null)} tvName={thisTv?.name} hidden={hidden} />
       <KidsSheet open={sheet === 'kids'} onClose={() => setSheet(null)} onChanged={loadConfig} />
       <PinSheet ask={pinAsk} onClose={() => setPinAsk(null)} />

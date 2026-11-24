@@ -847,6 +847,343 @@ class MoveAskedTitle(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(server.move_asked({"title": None, "title_from": None}, NETFLIX))
 
 
+class MoveSiblingTitle(unittest.IsolatedAsyncioTestCase):
+    """TV B came up on another title whose own page has the right one as a tile. Seen on a Sony
+    Google TV: JustWatch's one Disney+ link for the film "Tangled" is the page of "Tangled
+    Sing-Along", and the plain film is a tile under Suggested there."""
+    did = MoveSteps.did
+    PAGE = "https://www.example.com/browse/entity-1"
+    OTHER = [{"label": "Some Show Sing-Along", "x": 300, "y": 280, "clickable": False},
+             {"label": "CONTINUE", "x": 293, "y": 709, "clickable": False},
+             {"label": "Some Show, Select for details on this title., 1 of 8 items.", "x": 330, "y": 1065,
+              "clickable": True},
+             {"label": "Some Show Ever After, Select for details on this title., 2 of 8 items.", "x": 750,
+              "y": 1065, "clickable": True}]
+    RIGHT = [{"label": "Some Show", "x": 340, "y": 286, "clickable": False},
+             {"label": "CONTINUE", "x": 293, "y": 709, "clickable": False},
+             {"label": "RESTART", "x": 518, "y": 709, "clickable": False}]
+
+    def setUp(self):
+        MoveSteps.setUp(self)   # the same two pretend TVs, without running MoveSteps' own tests again
+        self.media[A] = playing("Some Show", 600_000, title_from="app")
+        self.media["after_play"] = playing("Some Show Sing-Along", 5_000, title_from="app")
+        self.screens = [self.OTHER, self.RIGHT]            # what the screen reader sees, read by read
+        self.then_plays = playing("Some Show", 598_000, title_from="app")   # after the page's button
+        self.finds = []
+        self.found_as = None          # the title the show finder answers with (None: the one asked)
+        self.starts = True            # does the app say it plays within the wait after Play
+        outer = self
+
+        async def find(title, type_=None):
+            outer.finds.append(title)
+            return {"title": outer.found_as or title, "providers": [{"service": "netflix", "web": outer.PAGE}]}, []
+
+        async def ui_items():
+            outer.log.append((server._current.get(), "screen"))
+            if not outer.screens:
+                raise RuntimeError("could not read the screen")
+            return outer.screens.pop(0)
+
+        async def wait_until_playing(pkg, timeout=30, seen=None):
+            outer.log.append((server._current.get(), "wait"))
+            outer.media[server._current.get()] = outer.then_plays
+            return outer.starts
+        for p in (patch.object(move, "SIBLING_TITLE_APPS", {"netflix": "example.com"}),
+                  patch.object(server.finder, "find", find),
+                  patch.object(server.agentic, "ui_items", ui_items),
+                  patch.object(server, "wait_until_playing", wait_until_playing)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def taps(self):
+        return [e[2] for e in self.did(B, "adb") if "input tap" in e[2]]
+
+    async def test_the_tile_with_the_title_is_pressed_and_the_show_is_moved(self):
+        r = await server.move_playing(A, B, power_off=True)
+        self.assertEqual(self.finds, ["Some Show"])
+        self.assertIn((B, "link", self.PAGE, NETFLIX, False), self.log)     # the page, into the open app
+        self.assertEqual(self.taps(), ["shell input tap 330 1065", "shell input tap 293 709"])
+        self.assertIsNone(r["wrong_title"])
+        self.assertTrue(r["started"])
+        self.assertTrue(r["powered_off"])                                    # A goes off only now
+        self.assertEqual(r["note_key"], "note_moved")
+        self.assertEqual([e[2] for e in self.did(B, "key")], ["pause"])     # the other title was paused first
+
+    async def _nothing_pressed(self, wrong="Some Show Sing-Along"):
+        r = await server.move_playing(A, B, power_off=True)
+        self.assertEqual(self.taps(), [])
+        self.assertEqual(r["wrong_title"], wrong)
+        self.assertFalse(r["started"])
+        self.assertFalse(r["powered_off"])
+        self.assertEqual(r["note_key"], "note_move_wrong_title")
+        return r
+
+    async def test_no_tile_with_the_title_leaves_it_paused_and_said(self):
+        self.screens = [[i for i in self.OTHER if not i["label"].startswith("Some Show,")]]
+        await self._nothing_pressed()
+
+    async def test_two_tiles_with_the_title_are_not_guessed_between(self):
+        self.screens = [self.OTHER + [dict(self.OTHER[2], x=1170)]]
+        await self._nothing_pressed()
+
+    async def test_a_page_that_is_not_the_other_title_s_is_left_alone(self):
+        self.screens = [[dict(self.OTHER[0], label="Home")] + self.OTHER[1:]]
+        await self._nothing_pressed()
+
+    async def test_a_button_to_pay_or_sign_in_on_the_page_stops_it(self):
+        self.screens = [self.OTHER + [{"label": "Subscribe", "x": 1, "y": 1, "clickable": True}]]
+        await self._nothing_pressed()
+
+    async def test_words_about_paying_that_cannot_be_pressed_stop_it_too(self):
+        self.screens = [self.OTHER + [{"label": "RENT", "x": 1, "y": 1, "clickable": False}]]
+        await self._nothing_pressed()
+
+    async def test_nothing_is_pressed_once_another_app_is_in_front(self):
+        outer = self
+
+        async def front_package():
+            return "com.some.other.app"
+        with patch.object(self.b, "front_package", front_package):
+            await outer._nothing_pressed()
+
+    async def test_a_page_link_on_another_site_is_not_opened(self):
+        with patch.object(move, "SIBLING_TITLE_APPS", {"netflix": "netflix.com"}):
+            await self._nothing_pressed()
+        self.assertNotIn(self.PAGE, [e[2] for e in self.did(B, "link")])
+
+    async def test_a_screen_that_cannot_be_read_is_left_alone(self):
+        self.screens = []
+        await self._nothing_pressed()
+
+    async def test_an_app_not_on_the_list_is_not_looked_at(self):
+        with patch.object(move, "SIBLING_TITLE_APPS", {"some-other-app": "example.com"}):
+            await self._nothing_pressed()
+        self.assertEqual(self.finds, [])
+        self.assertEqual(self.did(B, "screen"), [])
+
+    async def test_a_tile_that_leads_to_a_page_without_play_is_not_pressed_further(self):
+        self.screens = [self.OTHER, [self.RIGHT[0], {"label": "Rent", "x": 293, "y": 709, "clickable": True}]]
+        r = await server.move_playing(A, B)
+        self.assertEqual(self.taps(), ["shell input tap 330 1065"])         # the tile, and then no button
+        self.assertEqual(r["note_key"], "note_move_wrong_title")
+        self.assertFalse(r["started"])
+
+    async def test_a_tile_that_leads_to_a_page_of_another_title_is_not_played(self):
+        self.screens = [self.OTHER, [dict(self.RIGHT[0], label="Some Show Ever After")] + self.RIGHT[1:]]
+        r = await server.move_playing(A, B)
+        self.assertEqual(self.taps(), ["shell input tap 330 1065"])
+        self.assertFalse(r["started"])
+
+    async def test_b_s_own_word_still_decides_after_the_button(self):
+        self.then_plays = playing("Some Show Ever After", 0, title_from="app")
+        r = await server.move_playing(A, B, power_off=True)
+        self.assertEqual(len(self.taps()), 2)
+        self.assertEqual(r["wrong_title"], "Some Show Ever After")
+        self.assertFalse(r["started"])
+        self.assertFalse(r["powered_off"])
+        self.assertEqual([e[2] for e in self.did(B, "key")], ["pause", "pause"])   # paused again
+        self.assertEqual(r["note_vars"]["other"], "Some Show Ever After")
+
+    async def test_a_slow_start_after_play_still_counts_once_b_names_the_title(self):
+        self.starts = False                                   # not playing yet when the wait ran out
+        r = await server.move_playing(A, B, power_off=True)
+        self.assertEqual(len(self.taps()), 2)
+        self.assertIsNone(r["wrong_title"])
+        self.assertTrue(r["started"])                         # B names the title and says it plays
+        self.assertEqual(r["note_key"], "note_moved")
+
+    async def test_play_pressed_and_still_not_playing_is_said_as_not_playing(self):
+        self.starts = False
+        self.then_plays = playing("Some Show", 598_000, state="paused", title_from="app")
+        r = await server.move_playing(A, B, power_off=True)
+        self.assertIsNone(r["wrong_title"])                   # it is the right title's page now
+        self.assertFalse(r["started"])
+        self.assertFalse(r["powered_off"])
+        self.assertEqual(r["note_key"], "note_move_not_playing")
+
+    async def test_a_title_the_finder_only_guesses_at_opens_no_page(self):
+        self.found_as = "Some Other Show"
+        await self._nothing_pressed()
+        self.assertNotIn(self.PAGE, [e[2] for e in self.did(B, "link")])
+        self.assertEqual(self.did(B, "screen"), [])
+
+    async def test_a_page_that_is_slow_to_draw_is_read_once_more(self):
+        self.screens = [[{"label": "Loading", "x": 1, "y": 1, "clickable": False}], self.OTHER, self.RIGHT]
+        r = await server.move_playing(A, B)
+        self.assertEqual(len(self.did(B, "screen")), 3)
+        self.assertEqual(r["note_key"], "note_moved")
+
+    async def _moved_reading(self, *names):
+        """Run a move where TV B, once Play is pressed, names these titles read by read (the last
+        one from then on). Returns the result and how many reads the move made after the press."""
+        real, reads = server.media_read, []
+
+        async def media_read(pkg, app):
+            if server._current.get() == B and len(self.taps()) == 2:
+                name = names[min(len(reads), len(names) - 1)]
+                reads.append(name)
+                self.media[B] = self.then_plays if name == "Some Show" else playing(name, 5_000, title_from="app")
+            return await real(pkg, app)
+        with patch.object(server, "media_read", media_read):
+            r = await server.move_playing(A, B, power_off=True)
+        return r, len(reads)
+
+    async def test_the_other_title_s_name_a_moment_after_play_is_read_again(self):
+        # the app says it plays before it names the new title (Codex review on #285)
+        r, reads = await self._moved_reading("Some Show Sing-Along", "Some Show")
+        self.assertEqual(reads, 2)
+        self.assertIsNone(r["wrong_title"])
+        self.assertTrue(r["started"])
+        self.assertEqual(r["note_key"], "note_moved")
+        self.assertEqual([e[2] for e in self.did(B, "key")], ["pause"])     # the right film is not paused
+
+    async def test_the_other_title_s_name_on_every_read_is_paused_after_four(self):
+        r, reads = await self._moved_reading("Some Show Sing-Along")
+        self.assertEqual(reads, 4)
+        self.assertEqual(r["wrong_title"], "Some Show Sing-Along")
+        self.assertFalse(r["started"])
+        self.assertEqual([e[2] for e in self.did(B, "key")], ["pause", "pause"])
+
+    async def test_a_third_title_after_play_is_paused_at_the_first_read(self):
+        # only the name B was on before the press may linger: any other name is B's word already
+        r, reads = await self._moved_reading("Some Show Ever After")
+        self.assertEqual(reads, 1)
+        self.assertEqual(r["wrong_title"], "Some Show Ever After")
+        self.assertFalse(r["started"])
+
+    def _clock(self, buffered, played, in_the_wait=True):
+        """Patches for a move on a clock the test moves: after Play the app takes `buffered` s to
+        start, is seen playing, and plays `played` s more while the bridge confirms it. With
+        `in_the_wait` False the wait runs out first and it is playing only at the read after."""
+        clock = [1000.0]
+
+        async def wait_until_playing(pkg, timeout=30, seen=None):
+            clock[0] += buffered
+            if seen is not None and in_the_wait:
+                seen["at"] = clock[0]
+            clock[0] += played
+            self.media[server._current.get()] = self.then_plays
+            return in_the_wait
+
+        class Clock:   # the server's `time` with that clock; everything else is the real module
+            monotonic = staticmethod(lambda: clock[0])
+
+            def __getattr__(self, name):
+                return getattr(time, name)
+        return patch.object(server, "wait_until_playing", wait_until_playing), patch.object(server, "time", Clock())
+
+    async def test_the_time_b_played_while_it_was_confirmed_is_allowed_for(self):
+        # no sync helper: B resumed at A's spot and played 12 s while the bridge waited and read
+        # (Codex review on #285). That is not "another spot".
+        self.then_plays = playing("Some Show", 612_000, title_from="app")
+        wait, clock = self._clock(buffered=8, played=12)
+        with wait, clock:
+            r = await server.move_playing(A, B)
+        self.assertTrue(r["started"])
+        self.assertEqual(r["note_key"], "note_moved")
+
+    async def test_the_time_b_took_to_start_is_not_time_it_played(self):
+        # B resumed 25 s past A's spot, after 20 s of loading: that is another spot, and is said
+        self.then_plays = playing("Some Show", 625_000, title_from="app")
+        wait, clock = self._clock(buffered=20, played=3)
+        with wait, clock:
+            r = await server.move_playing(A, B)
+        self.assertTrue(r["started"])
+        self.assertEqual(r["note_key"], "note_move_other_spot")
+
+    async def test_a_film_that_starts_after_the_wait_has_played_only_from_then(self):
+        # Codex review on #295: the wait ran out after 16 s with nothing playing, and the film is
+        # read as playing only after it, 17 s past A's spot. None of that wait was time it played.
+        self.then_plays = playing("Some Show", 617_000, title_from="app")
+        wait, clock = self._clock(buffered=16, played=0, in_the_wait=False)
+        with wait, clock:
+            r = await server.move_playing(A, B)
+        self.assertTrue(r["started"])
+        self.assertEqual(r["note_key"], "note_move_other_spot")
+
+    async def test_a_move_that_came_up_right_never_looks(self):
+        self.media["after_play"] = playing("Some Show", 598_000, title_from="app")
+        r = await server.move_playing(A, B)
+        self.assertEqual(r["note_key"], "note_moved")
+        self.assertEqual(self.finds, [])
+        self.assertEqual(self.did(B, "screen"), [])
+        self.assertEqual(self.taps(), [])
+
+
+class SiblingItem(unittest.TestCase):
+    def tile(self, label, **extra):
+        return {"label": label, "x": 5, "y": 6, "clickable": True} | extra
+
+    def test_only_the_title_then_a_comma_is_it(self):
+        items = [self.tile("Tangled Sing-Along, Select for details on this title., 1 of 8 items."),
+                 self.tile("Tangled Ever After, Select for details on this title., 2 of 8 items."),
+                 self.tile("Tangled, Select for details on this title., 3 of 8 items.", x=9)]
+        self.assertEqual(move.sibling_item(items, "Tangled")["x"], 9)
+        self.assertEqual(move.sibling_item(items, "tangled ")["x"], 9)          # case and edge spaces
+        self.assertIsNone(move.sibling_item(items, "Moana"))
+        self.assertIsNone(move.sibling_item(items, ""))
+        self.assertIsNone(move.sibling_item(items, None))
+
+    def test_a_title_with_a_comma_in_it(self):
+        items = [self.tile("Monsters, Inc., Select for details on this title., 1 of 8 items."),
+                 self.tile("Monsters University, Select for details on this title., 2 of 8 items.")]
+        self.assertIsNotNone(move.sibling_item(items, "Monsters, Inc."))
+        self.assertIsNone(move.sibling_item(items[1:], "Monsters"))
+        # a longer title with a comma right there is a tile too: the page it leads to is what is
+        # checked before Play (MoveSiblingTitle: a page of another title is not played)
+        self.assertIsNotNone(move.sibling_item(items, "Monsters"))
+
+    def test_only_apps_seen_on_a_real_tv_are_on_the_list(self):
+        self.assertEqual(move.SIBLING_TITLE_APPS, {"disney-plus": "disneyplus.com"})
+        self.assertNotIn("ok", move.PAGE_PLAY_BUTTONS)
+
+    def test_the_page_link_has_to_be_on_the_app_s_own_site(self):
+        ok = move.page_host_ok
+        self.assertTrue(ok("disney-plus", "https://www.disneyplus.com/browse/entity-1"))
+        self.assertTrue(ok("disney-plus", "https://disneyplus.com/browse/entity-1"))
+        self.assertFalse(ok("disney-plus", "http://www.disneyplus.com/browse/entity-1"))
+        self.assertFalse(ok("disney-plus", "https://www.disneyplus.com.example.org/browse/entity-1"))
+        self.assertFalse(ok("disney-plus", "https://notdisneyplus.com/browse/entity-1"))
+        self.assertFalse(ok("disney-plus", "intent://www.disneyplus.com/play/1#Intent;scheme=https;end"))
+        self.assertFalse(ok("disney-plus", None))
+        self.assertFalse(ok("netflix", "https://www.netflix.com/title/1"))
+
+    def test_page_stops_reads_buttons_that_are_not_pressable_too(self):
+        def stops(*labels):
+            return move.page_stops([{"label": x, "clickable": False} for x in labels])
+        for label in ("SUBSCRIBE", "Rent", "Rent $4.99", "CA$4.99", "From $3.99", "LOG IN", "Upgrade",
+                      "Agree & Continue", "Enter PIN", "Start free trial", "4,99 €"):
+            self.assertTrue(stops(label), label)
+        # everything a real Disney+ title page showed (Sony Google TV), and a tile for a film named Rent
+        self.assertEqual(stops("Tangled", "PG", "4K Ultra HD", "Dolby Vision", "5.1", "Subtitles / CC",
+                               "Audio Description", "1h 13m remaining", "CONTINUE", "RESTART", "TRAILER", "PLAY",
+                               "Remove from Continue Watching", "SUGGESTED", "EXTRAS", "DETAILS",
+                               "Select to add Tangled to your watchlist.",
+                               "2010 • 1h 43m • Action and Adventure, Animation",
+                               "Rent, Select for details on this title., 3 of 8 items."), [])
+
+    def test_a_bare_continue_only_counts_next_to_restart(self):
+        def button(items, *words):
+            return next((i for i in items if i["label"].lower() in words), None)
+        page = [{"label": "CONTINUE"}, {"label": "RESTART"}]
+        self.assertEqual(move.page_play_button(page, button)["label"], "CONTINUE")
+        self.assertIsNone(move.page_play_button([{"label": "Continue"}], button))       # a dialog's button
+        self.assertEqual(move.page_play_button([{"label": "PLAY"}], button)["label"], "PLAY")
+
+    def test_a_label_that_cannot_be_pressed_or_has_no_place_is_not_a_tile(self):
+        self.assertIsNone(move.sibling_item([self.tile("Tangled, Select", clickable=False)], "Tangled"))
+        self.assertIsNone(move.sibling_item([{"label": "Tangled, Select", "clickable": True}], "Tangled"))
+
+    def test_two_of_them_is_none(self):
+        self.assertIsNone(move.sibling_item([self.tile("Tangled, a"), self.tile("Tangled, b")], "Tangled"))
+
+    def test_page_names_wants_the_whole_title(self):
+        items = [{"label": "Tangled Sing-Along"}, {"label": "CONTINUE"}]
+        self.assertTrue(move.page_names(items, "tangled sing along"))
+        self.assertFalse(move.page_names(items, "Tangled"))
+        self.assertFalse(move.page_names([], "Tangled"))
+
+
 class MoveYouTube(MoveSteps):
     """YouTube: a video link, not the show finder. The time goes in the link only as the backup."""
 
@@ -930,6 +1267,40 @@ class MoveWaitPlaying(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.wait(self.PLAYING.replace("PLAYING(3)", "PAUSED(2)")))
         self.assertFalse(await self.wait(self.PLAYING.replace(YOUTUBE, NETFLIX)))
         self.assertFalse(await self.wait(""))
+
+
+class WaitUntilPlayingSeen(unittest.IsolatedAsyncioTestCase):
+    """`seen`: the moment wait_until_playing first read the app as playing, for move_sibling_title."""
+
+    @staticmethod
+    def out(state, position):
+        return f"package={NETFLIX}\nactive=true\nstate=PlaybackState {{state={state}, position={position}, speed=1.0}}"
+
+    async def wait(self, *outs):
+        t, seen, left = FakeTV(B, "Den", []), {}, list(outs)
+
+        async def adb(*args, **kw):
+            return left.pop(0) if len(left) > 1 else left[0]   # read by read, the last one from then on
+
+        async def no_sleep(_):
+            return None
+        t.adb = adb
+        token = server._current.set(B)
+        self.addCleanup(server._current.reset, token)
+        with patch.dict(server.TVS, {B: t}, clear=True), patch.object(server.asyncio, "sleep", no_sleep):
+            return await server.wait_until_playing(NETFLIX, timeout=0.2, seen=seen), seen
+
+    async def test_the_first_read_as_playing_is_kept(self):
+        before = time.monotonic()
+        started, seen = await self.wait(self.out("PLAYING(3)", 1000), self.out("PLAYING(3)", 2500))
+        self.assertTrue(started)
+        self.assertTrue(before <= seen["at"] <= time.monotonic())
+
+    async def test_playing_once_and_then_buffering_is_not_playing_since_then(self):
+        # Codex review on #295: the moment of that one read would count the buffering as time played
+        started, seen = await self.wait(self.out("PLAYING(3)", 1000), self.out("BUFFERING(6)", 1000))
+        self.assertFalse(started)
+        self.assertEqual(seen, {})
 
 
 class ProfileItem(unittest.TestCase):

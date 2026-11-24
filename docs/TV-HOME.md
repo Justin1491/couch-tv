@@ -45,6 +45,62 @@ bridge, option B), which the row never shows otherwise. It stays that way while 
 into the row, and the whole row comes back on any other tile, or anywhere else on the home. An app with
 nothing on the go leaves the whole row where it is.
 
+## The Loop look
+
+Home settings, Look, **Loop** (or `home.look` `"loop"`): the background is one short clip of a place,
+looping, and the home is a caption set on it. A centred clock under the date line, bare 320 by 180
+thumbnails in the Keep watching row with the title and the app under each, and a row of 112 px app
+icons with no bar behind them. Nothing animates but the clip and the element gaining focus (a scale,
+160 ms in and 120 ms out). The scenes, the glass clock, the drift and the ambient lighting of the Night
+look are not drawn in it. The focus is a white platter with a 3 px ring outside a 2 px dark gap. The
+small accent (the progress bar, the Now playing dot, a running sleep timer's minutes) follows the
+weather: blue for rain, violet for a storm, grey for fog, and on a clear sky the colour of the sun's
+time of day.
+
+**What it needs.** The bridge (option B) serves the clip from its `loop/` folder, and `make-loop.sh`
+makes the files from one clip of your own or a free stock clip: the same picture graded four ways
+(dawn, day, dusk, night), a small blurred copy of each and two posters each. How to make them, and what
+the bridge tells the home about them (`home.loop` in `config.js`), is in [LOOP.md](LOOP.md). With
+**Follow the sun** on (Look, Follow the sun) the home picks the variant from the sun's height where you
+are, the same way the Night scenes do, and changes at the clip's loop boundary with a plain cut, never
+while the remote is moving; with it off the day grade plays all day. Without the files (no bridge, or
+`make-loop.sh` not run yet) the look shows its scrim over a dark ground and still works; in a preview
+(`index.html?mock=1&look=loop`) the night scene's photo stands in for the clip. A couch-tv Studio design
+is not drawn in this look (it shows again in the other looks), and Home settings leaves out the Glass
+panels and Mac-style dock rows here, since the look has its own. While Smart Idle's OLED Ambient Clock
+or a kids mode home covers it, the clip pauses.
+
+**The dock** is centred on the screen, as in the Night look; the Keep watching row above it stays on the
+left edge. Down from a card lands on the dock tile nearest under it, and Up from the dock goes back to
+the card you were on.
+
+**The clock behind the peak.** Made from a photo with `make-loop.sh --matte` (the lake peak's own
+cut-out works), the clock sits slightly behind the mountain, as in the original design: a cut-out of
+what stands in front of the sky is drawn over the clock's lower part and moves with the slow push, in
+step with the video. The clock and the date line sit 80 px lower then. It needs a photo (a clip's own
+motion cannot be followed), the matte, and the bridge; without them the clock is in front, where it
+always was. [LOOP.md](LOOP.md), the depth effect.
+
+**What is glass, and why only there.** The two quick buttons at the top right are frosted glass: the
+blurred copy of the clip plays in a second, tiny `<video>` behind them and shows only through a mask the
+shape of the buttons, so the TV never blurs anything per frame (a live `backdrop-filter` over video
+redraws the blur every frame, which is why Lighter home removes it elsewhere). Everything else, the
+toast, the plates where a show has no picture, the Settings and More apps tiles, the people switcher,
+the menus and the More apps panel, is a plain dark tint with a light rim. Measured on a Fire TV Cube
+(2 GB, Fire OS 7) in the real launcher: the sharp 720p clip alone took the launcher to about 156 MB
+(80 MB of it GPU textures) at 21 percent CPU with no dropped frames, about 100 MB under the home's
+peak today; the blur copy masked to the two buttons added about 2 MB and 10 percent CPU; the same mask
+at the size of a toast added 18 MB and made the compositor run every frame. So the glass stops at the
+buttons. `home.loop.blur` false, or a blur file that will not play, leaves the buttons on the plain
+tint too.
+
+**Lighter home** in this look plays no blur copy, uses the darker tint, and sets every duration to 0,
+so nothing glides; the toast keeps its fade.
+
+While an app or the screensaver is in front, or the screen is off, both clips let go of their files and
+decoders and the poster stays, so the home costs the TV about as much as a still; they load again when
+the home comes back.
+
 ## Finding every app
 
 Since 0.13. Only part of your apps fit in the dock on some TVs. Press **Down** on
@@ -155,7 +211,7 @@ effects** (light rain, snow and fog over the scenes), off to start.
 
 ### Look and scenes
 
-- Night scenes or Classic.
+- Night scenes, OLED Cinema, Classic or Loop (see [The Loop look](#the-loop-look)).
 - Which scenes take turns, in what order, how many seconds each.
 - A 12 or 24 hour clock. Until you pick one, an Android TV home follows the TV's own setting (System, Date and time), then the language.
 - Glass panels and a video background: see [Glass and video](#glass-and-video).
@@ -168,6 +224,13 @@ Since 0.13:
 - **Lighter home** for a slow box that stutters.
 - **Moving tiles** (switch it off if the slowly swaying focused tile flickers on an older TV). The sway and the light that slides across the focused tile now hold still 6 s after the focus last moves, and start again with the next press.
 - **Lighter home turns itself on on a low end TV** (it measures itself once a week) unless you have chosen in Home settings or with `home.lighter` ([CONFIG.md](CONFIG.md)).
+
+Since 0.13.9:
+
+- **Lighter home checks 4 GB TVs too**, and the frames while the focus moves along a row, not only at rest. Slow means slow for that screen (a smooth 30 Hz screen is fine), the first 30 s after the home opens do not count, and a stutter while moving needs a second start within a week before Lighter home goes on. When it turns itself on the home says so once: "This TV is a bit slow, so Lighter home is on. Home settings, Look and scenes to change it."
+- **Moving tiles** and **Mac-style dock** say "Off while Lighter home is on" when Lighter home holds them off. OK asks "Turn off Lighter home?", and a second OK turns Lighter home off and the switch on.
+- **Show the clock**: off hides the clock in every look (the big scene clock in Night too), and the date moves up into its place. Not there with a couch-tv Studio design, which shows its own clock (`home.show_clock`).
+- **Sharp pictures on a 4K TV**: Auto (the 4K copies of the built-in pictures when the screen is drawn at 4K), Off (the 1080 copies, for a 4K TV that stutters) or Always (also on a 4K TV that draws its interface at 1080, where the scenes looked soft). Always uses more memory: about 65 MB more on a TCL 75C6K (`home.hi_res`).
 
 Look also holds **Now playing**, **Show Keep watching** and **Sound**: see [Now playing](#now-playing).
 
@@ -231,13 +294,18 @@ Only the app from the Releases page updates this way. A copy built on your own c
 with your own scenes, says so and is updated the way you installed it. It still looks for new
 releases and keeps the dot and the line, so you hear when one is out.
 
-**The on-TV app (option C)** looks the same way (asked once, then weekly, or Check for updates now),
-but it cannot install an update itself: Android's installer needs a permission the phone only APK
-leaves out, so Google Play Protect has nothing new to stop. Instead **Home settings, About, Update
-couch-tv** shows the version line, and OK opens the exact steps: Downloader and its code 8180170 for
+**The on-TV app (option C)** looks the same way (asked once, then weekly, or Check for updates now).
+When its own link to the TV is connected (the phone remote can press keys), **Update to ...** downloads
+the release, checks it the way the launcher does and installs it over that link (ADB's shell user,
+`pm install -r`), then opens Couch TV again if it was on screen when the install started; it still leaves out Android's install permission, so
+Google Play Protect has nothing new to stop. Without the link (never connected, or a Fire TV that
+blocks it) or after a try that failed, **Home settings, About, Update couch-tv** shows the version
+line, and OK opens the exact steps, with a QR code that opens them on a phone: Downloader and its code 8180170 for
 `couch-tv-ontv.apk` (with the full address as a fallback), or `adb install -r` from a computer for
-`couch-tv-ontv-watch.apk`. Your settings stay. The launcher shows the same Update couch-tv row in
-About, which opens its Updates page.
+`couch-tv-ontv-watch.apk`. Your settings stay. If Downloader says App not installed, the TV is
+usually short of space: the steps say to delete the old couch-tv-ontv files in Downloader's Files and
+type the code again. The launcher shows the same Update couch-tv row in About, which opens its
+Updates page.
 
 ### About
 
@@ -299,6 +367,14 @@ app (option C) only takes web addresses.
 Your photos take turns with the scenes and replace the Classic look's own. The home keeps up to 20
 photos (50 since 0.13).
 
+A web address that does not open as a photo says why, under the **Add a photo from a web address** row,
+and it stays there until the next try: the site answered with an error (404 and the like), the link opens
+a web page instead of the photo (open the photo on its own and copy that address, which usually ends in
+.jpg or .png), the site will not let a TV show its photos, the photo is too big for a TV (more than 6000
+pixels across or 30 MB), or the link took too long to answer. A photo that was added but later does not
+open on the home says so on its own Remove photo row. Thanks to the XGIMI Horizon 20 Max owner who found
+it said nothing.
+
 ## Your own app icons
 
 Since 0.13. Google TV and Android TV (options A and B). A picture you make for an
@@ -322,6 +398,9 @@ They go in the home's own folder on the TV (`Android/data/app.couchtv.launcher/f
 the home loads them straight away (the same as Home settings, About, Restart home). Taking the home
 off the TV takes them with it.
 
+- **Icon style** (Home settings, Look, or `home.icon_set`, since 0.13.9) draws the home's own tiles,
+  Settings, More apps, Inputs and Screens, in one of couch-tv's icon sets: Standard, Line, Solid, Two
+  tone, Colour tile, Glass or Playful. Your app pictures are not changed by it.
 - **Glass app icons** draws your picture in glass like the rest. Switch it off (Look) to see your
   pictures as they are.
 - The phone remote's app grid keeps the apps' own icons.
@@ -334,9 +413,10 @@ and its cover, with previous, play or pause and next (the remote's own media key
 look it is the first card of the Keep watching row; in Classic it sits under the quick buttons. A
 paused song stays for ten minutes.
 
-It needs option B or C: Android does not let an ordinary app see what other apps play, so option A
-has no card. Home settings, Look, Now playing switches it off. The cover comes from Apple's free
-music search. Thanks alonmustafa (#31).
+General media support uses option B or C. On Android TV with option A, `home.spotify_player` and
+Android's Notification access can show and control Spotify's active TV session. Home settings,
+Look, Now playing switches the card off. The bridge gets covers from Apple's free music search.
+Thanks alonmustafa (#31).
 
 Since 0.13: a full screen Now playing view with the album art, off to start (#84).
 

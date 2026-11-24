@@ -37,6 +37,20 @@ object Store {
         tmp.renameTo(File(dir, name))
     }
 
+    /**
+     * One change to the TV home's own Home settings (home-settings.json, the page's ST), read, changed
+     * and written under one lock, so a phone adding a photo and a phone changing the town at the same
+     * moment both stay. The home picks the new copy up on its next refresh (syncSettings in app.js).
+     */
+    @Synchronized fun editHomeSettings(fn: (JSONObject) -> Unit): JSONObject {
+        val hs = readJson("home-settings.json") as? JSONObject ?: JSONObject()
+        fn(hs)
+        if (hs.toString().length > 32_000) throw ApiError(413, "settings are too big")
+        writeJson("home-settings.json", hs)
+        putStr("home_settings_updated", Now.iso())
+        return hs
+    }
+
     // ---------- settings the household can change from the phone (/setup) ----------
     val port get() = int("port", 5400)
 
@@ -69,6 +83,8 @@ object Store {
         // HDMI ports pinned as dock tiles, in the TV home's home.inputs shape (docs/CONFIG.md).
         // Left out when none are set, so the home is exactly as before.
         .also { c -> inputs().takeIf { it.length() > 0 }?.let { c.put("home", JSONObject().put("inputs", it)) } }
+        // the Google Play build has no Ask AI: the phone remote hides its Ask button (remote/src/App.jsx, askOn)
+        .also { c -> if (!PlayRules.askAi(BuildConfig.FLAVOR)) c.put("ask", JSONObject().put("enabled", false).put("available", false)) }
 
     /** Pinned inputs: [{port, label, icon, id?}], set from /api/settings "inputs". */
     fun inputs(): JSONArray = str("inputs")?.let { runCatching { JSONArray(it) }.getOrNull() } ?: JSONArray()

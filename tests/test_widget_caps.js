@@ -1,5 +1,5 @@
 // The widget capability records (tv-home/web/widget-caps.js): every widget kind the TV accepts has
-// one, every field is filled, the platform table names every kind of TV couch-tv Studio knows, the sizes
+// one, every field is filled, the platform table names every kind of TV Couch TV Studio knows, the sizes
 // are real named sizes with the smallest that reads first, and every kind whose OK opens a detail
 // layer (widget-detail.js) is a remote stop (design.js WACT).
 // Run: node tests/test_widget_caps.js
@@ -61,11 +61,11 @@ CAPS.kinds().forEach((k) => {
 const i18n = fs.readFileSync(path.join(web, "i18n.js"), "utf8"), appSrc = fs.readFileSync(path.join(web, "app.js"), "utf8");
 const MENUS = ["Home settings", "Location", "Search for a town or city", "Look and scenes", "Your photos", "Add photos from a USB drive or this TV",
   "Add a photo from a web address", "People", "Add a person", "Apps", "Quick buttons", "Now playing card", "Clock", "More apps", "App Store", "Get a design",
-  // couch-tv Studio, At home (things typed at home)
+  // Couch TV Studio, At home (things typed at home)
   "At home", "Write a note", "From", "Add a list", "Add an item", "Network name", "Password", "Add to the guide", "Add a calendar link", "Allow screen time", "Daily goal"];
 MENUS.forEach((m) => ok(i18n.indexOf('"' + m + '"') >= 0 || appSrc.indexOf('"' + m + '"') >= 0, "the TV has a menu called " + m));
-const SECTIONS = ["Language", "Location", "Weather", "Look and scenes", "Apps", "People", "Quick buttons", "couch-tv Studio", "About"];
-const JARGON = /Open-Meteo|bridge|endpoint|config\.json|apply\.sh|entit(y|ies)|EXIF|RSS|iCal|\.kt\b|\bAPI\b|WebView|launcher/;
+const SECTIONS = ["Language", "Location", "Weather", "Look and scenes", "Apps", "People", "Quick buttons", "Designs", "About"];
+const JARGON = /Open-Meteo|bridge|endpoint|config\.json|apply\.sh|entit(y|ies)|EXIF|RSS|iCal|\.kt\b|\bAPI\b|WebView|launcher|\boption [ABC]\b|couch-tv(?! Studio)/;
 const NEEDS = ["works", "setup", "computer", "no"];
 CAPS.kinds().forEach((k) => {
   const c = CAPS.get(k), st = c.setup.steps;
@@ -82,7 +82,26 @@ CAPS.kinds().forEach((k) => {
 ok(CAPS.steps("surf", "Google TV").join(" ").indexOf("beach town") > 0, "surf: the steps say to pick the nearest beach town");
 ok(CAPS.steps("photo", "Tizen").join(" ").indexOf("web address") > 0 && CAPS.steps("photo", "Google TV").join(" ").indexOf("USB") > 0, "photos: by web address on a Samsung, from USB on a Google TV");
 ok(CAPS.need("aircon", "Tizen") === "computer" && CAPS.need("aircon", "Google TV") === "setup" && CAPS.steps("aircon", "Google TV").join(" ").indexOf("Smart home") > 0, "aircon: set up on a Google TV (Home settings, Smart home), through the home computer on a Samsung");
-ok(CAPS.need("clock", "Roku OS") === "no" && /not possible/i.test(CAPS.steps("clock", "Roku OS")[0]), "a Roku: not possible, and says so");
+// Roku and Apple TV draw designs themselves (DesignLib.brs, DesignView.swift), but only some kinds
+ok(CAPS.need("clock", "Roku OS") === "works" && CAPS.need("clock", "tvOS") === "works", "a Roku and an Apple TV draw the clock");
+ok(CAPS.need("surf", "Roku OS") === "no" && /^Shows on Google TV/.test(CAPS.steps("surf", "Roku OS")[0]), "a Roku: no surf, and says so");
+ok(CAPS.need("worldclock", "tvOS") === "works" && CAPS.need("worldclock", "Roku OS") === "no", "world clocks on an Apple TV, not on a Roku");
+// launch audit 0.13.9 (coord/AUDIT-0139-WIDGETS.md): only what works is offered as working
+ok(CAPS.need("note", "Roku OS") === "no" && CAPS.native("Roku OS").indexOf("note") < 0, "Family note: not on a Roku (it drew the word Note)");
+ok(CAPS.need("quote", "Roku OS") === "setup" && CAPS.need("quote", "tvOS") === "setup" && /own words/.test(CAPS.get("quote").platforms["Roku OS"].note), "Quote on a Roku or Apple TV: your own words, said so");
+["weather", "bigtemp", "keep", "keeprow", "people"].forEach((k) => ok(CAPS.need(k, "Roku OS") === "computer" && CAPS.need(k, "tvOS") === "works", k + ": needs the home computer on a Roku, works on an Apple TV"));
+ok(/once a minute/.test(CAPS.get("stack").platforms["Roku OS"].note), "a stack on a Roku says how it moves on");
+["clock", "weather", "note", "list", "quote", "welcome", "stack", "people", "card", "app", "dock", "appgrid"].forEach((k) => ["Tizen", "webOS"].forEach((p) => ok(CAPS.need(k, p) !== "computer" && !/home computer is on|has to be on/.test(CAPS.get(k).platforms[p].note), k + " on " + p + ": works in the app without a home computer")));
+["news", "stocks", "aircon", "agenda", "keep", "queue", "agent"].forEach((k) => ["Tizen", "webOS"].forEach((p) => ok(CAPS.need(k, p) === "computer", k + " on " + p + ": still needs the home computer")));
+["Saphi", "TiVo OS", "My Home Screen"].forEach((p) => ok(CAPS.need("clock", p) === "computer", "the clock on " + p + ": the computer opens the home there"));
+ok(CAPS.need("agent", "Google TV") === "setup" && CAPS.need("agent", "Fire OS") === "setup" && CAPS.get("agent").setup.where === "tv", "From your AI on an Android TV: set up, no computer needed");
+// Keep watching and the rest on an Android TV: Couch TV's home reads Android's own Continue watching list,
+// the on-TV app or a computer adds each person's: set up on the TV, never "Needs a computer at home" there
+["keep", "keeprow", "upnext", "picks", "nowplaying"].forEach((k) => ok(CAPS.get(k).setup.where === "tv" && CAPS.need(k, "Google TV") === "setup" && CAPS.need(k, "Fire OS") === "setup" && !/^Needs /.test(CAPS.steps(k, "Google TV")[0]), k + ": set up on an Android TV, no computer badge"));
+ok(/Continue watching/.test(CAPS.steps("keep", "Android TV")[0]) && CAPS.need("keep", "Tizen") === "computer", "Keep watching: Android's own list on the home, the computer on a Samsung");
+ok(CAPS.need("battery", "Tizen") === "no" && CAPS.need("nowplaying", "webOS") === "no" && CAPS.need("screentime", "Tizen") === "no", "Batteries, Now playing and Screen time stay off a Samsung and LG");
+["Roku OS", "tvOS"].forEach((p) => ["clock", "weather", "welcome"].forEach((k) => { const s = CAPS.steps(k, p); ok(/Couch TV Studio and send the design again/.test(s[s.length - 1]), k + " on " + p + ": says where to change it"); }));
+ok(CAPS.need("clock", "Vega OS") === "no" && /not possible/i.test(CAPS.steps("clock", "Vega OS")[0]), "a Fire TV on Vega OS: not possible, and says so");
 
 // 3. sizes: the shape of tools/tv-designer/app/grid.js W[kind]; named sizes smallest first, none under min
 CAPS.kinds().forEach((k) => {

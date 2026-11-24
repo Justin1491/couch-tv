@@ -22,6 +22,7 @@ tv-home/tvs/
 # Builds and tools
 *.apk
 *.aab
+dist-play/
 build/
 .gradle/
 .kotlin/
@@ -45,6 +46,9 @@ platform-tools/
 # Your own home scenes (tv-home/tools/make-scene.py writes them here), and the originals
 tv-home/web/backgrounds/mine/*
 !tv-home/web/backgrounds/mine/.gitkeep
+
+# The Loop look's footage (scripts/make-loop.sh writes it here): up to 80 MB of your own or stock video
+tv-home/web/loop/
 
 # Your own app logos for the Samsung home (samsung/build.py)
 samsung/my-logos/

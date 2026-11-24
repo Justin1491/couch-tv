@@ -7,6 +7,9 @@
 !bridge/import/*.py
 !bridge/web/
 !bridge/web/**
+!on-tv/
+!on-tv/web/
+!on-tv/web/**
 !tv-home/
 !tv-home/web/
 !tv-home/web/**

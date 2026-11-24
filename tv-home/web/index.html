@@ -16,6 +16,8 @@
 <!-- Night look only: five scenes that take turns (photo, glass clock, the cut-out in front), built by app.js -->
 <!-- the video background, when one is set (Home settings, Look): app.js starts it, app.css shows it
      once it plays. Over the photo, under the scenes' clocks (their photos step aside for it). -->
+<!-- the Loop look (home.look "loop"): app.js puts its two <video> elements and the glass container in by itself,
+     the sharp clip first in the body and the glass just after the scrim; nothing of it is here in the other looks -->
 <video class="bgvid" id="bgvid" muted loop playsinline preload="none" aria-hidden="true"></video>
 <div class="scenes" id="scenes" aria-hidden="true"></div>
 <!-- Ambient Weather & Solar Celestial Lighting Overlays -->
@@ -50,6 +52,18 @@
     <div class="np" id="np" aria-live="polite"></div>
   </div>
 </header>
+
+<!-- Night look: a greeting for whoever is watching and a short line to go with it, under each scene's
+     clock. Drawn and placed by app.js (mood) -->
+<div class="mood" id="mood" aria-live="polite">
+  <p class="mood-hi" id="mood-hi"></p>
+  <p class="mood-q" id="mood-q"></p>
+</div>
+
+<!-- Reminders (reminders.js): the next few at the top right, and the panel the Reminder quick button
+     opens (new by voice, the calendar card, done and delete), also the pop-up for a due one -->
+<div class="rem-chips" id="rem-chips" aria-live="polite"></div>
+<div class="rem-panel" id="rem-panel" role="dialog" aria-modal="true" aria-label="Reminders"></div>
 
 <!-- Ambient Music Art Screen: large album cover, dynamic ambient backlight, and remote media controls -->
 <div class="ambient-music" id="ambient-music" aria-live="polite">
@@ -102,7 +116,8 @@
 
   <section class="apps" id="apps-section" aria-label="Apps">
     <p class="hint" id="hint" aria-live="polite"></p>
-    <div class="grid" id="grid"></div>
+    <!-- the Loop look: More apps scrolls the grid by whole rows inside this plain rectangular clip (app.css) -->
+    <div class="grid-clip" id="grid-clip"><div class="grid" id="grid"></div></div>
   </section>
 </main>
 
@@ -118,6 +133,8 @@
 <div class="settings" id="settings" role="dialog" aria-modal="true" aria-label="Home settings">
   <div class="set-side">
     <h1 class="set-title" id="set-title"></h1>
+    <!-- on-TV app only: a QR to the phone Home settings page this TV serves (app.js phoneQr) -->
+    <div class="set-phone" id="set-phone" aria-live="polite"><div class="set-phone-qr" id="set-phone-qr"></div><p><b id="set-phone-head"></b><small id="set-phone-sub"></small><small class="set-phone-pc" id="set-phone-pc"></small></p></div>
     <div class="set-secs" id="set-secs"></div>
   </div>
   <div class="set-main">
@@ -134,6 +151,18 @@
   </div>
 </div>
 
+<!-- the first-run welcome: a TV never set up opens on this (I have a design code, or Use Couch Original),
+     answered once with the remote; drawn by app.js (welcomeStart) -->
+<div class="welcome" id="welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+  <!-- the product's name and logo (couch-tv Studio's site logo, couchtv-logo.svg), the same in every language -->
+  <div class="wel-brand" aria-hidden="true"><img src="couchtv-logo.svg" alt="" width="44" height="44"><span>Couch TV</span></div>
+  <div class="wel-in">
+    <h1 class="wel-title" id="welcome-title"></h1>
+    <p class="wel-sub" id="welcome-sub"></p>
+    <div class="wel-picks" id="welcome-picks"></div>
+    <div class="wel-studio"><span class="wel-qr" id="welcome-qr"></span><p id="welcome-studio-text"></p></div>
+  </div>
+</div>
 <!-- Smart home (optional): the rooms and scenes screen, drawn by smarthome.js -->
 <div class="smart" id="smart" role="dialog" aria-modal="true" aria-label="Smart home"></div>
 
@@ -156,9 +185,14 @@
 </div>
 
 <script src="i18n.js"></script>
+<script src="caps-words.js"></script>
+<script src="tv-words.js"></script>
 <script src="config.js"></script>
+<script src="ha-picks.js"></script>
 <script src="smarthome.js"></script>
 <script src="weather-cache.js"></script>
+<script src="matter-words.js"></script>
+<script src="matter.js"></script>
 <script src="soundscape.js"></script>
 <script src="clearicon.js"></script>
 <script src="ambient-weather.js"></script>
@@ -177,16 +211,19 @@
 <script src="icon-sets.js"></script>
 <script src="design-icons.js"></script>
 <script src="widget-words.js"></script>
+<script src="widget-lines.js"></script>
 <script src="widgets.js"></script>
 <script src="widget-caps.js"></script>
 <script src="widget-web.js"></script>
 <script src="widget-detail.js"></script>
-<!-- Home settings, couch-tv Studio: Get a design by code, and Share this home (with its QR code) -->
+<!-- Home settings, Designs: Get a design by code, and Share this home (with its QR code) -->
 <script src="design-code.js"></script>
 <script src="qr.js"></script>
 <script src="share-home.js"></script>
-<!-- Home settings, couch-tv Studio, At home: the note, lists, Wi-Fi, guide, calendar and screen time (kept on this TV) -->
+<!-- Home settings, Designs, At home: the note, lists, Wi-Fi, guide, calendar and screen time (kept on this TV) -->
 <script src="athome.js"></script>
+<script src="phone-page.js"></script>
+<script src="reminders.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

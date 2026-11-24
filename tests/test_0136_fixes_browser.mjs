@@ -77,6 +77,31 @@ for (const id of ["welcome", "bento"]) {
   ok(!page.errors.length, id + ": no page errors (" + page.errors.join(" | ") + ")");
   await page.close();
 }
+{ // a tucked gear (Packed Bento: hidden until reached) is no stop for the arrows, as in 0.13.6
+  const page = await home(preset("bento"));
+  const go = async (id, i, key) => {
+    await page.evaluate(([a, b]) => window.CouchDesign.nav.focus(a, b), [id, i]); await page.waitForTimeout(120);
+    await page.keyboard.press(key); await page.waitForTimeout(150);
+    return page.evaluate(() => window.CouchDesign.nav.current());
+  };
+  const r1 = await go("today", -1, "ArrowRight");
+  ok(r1 && r1.id !== "__gear", "bento: Right from Today does not land on the hidden gear (" + JSON.stringify(r1) + ")");
+  const r2 = await go("apps", 0, "ArrowUp");
+  ok(r2 && r2.id !== "__gear", "bento: Up from the first app does not land on the hidden gear (" + JSON.stringify(r2) + ")");
+  const r3 = await go("today", -1, "ArrowUp");
+  ok(r3 && r3.id === "__gear", "bento: Up at the top edge still reaches it (" + JSON.stringify(r3) + ")");
+  await page.close();
+}
+{ // a gear on the right edge (Morning): Down onto it, then Up goes back the way it came
+  const page = await home(preset("morning"));
+  await page.evaluate(() => window.CouchDesign.nav.focus("hourly", -1)); await page.waitForTimeout(120);
+  await page.keyboard.press("ArrowDown"); await page.waitForTimeout(150);
+  const on = await page.evaluate(() => window.CouchDesign.nav.current());
+  await page.keyboard.press("ArrowUp"); await page.waitForTimeout(150);
+  const back = await page.evaluate(() => window.CouchDesign.nav.current());
+  ok(on.id === "__gear" && back.id === "hourly", "morning: Down onto the gear, Up back to the hourly card (" + JSON.stringify([on, back]) + ")");
+  await page.close();
+}
 { // room at the top right: it stays there, always shown
   const open = { v: 1, background: { colour: "#26303f" }, objects: [{ id: "w0", type: "widget", kind: "welcome", x: 80, y: 60, w: 1160, h: 260 }, { id: "w1", type: "widget", kind: "clock", x: 1380, y: 360, w: 460, h: 160 }] };
   const page = await home(open);
@@ -91,6 +116,19 @@ for (const id of ["welcome", "bento"]) {
   const page = await home(d);
   const g = await gearCheck(page);
   ok(g.shown && g.hits === 0 && g.x < 960 && g.y < 120, "top right taken: it goes to the top left, covering nothing (" + JSON.stringify(g) + ")");
+  // the arrow pointing at it reaches it: Up from the apps under it (a TCL, 20 Nov 2026: only Up from
+  // the far side reached a gear on the left), and Right from it goes back
+  await page.evaluate(() => window.CouchDesign.nav.focus("a", 0)); await page.waitForTimeout(150);
+  await page.keyboard.press("ArrowUp"); await page.waitForTimeout(200);
+  const up = await page.evaluate(() => window.CouchDesign.nav.current());
+  ok(up && up.id === "__gear", "Up from the apps under it reaches the gear (" + JSON.stringify(up) + ")");
+  await page.keyboard.press("ArrowRight"); await page.waitForTimeout(200);
+  const back = await page.evaluate(() => window.CouchDesign.nav.current());
+  ok(back && back.id !== "__gear", "Right from the gear goes back to a widget (" + JSON.stringify(back) + ")");
+  await page.keyboard.press("ArrowLeft"); await page.waitForTimeout(200);
+  await page.keyboard.press("ArrowLeft"); await page.waitForTimeout(200);
+  await page.keyboard.press("ArrowUp"); await page.waitForTimeout(200);
+  ok((await page.evaluate(() => window.CouchDesign.nav.current())).id === "__gear", "and the edge still leads to it");
   await page.close();
 }
 
@@ -110,6 +148,17 @@ for (const id of ["welcome", "bento"]) {
   ok(items[0] === "Settings", "a long press on Netflix opens the Home menu, Settings first (" + items.join(", ") + ")");
   ok(items.indexOf("Change app") > 0, "and the app's own choices after it");
   ok(!calls.length, "Netflix is not opened (" + calls.join(" | ") + ")");
+  // the TCL's WebView: the second down does not say it is a repeat (20 Nov 2026), still a hold
+  await page.keyboard.press("Escape"); await page.waitForTimeout(300);
+  await page.evaluate(() => window.CouchDesign.nav.focus("d", 0));
+  await page.evaluate(() => {
+    const k = (type) => document.dispatchEvent(new KeyboardEvent(type, { key: "Enter", keyCode: 13, repeat: false, bubbles: true, cancelable: true }));
+    k("keydown"); k("keydown"); k("keyup");
+  });
+  await page.waitForTimeout(700);
+  const items2 = await page.evaluate(() => [...document.querySelectorAll(".cw-menu .cw-mi")].map((x) => x.textContent));
+  ok(items2[0] === "Settings", "two downs with no repeat mark open the Home menu too (" + items2.join(", ") + ")");
+  ok(!(await page.evaluate(() => window.__calls.filter((c) => /launch/.test(c)))).length, "and Netflix is not opened");
   // a short OK still opens it
   await page.keyboard.press("Escape"); await page.waitForTimeout(300);
   await page.evaluate(() => window.CouchDesign.nav.focus("d", 0));
@@ -128,6 +177,17 @@ for (const id of ["welcome", "bento"]) {
   ok(!(await page.evaluate(() => window.__calls.filter((c) => /launch/.test(c)))).length, "classic home: a long press opens no app");
   await page.close();
 }
+{ // the classic home, the TCL's way: two downs, no repeat mark
+  const page = await home(null);
+  await page.evaluate(() => { window.__calls = []; const o = window.MOCK_API; window.MOCK_API = function (m, p, b) { window.__calls.push(p); return o(m, p, b); }; });
+  await page.evaluate(() => {
+    const k = (type) => document.dispatchEvent(new KeyboardEvent(type, { key: "Enter", keyCode: 13, repeat: false, bubbles: true, cancelable: true }));
+    k("keydown"); k("keydown"); k("keyup");
+  });
+  await page.waitForTimeout(900);
+  ok(!(await page.evaluate(() => window.__calls.filter((c) => /launch/.test(c)))).length, "classic home: two downs with no repeat mark open no app");
+  await page.close();
+}
 
 // 3 and 4. About on the on-TV app: the truth about the computer, and Update couch-tv
 async function about(page) {
@@ -141,16 +201,32 @@ async function about(page) {
   await page.evaluate(() => { const p = document.getElementById("gear-pop"); if (p && p.classList.contains("ask")) window.MOCK_UPDATER.auto(true); });
   await page.keyboard.press("Escape"); await page.waitForTimeout(300);
   const rows = await about(page);
-  ok(!/With the computer/.test(rows) && /On its own, no computer/.test(rows), "on-TV app: Running says no computer (" + rows.slice(0, 200) + ")");
-  ok(!/On this TV and the computer/.test(rows) && /On this TV/.test(rows), "on-TV app: settings are kept on this TV");
-  ok(/Update couch-tv/.test(rows) && /Version 0\.4 is out \(this TV has 0\.3\)/.test(rows), "About: Update couch-tv with the version line");
+  ok(!/With a home computer/.test(rows) && /On its own, no computer/.test(rows), "on-TV app: Running says no computer (" + rows.slice(0, 200) + ")");
+  ok(!/On this TV and the home computer/.test(rows) && /On this TV/.test(rows), "on-TV app: settings are kept on this TV");
+  ok(/Update Couch TV/.test(rows) && /Version 0\.4 is out \(this TV has 0\.3\)/.test(rows), "About: Update Couch TV with the version line");
   await page.keyboard.press("ArrowRight"); await page.waitForTimeout(200);
-  for (let i = 0; i < 12 && !/^Update couch-tv/.test(await page.evaluate(() => (document.querySelector(".srow.focus") || {}).textContent || "")); i++) { await page.keyboard.press("ArrowDown"); await page.waitForTimeout(120); }
+  for (let i = 0; i < 12 && !/^Update Couch TV/.test(await page.evaluate(() => (document.querySelector(".srow.focus") || {}).textContent || "")); i++) { await page.keyboard.press("ArrowDown"); await page.waitForTimeout(120); }
   await page.keyboard.press("Enter"); await page.waitForTimeout(400);
   const up = await page.evaluate(() => document.getElementById("set-rows").textContent);
-  ok(await page.evaluate(() => document.getElementById("set-head").textContent) === "Update couch-tv", "OK opens the Update couch-tv page");
+  ok(await page.evaluate(() => document.getElementById("set-head").textContent) === "Update Couch TV", "OK opens the Update couch-tv page");
   ok(/Downloader/.test(up) && /8180170/.test(up) && /cannot install an update by itself/.test(up), "it gives the Downloader steps and code (" + up.slice(0, 240) + ")");
   ok(!/Update to 0\.4/.test(up), "and no Update to button that could not work");
+  // a TCL, 20 Nov 2026: the page opened scrolled to its first button and step 1 was off the top,
+  // with no way up. Step 1 can be seen, by opening at the top or by Up scrolling to it.
+  const seen = (sel) => page.evaluate((s) => {
+    const box = document.getElementById("set-rows"), el = [...box.querySelectorAll(".srow")].find((r) => r.textContent.indexOf(s) >= 0);
+    if (!el) return false;
+    const a = box.getBoundingClientRect(), b = el.getBoundingClientRect();
+    return b.top >= a.top - 1 && b.bottom <= a.bottom + 1;
+  }, sel);
+  for (let i = 0; i < 6 && !(await seen("Press Home, then open Downloader")); i++) { await page.keyboard.press("ArrowUp"); await page.waitForTimeout(250); }
+  ok(await seen("Press Home, then open Downloader"), "step 1 can be seen (open at the top, or Up scrolls to it)");
+  const before = await page.evaluate(() => (document.querySelector(".srow.focus") || {}).textContent || "");
+  ok(/Check for updates now/.test(before), "and the focus stays on the first button (" + before.slice(0, 60) + ")");
+  for (let i = 0; i < 8; i++) { await page.keyboard.press("ArrowDown"); await page.waitForTimeout(120); }
+  // every press restarts the smooth scroll, so wait for the list to settle before looking (review, 20 Nov)
+  await page.waitForFunction(() => { const f = document.querySelector(".srow.focus"), box = document.getElementById("set-rows"); if (!f) return false; const a = box.getBoundingClientRect(), b = f.getBoundingClientRect(); return b.top >= a.top - 1 && b.bottom <= a.bottom + 1; }, null, { timeout: 3000 }).catch(() => {});
+  ok(await page.evaluate(() => { const f = document.querySelector(".srow.focus"), box = document.getElementById("set-rows"); if (!f) return false; const a = box.getBoundingClientRect(), b = f.getBoundingClientRect(); return b.top >= a.top - 1 && b.bottom <= a.bottom + 1; }), "Down still keeps the focused row on screen");
   ok(!page.errors.length, "no page errors (" + page.errors.join(" | ") + ")");
   await page.close();
 }
@@ -158,7 +234,7 @@ async function about(page) {
   const page = await home(null, "&update=1");
   await page.keyboard.press("Escape"); await page.waitForTimeout(300);
   const rows = await about(page);
-  ok(/Update couch-tv/.test(rows) && /With the computer|Computer/.test(rows), "launcher: About has Update couch-tv, and the computer line is unchanged");
+  ok(/Update Couch TV/.test(rows) && /With a home computer|Home computer/.test(rows), "launcher: About has Update Couch TV, and the computer line is unchanged");
   await page.close();
 }
 

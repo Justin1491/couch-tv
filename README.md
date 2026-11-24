@@ -21,12 +21,16 @@
 
 ## Get started
 
-1. **With your AI agent, the easiest way.** Open this folder in Claude Code (or any coding agent)
-   and say "set this up on my TV". It reads [AGENTS.md](AGENTS.md), finds your TV, asks which option
-   you want and a few questions (who watches, the look, your apps), reads the plan back, and changes
-   nothing on the TV until you say yes.
-2. **From your phone or a computer:** [couchtv.sites.underseage.studio](https://couchtv.sites.underseage.studio),
-   with the free Setup app on a Mac or Windows computer. It also checks whether your TV will work.
+First time? [docs/START-HERE.md](docs/START-HERE.md) walks you through it, one step at a time.
+
+1. **With the TV remote, the easiest way.** On Google TV and Android TV you need no computer: the
+   steps for your TV are at [couchtv.joshuaseage.com/get](https://couchtv.joshuaseage.com/get/),
+   with the free Setup app for the TVs that need a Mac or Windows computer once (Fire TV, or the Home
+   button on Google TV from a computer). It also checks whether your TV will work.
+2. **With your AI agent.** Open this folder in Claude Code (it needs a paid Claude plan; any coding AI
+   agent works) and say "set this up on my TV". It reads [AGENTS.md](AGENTS.md), finds your TV, asks
+   which option you want and a few questions (who watches, the look, your apps), reads the plan back,
+   and changes nothing on the TV until you say yes.
 3. **By hand:** [docs/SETUP.md](docs/SETUP.md) has every step, from developer mode to the TV home,
    and how to [undo it](docs/SETUP.md#undo-put-the-google-home-screen-back).
 
@@ -34,9 +38,9 @@
 
 | Way | What you need | Google TV | Android TV | Fire TV | Samsung or LG |
 |---|---|---|---|---|---|
-| **AI agent** ([AGENTS.md](AGENTS.md)) | A computer on the TV's Wi-Fi with Claude Code or another coding agent | Yes, Home button included | Yes | Yes, Home button included (Amazon's home flashes up first). The full phone remote keeps a computer on at home | Yes, as an app that a computer at home that stays on opens. Their own Home button still opens their own menu |
-| **From your phone** ([website](https://couchtv.sites.underseage.studio/phone)) | The TV remote and a phone on the same Wi-Fi. No computer | Only part: the app and the phone remote, but Google keeps the Home button. AI or the Setup app adds the Home button once, even afterwards | Yes. On Android TV 10 and newer the app asks Android to make it the home | Only part: Home needs three one off grants from a computer, and on current Fire OS the phone remote can't press keys or type | No |
-| **Setup app** ([website](https://couchtv.sites.underseage.studio/computer)) | A Mac or Windows computer on the same Wi-Fi, once | Yes, Home button included | Yes, Android TV 7.1 and newer | Yes on Fire OS 6, 7 and 8 (Amazon's home flashes up first) | No |
+| **AI agent** ([AGENTS.md](AGENTS.md)) | A computer on the TV's Wi-Fi with Claude Code (a paid Claude plan) or another coding agent | Yes, Home button included | Yes | Yes, Home button included (Amazon's home flashes up first). The full phone remote keeps a computer on at home | Yes, as an app that a computer at home that stays on opens. Their own Home button still opens their own menu |
+| **From your phone** ([website](https://couchtv.joshuaseage.com/get/)) | The TV remote and a phone on the same Wi-Fi. No computer | Yes. From 0.13.9, Let the phone press keys, then one press of Make Home open Couch TV, gives it the Home button with no computer (not yet tried on a real Google TV; the Setup app still does it from a computer) | Yes. On Android TV 10 and newer the app asks Android to make it the home | Only part: Home needs three one off grants from a computer, and on current Fire OS the phone remote can't press keys or type | No |
+| **Setup app** ([website](https://couchtv.joshuaseage.com/help/tv-google-computer/)) | A Mac or Windows computer on the same Wi-Fi, once | Yes, Home button included | Yes, Android TV 7.1 and newer | Yes on Fire OS 6, 7 and 8 (Amazon's home flashes up first) | No |
 | **By hand** ([docs/SETUP.md](docs/SETUP.md)) | A Mac or Linux computer with Python 3.11 or newer | Yes | Yes | [on-tv/README.md, Fire TV](on-tv/README.md#fire-tv-fire-os) | [docs/SAMSUNG.md](docs/SAMSUNG.md), [docs/LG.md](docs/LG.md), with a computer at home that stays on |
 
 Other TVs: [Will it work on my TV?](#will-it-work-on-my-tv)
@@ -50,7 +54,7 @@ Other TVs: [Will it work on my TV?](#will-it-work-on-my-tv)
 
 ## Updates
 
-The newest release is **0.13.6**, on [the Releases page](https://github.com/Seagey/couch-tv/releases): the TV tells you when a new couch-tv is out (Home settings, About, Update couch-tv, now on the on-TV app too), the Settings gear never covers a widget, and Hold OK never opens the app ([details](docs/UPDATES.md#19-november-2026-release-0136-the-tv-tells-you-about-updates-and-the-settings-gear-stays-clear)). 0.13.5 brought fixes from a real beginner on a TCL (Use as home screen asks properly and Cancel means no, the TV says plainly when Google keeps the Home button, and design codes are easy to type with the remote) ([details](docs/UPDATES.md#19-november-2026-release-0135-fixes-from-a-real-beginner-on-a-tcl)). 0.13.4 brought Samsung, with couch-tv Studio, a setup you run yourself with no AI agent (`couch-tv-samsung-setup.zip`), and a Frame that opens couch-tv after Art Mode and goes to Art Mode when the phone says off; plus couch-tv Studio designs in the Apple TV app ([details](docs/UPDATES.md#19-november-2026-release-0134-samsung-with-couch-tv-studio-and-a-setup-that-needs-no-ai-agent)). 0.13.3 made it easier for beginners (a Settings button on every design, a phone only install that no longer asks for the accessibility permission Play Protect flags, plain words on the TV and in the Setup app), greeted guests by name with no computer, and brought your home into couch-tv Studio. 0.13.2 brought Ask AI, your own AI agent, smart home set up on the TV and designs on Roku. New in 0.13:
+The newest release is **0.13.13**, on [the Releases page](https://github.com/Seagey/couch-tv/releases): your names, photos, town and guest Wi-Fi can come from your Couch TV account, Couch TV Setup finds the TV on your Wi-Fi and links it to your account so a design you send goes on with one click, and widgets get Glass and Liquid glass text ([details](docs/UPDATES.md#24-november-2026-release-01313-your-home-from-your-couch-tv-account-setup-finds-the-tv-for-you-and-glass-text)). 0.13.12 made getting a design by code tell Couch TV Studio the TV has Couch TV, and the Now playing card follow Spotify at once and send nothing to Spotify ([details](docs/UPDATES.md#24-november-2026-release-01312-the-tv-tells-couch-tv-studio-it-has-couch-tv-and-a-steadier-now-playing-card)). 0.13.11 made one Add apps sheet fill a folder, the Dock, an app grid or Games with every app on the TV, widgets in Jost or Cormorant Garamond draw in those fonts, and the on-TV app moved to its own signing key ([details](docs/UPDATES.md#24-november-2026-release-01311-add-many-apps-at-once-jost-and-cormorant-on-the-tv-and-the-on-tv-apps-own-signing-key)). 0.13.10 made the on-TV app set up in two steps, a new TV opens on a one question welcome, and widgets that need your town, calendar or photos are set up on your phone ([details](docs/UPDATES.md#23-november-2026-release-01310-a-simpler-start-on-a-new-tv-and-widgets-set-up-on-your-phone)). 0.13.9 made the on-TV app update itself with one button, Home settings can be changed from your phone or a computer, a phone pairs in one scan, a couch-tv Studio design can be sent from the phone instead of typed with the remote, each widget has its own settings, and settings and setup use plain words ([details](docs/UPDATES.md#20-november-2026-release-0139-one-button-updates-home-settings-on-your-phone-settings-for-each-widget-and-plain-words)). 0.13.8 made Home settings pages such as Update couch-tv open at the top, with Up reaching the lines above the first button ([details](docs/UPDATES.md#20-november-2026-release-0138-home-settings-pages-open-at-the-top)). 0.13.7 made sure Hold OK never opens the app on a TCL either, the arrow that points at the Settings gear reaches it, and on a Samsung Home settings, About shows the version and how to update, while a Frame opens couch-tv more reliably after Art Mode ([details](docs/UPDATES.md#20-november-2026-release-0137-hold-ok-on-a-tcl-the-gear-by-arrow-and-samsung-updates)). 0.13.6 brought update news on the TV (Home settings, About, Update couch-tv, now on the on-TV app too), a Settings gear that never covers a widget, and a Hold OK that never opens the app ([details](docs/UPDATES.md#19-november-2026-release-0136-the-tv-tells-you-about-updates-and-the-settings-gear-stays-clear)). 0.13.5 brought fixes from a real beginner on a TCL (Use as home screen asks properly and Cancel means no, the TV says plainly when Google keeps the Home button, and design codes are easy to type with the remote) ([details](docs/UPDATES.md#19-november-2026-release-0135-fixes-from-a-real-beginner-on-a-tcl)). 0.13.4 brought Samsung, with couch-tv Studio, a setup you run yourself with no AI agent (`couch-tv-samsung-setup.zip`), and a Frame that opens couch-tv after Art Mode and goes to Art Mode when the phone says off; plus couch-tv Studio designs in the Apple TV app ([details](docs/UPDATES.md#19-november-2026-release-0134-samsung-with-couch-tv-studio-and-a-setup-that-needs-no-ai-agent)). 0.13.3 made it easier for beginners (a Settings button on every design, a phone only install that no longer asks for the accessibility permission Play Protect flags, plain words on the TV and in the Setup app), greeted guests by name with no computer, and brought your home into couch-tv Studio. 0.13.2 brought Ask AI, your own AI agent, smart home set up on the TV and designs on Roku. New in 0.13:
 
 - **14 November:** custom cards with a web link open in the TV's browser on Android TV, LG and Samsung, thanks ekagra-codes ([#207](docs/UPDATES.md#14-november-2026-custom-cards-with-a-web-link-open-on-android-tv-lg-and-samsung-since-013))
 - **14 November:** choose where the home starts: profiles (as before), Keep watching or apps, thanks nidhalmouldi and ekagra-codes ([#211](docs/UPDATES.md#14-november-2026-choose-where-the-home-starts-profiles-keep-watching-or-apps-since-013))
@@ -58,7 +62,7 @@ The newest release is **0.13.6**, on [the Releases page](https://github.com/Seag
 - **15 November:** the clock follows the TV's 12 or 24 hour setting, and Keep watching stays in view while you remove a show, thanks devmaliakbar and Hiren-Patel1 ([#221, #218](docs/UPDATES.md#15-november-2026-the-clock-follows-the-tvs-12-or-24-hour-setting-and-keep-watching-stays-in-view-while-you-remove-a-show-since-013))
 - **14 November:** Restart home in Home settings, About, thanks janooh37-hue ([#217](docs/UPDATES.md#14-november-2026-restart-home-in-home-settings-about-since-013))
 - **14 November:** two more real LGs (a NANO80TNA app only, a 28TQ515S with the bridge in Docker on a Synology), and `--apps tv` pairs by itself, thanks Anshul7171 and adri07 ([#219](docs/UPDATES.md#14-november-2026-two-more-real-lgs-and---apps-tv-pairs-by-itself-since-013), #220)
-- **14 November:** on a VIZIO, couch-tv's home in the TV's own webview, tried on one set, thanks lukionsp ([#206](docs/UPDATES.md#14-november-2026-vizio-couch-tvs-home-in-the-tvs-own-webview-beta-since-013))
+- **14 November:** on a VIZIO, couch-tv's home in the TV's own webview, tried on one set, thanks lukionsp ([#206](docs/UPDATES.md#14-november-2026-vizio-couch-tvs-home-in-the-tvs-own-webview-tried-on-one-set-since-013))
 - **14 November:** input tiles for each TV, and a picture on an input tile, thanks BireshwarChakravarty ([#205](docs/UPDATES.md#14-november-2026-input-tiles-for-each-tv-and-a-picture-on-an-input-tile-since-013))
 - **14 November:** an LG goes back to couch-tv in about half a second, and input tiles switch straight to HDMI, thanks BireshwarChakravarty ([#204](docs/UPDATES.md#14-november-2026-lg-goes-back-to-couch-tv-in-about-half-a-second-and-input-tiles-switch-straight-to-hdmi-since-013))
 - **14 November:** remove a card from Keep watching on the phone remote, and it returns when you play the show again, thanks poinch ([#176](docs/UPDATES.md#14-november-2026-remove-a-card-from-keep-watching-on-the-phone-remote-since-013))
@@ -72,8 +76,8 @@ The newest release is **0.13.6**, on [the Releases page](https://github.com/Seag
 - **14 November:** `home.hi_res: "always"` loads the sharper 4K scenes on a 4K TV that draws its interface at 1080, thanks Hiren-Patel1 ([#191](docs/UPDATES.md#14-november-2026-sharper-scenes-on-a-4k-tv-that-draws-its-interface-at-1080-since-013))
 - **14 November:** an app banner that is not 16:9 keeps its proportions instead of being squeezed, thanks niravsaxena30 ([#181](docs/UPDATES.md#14-november-2026-an-app-banner-that-is-not-169-is-no-longer-squeezed-since-013))
 - **13 November:** the TV home speaks Czech, thanks slezaCZ ([#178](docs/UPDATES.md#13-november-2026-czech-on-the-tv-home-since-013))
-- **13 November:** Bell Streamer's Fibe TV home is replaced by couch-tv, thanks Sparkybabcia ([#168](docs/UPDATES.md#13-november-2026-bell-streamer-with-fibe-tv-as-its-home-beta-since-013))
-- **13 November:** Privacy clean: `PRIVACY=1` switches off known tracking, ad and ACR apps, reversibly ([docs/PRIVACY.md](docs/PRIVACY.md), [details](docs/UPDATES.md#13-november-2026-privacy-clean-beta-on-main))
+- **13 November:** Bell Streamer's Fibe TV home is replaced by couch-tv, thanks Sparkybabcia ([#168](docs/UPDATES.md#13-november-2026-bell-streamer-with-fibe-tv-as-its-home-since-013))
+- **13 November:** Privacy clean: `PRIVACY=1` switches off known tracking, ad and ACR apps, reversibly ([docs/PRIVACY.md](docs/PRIVACY.md), [details](docs/UPDATES.md#13-november-2026-privacy-clean-opt-in-on-main))
 - **13 November:** the home comes back to the tile you left after Settings, thanks IshMehta ([#166](docs/UPDATES.md#13-november-2026-the-home-comes-back-to-the-tile-you-left-since-013))
 - **13 November:** on Fire OS 7 Couch TV comes back without the 5 second wait, thanks atul016 ([#162](docs/UPDATES.md#13-november-2026-fire-os-7-brings-couch-tv-back-without-the-5-second-wait-since-013))
 - **13 November:** the Next song button skips the track again on a Mi Box, thanks NathanGlasby ([#158](docs/UPDATES.md#13-november-2026-the-next-song-button-skips-the-track-again-since-013))
@@ -113,9 +117,9 @@ A is the TV home only, B adds the computer bridge, C lives on the TV ([the three
 | [Hisense VIDAA](docs/PLATFORMS.md#hisense-vidaa) | App only | With a computer at home | No |
 | [Philips with Titan OS](docs/PLATFORMS.md#philips-with-titan-os) | Not yet | Remote only, with a computer at home | No |
 | [Older Philips with Saphi](docs/PLATFORMS.md#older-philips-with-saphi) | No | With a computer at home | No |
-| [VIZIO](docs/PLATFORMS.md#vizio) | No | Remote, with a computer at home (home in the TV's webview by hand, one set) | No |
+| [VIZIO](docs/PLATFORMS.md#vizio) | No | The phone remote, with a computer left on at home (the home opened in the TV's web view by hand on one set) | No |
 | [Panasonic Viera](docs/PLATFORMS.md#panasonic-viera) | No | With a computer at home | No |
-| [Apple TV](docs/PLATFORMS.md#apple-tv) | No | With a computer at home | No |
+| [Apple TV](docs/PLATFORMS.md#apple-tv) | No | With a Mac left on at home (free signing runs out every 7 days) | No |
 | [TiVo OS](docs/PLATFORMS.md#tivo-os) | No | With a computer at home | No |
 
 **With a computer at home** means a computer at home that stays on, and the maker's own Home button still opens the maker's own home.
@@ -147,8 +151,8 @@ floats with its reflection under the water. Or pick the Classic look, your own p
 
 A free app for Mac and Windows that puts couch-tv's home screen on a **Google TV, Android TV or
 Fire TV** with no command line and no AI agent. It opens a page in your browser and walks you
-through it: Developer options with the TV remote, a 6 digit code (Google TV on Android 12 or newer)
-or one Allow press (Android TV, and Google TV on Android 11), then it installs couch-tv from this
+through it: Developer options with the TV remote, a 6 digit code (Google TV with Wireless debugging, Android 11 or newer)
+or one Allow press (Android TV, and Android 11 Google TVs with no Wireless debugging), then it installs couch-tv from this
 repo's Releases, checks it, sets it up the way `apply.sh` does (option A), and can add the phone
 remote. It shows the plan and waits for your yes before it changes anything, and it can undo all of
 it. Download it from [the Releases page](https://github.com/Seagey/couch-tv/releases) (the Mac zip
@@ -253,9 +257,14 @@ short code. It also has a gallery of designs other people made.
 - **couch-tv stays free and open source** (MIT). Studio is an optional hosted service, run
   separately, and its source is not open. You never need it to use couch-tv.
 - **Off until you turn it on.** Installing or updating couch-tv never switches it on. Until someone
-  at the TV turns it on (Home settings, couch-tv Studio) or types a code there, the TV asks Studio
-  for nothing. **Back to my classic home** switches it off again in one step.
-- **What the TV sends to Studio:** the code you typed, with no cookies and no referrer. While a
+  at the TV turns it on (Home settings, Designs; couch-tv Studio before 0.13.9) or types a code there, the TV asks Studio
+  for nothing. Turning **Your design** off (before 0.13.9, Back to my classic home) switches it off again in one step.
+- **What the TV sends to Studio:** the code you typed, with no cookies and no referrer. From
+  0.13.12 the Android apps add two numbers with it: the Couch TV version and the TV's total memory in
+  MB, so Studio's "Will it play on your TV?" can answer for a TV you added in My TVs. From 0.13.13 they also
+  say what kind of TV it is: the platform (Google TV, Android TV or Fire OS), the Android version number,
+  the memory, the screen size and the model name (such as "Smart TV Pro"). No serial number, no ids, no
+  address, no location. While a
   design is on, the TV also fetches the fonts the design names from Studio, and the design's
   background video, if it has one, by the video's id and a size (720p or 1080p, short clip or long
   loop), with no cookies and no referrer; once it has played, the TV keeps its own copy and does
@@ -263,7 +272,7 @@ short code. It also has a gallery of designs other people made.
   scores, markets or commute widget is on, it asks Studio once a day whether that source is paused.
   **Open this home in couch-tv Studio** (called Share this home on 0.13.0 to 0.13.2) sends the
   layout of the home you have now, without names, photos, places, keys or calendar links.
-- **Bring the home you have now into Studio.** On the TV: Home settings, couch-tv Studio, **Open this
+- **Bring the home you have now into Studio.** On the TV: Home settings, Designs, **Open this
   home in couch-tv Studio**. The TV shows a QR code and a 10 letter code; scan it, or type the code
   under "Already use couch-tv from GitHub?" on Studio's start screen. It opens as a design you can change, keep
   in My designs and send back. Only the look (scenes, clock, glass, the dock's style and size,
@@ -330,6 +339,7 @@ gains a permission these tables do not explain.
 | `POST_NOTIFICATIONS` | Not asked for by the app | Lets the notice Android shows while that server runs appear on Android 13 and newer |
 | `RECEIVE_BOOT_COMPLETED` | On install | Starts the server again after a restart or an update |
 | `QUERY_ALL_PACKAGES` | On install | To tell which streaming apps are installed, so the remote can open them. This app is sideloaded, not from a store |
+| `REQUEST_DELETE_PACKAGES` | On install | Settings, Undo Couch TV: lets the app bring up Android's own "Uninstall?" question for itself. It removes nothing on its own |
 | `SYSTEM_ALERT_WINDOW` | By the app over the TV's own ADB, after you press Allow | Lets it open apps from the background when you pick one on the phone |
 | `WRITE_SECURE_SETTINGS` | The same way | Switches wireless debugging back on after a restart, and the Home button watch on a Fire TV |
 | `READ_TV_LISTINGS`, `READ_EPG_DATA` | The same way | Keep watching: reads Android's Watch Next rows to name what is playing when an app does not say. Read only |
@@ -348,8 +358,19 @@ gains a permission these tables do not explain.
   screen name, and put couch-tv's home back when the TV opens its own. They read no screen content.
   The Home one declares the screen reading capability only because some TVs (a TCL on Android 12)
   send window events to nothing else.
+- **Home button watch check** (`WatchRepair`, Home): a job Android runs about every 15 minutes, even
+  when the app is not open. Where a computer granted secure settings and the Home button watch is
+  listed as on but not running, it switches the watch back on. A watch you switched off stays off.
+  It reads nothing from the screen.
 - **Home gear button** (`KeyWatch`, Home): an accessibility service you switch on yourself in
   Accessibility. It catches only the remote's gear button.
+- **Spotify playback access** (`SpotifySessionAccess`, Home): a notification listener you switch on yourself
+  in Android settings, only when you turn on the Spotify card. It lets the home read the Spotify TV app's
+  song and send previous, play or pause and next. It reads no notifications.
+- **Spotify Now playing card** (`SpotifyMediaListener`, Home): a notification listener that `apply.sh` grants
+  over ADB (docs/CONFIG.md, Spotify). The home asks it only when `spotify.enabled` is on: it reads the
+  Spotify app's song, cover and position from the TV's own media session and sends its playback buttons,
+  with no account and nothing sent to Spotify. It reads no notifications.
 - **TCL placeholder input** (`TclPlaceholderInput`, Home): an empty TV input, switched on only on a
   TCL, so TCL's start manager lets Home start at power on. It shows nothing and receives nothing.
 - **Sync listener** (`Listener`, sync helper): a notification listener, granted over ADB, only so the
@@ -360,12 +381,15 @@ gains a permission these tables do not explain.
 
 **What the TV home talks to.** Your bridge or the on-TV app on your home network; Open-Meteo for
 the weather (and air quality, surf and place search when you use them); JustWatch for posters;
-GitHub for the update check (only with updates on); Home Assistant on your home network, if you set
+Bing for the daily picture and FotMob for football scores (both only when you turn those on, in the Android TV app); YouTube's image host (`i.ytimg.com`) for the picture on a YouTube video card, named by that video's
+id, once the bridge has found the video (option B); GitHub for the update check (only with updates on); Home Assistant on your home network, if you set
 it up; couch-tv Studio only once it is turned on (above); and, only while that widget is on the
 home, its own source (news feeds, ESPN for scores, Yahoo Finance for markets, OSRM for commute
 times, your own calendar address). The home's page rules allow any https address, because the
 calendar and video links in Home settings are addresses you choose. A design carries no code and
-no outside links, and the TV drops any it finds.
+no outside links, and the TV drops any it finds. The bridge (option B) also looks up each YouTube
+video it writes down on YouTube's public results page, by its title and channel, with no key and no
+sign in, to find the exact video for its card.
 
 ## Documentation
 
@@ -392,7 +416,7 @@ Everything else: [docs/](docs/README.md).
 - The streaming app logos in `remote/src/app-logos/` belong to their owners.
 - Fonts: Inter and Antonio (both SIL Open Font Licence).
 - Show data and posters: JustWatch (credit them if you publish anything built on this).
-- Weather: Open-Meteo.
+- Weather data by [Open-Meteo.com](https://open-meteo.com/) (CC BY 4.0); the TV says "Weather data by Open-Meteo.com" under the forecast, air quality and surf it opens. Town search: Open-Meteo's place search, location data based on [GeoNames](https://www.geonames.org/) (CC BY 4.0), credited under Home settings, Location.
 - The doorbell card and Home Assistant scenes on the TV started in the
   [roliusz fork](https://github.com/roliusz/couch-tv).
 - The no-computer install for option A came from

@@ -6,6 +6,9 @@ Fixes for problems seen on real TVs, starting with a TV that goes round in a res
 - [TCL: Home goes back to Google TV after every restart](#tcl-home-goes-back-to-google-tv-after-every-restart)
 - [If Disney+ (or another app) signs you out after the TV turns off](#if-disney-or-another-app-signs-you-out-after-the-tv-turns-off)
 - [Moving along the rows feels slow](#moving-along-the-rows-feels-slow)
+- [Home opens Google TV again after an update with Downloader](#home-opens-google-tv-again-after-an-update-with-downloader)
+- [The phone can't press keys (ADB or Wireless debugging won't connect)](#the-phone-cant-press-keys-adb-or-wireless-debugging-wont-connect)
+- [LG: the TV refuses couch-tv, or Developer Mode won't start](#lg-the-tv-refuses-couch-tv-or-developer-mode-wont-start)
 - [Something else stuck](#something-else-stuck)
 
 ## If your TV loops after a restart
@@ -88,6 +91,39 @@ app.couchtv.launcher/.MainActivity`, start the app, `appops set app.couchtv.laun
 allow`, then write `enabled_accessibility_services` and `accessibility_enabled 1` again. On that TCL
 a real double press of Home also stays on Google TV; Back twice escapes.
 
+## Hisense Google TV: the Google home after every restart or wake
+
+On a Hisense Google TV ("SmartTV 4K", Android 11, board songshan) with the on-TV app (option C), the TV came
+back on the Google home after each restart and after standby, and Home from inside an app showed the Google
+home for a few seconds before couch-tv. Hisense's own framework hook (`com.vt.hisensehook`, inside the system's
+`services.jar`) causes it:
+
+- At standby it stops every app that did not come with the TV, couch-tv included.
+- From boot until the TV wakes, it refuses to start any such app in the background (`Failure starting process`
+  in the log). So couch-tv's start at boot and its Home button watch never run. Opening an app on the screen is
+  still allowed.
+- Its only exception is the list in `settings get global allowed_self_launch_3rd_packages` (package names with
+  `;` between them). The TV reads it once, early in each boot, and something on the TV empties it about 25
+  seconds later.
+
+Since this change the on-TV app writes itself back into that list whenever it runs: at start, a minute and
+three minutes later, and each time the screen goes on or off. So the name is there at the next boot. It
+needs the `WRITE_SECURE_SETTINGS` grant the setup already gives it, and falls back to its own ADB connection
+without it. Also on a Hisense:
+
+- When the Home button watch connects and finds the Google home already in front, it opens couch-tv.
+- The watch catches the remote's Home key, so Home goes straight to couch-tv with no flash of the Google home
+  (#202). `adb shell input keyevent` goes past the watch, so test this with the real remote.
+- When Android marks the watch crashed (Hisense stopped it at standby), the app switches it off and on again
+  so it binds.
+- The home waits for its own server before it loads, so a cold start no longer shows Chrome's
+  `ERR_CONNECTION_REFUSED` page for about 10 seconds.
+
+Checked on one real Hisense: three restarts in a row came back on couch-tv. `adb install -r` also empties the
+list, and the app writes it again the next time it runs. Other Hisense Android TVs (#186, #188, #202) may
+have the same hook: `adb shell settings get global allowed_self_launch_3rd_packages` answering anything other
+than `null` says yours does.
+
 ## Fire TV: Home still opens Amazon's home right after apply.sh
 
 Seen twice on a Fire TV Cube (3rd gen, Fire OS 7.7.1.7): `apply.sh` finished with "home screen now:
@@ -101,6 +137,24 @@ Fire TV is still on Amazon's home after `apply.sh`, run from the repo root:
 
 ```sh
 TV_IP=<tv address> .venv/bin/python tv-home/tools/tvadb.py shell "settings put secure enabled_accessibility_services app.couchtv.launcher/.FireWatch; settings put secure accessibility_enabled 1"
+```
+
+## Home stays on Google TV days later, with the Home button watch "crashed"
+
+Seen on a Hisense Google TV (Android 11): a few hours after the TV went into standby, something on
+the TV killed couch-tv's process by signal (`dumpsys activity exit-info app.couchtv.launcher` said
+`SIGNALED`, not a crash and not a low memory kill). The Home button watch lives in that process, so
+Android listed it under "Crashed services" in `dumpsys accessibility`, set `accessibility_enabled`
+to 0 and never bound it again, and the Home key stayed on Google TV's home until `apply.sh` ran.
+
+Since then the app checks about every 15 minutes, with a job Android runs even when couch-tv is
+not running (`WatchRepair.kt`): where a computer granted secure settings and the watch is still
+listed as on but not running, it switches accessibility back on and takes the watch out of the
+list and back in, so Android binds it afresh. A watch switched off in Settings stays off. So at
+worst Home goes to the TV's own home for up to about 15 minutes. To run the check now:
+
+```sh
+TV_IP=<tv address> .venv/bin/python tv-home/tools/tvadb.py shell "cmd jobscheduler run -f app.couchtv.launcher 43017"
 ```
 
 ## If Disney+ (or another app) signs you out after the TV turns off
@@ -139,6 +193,69 @@ If the rows turn smooth, the GPU is the limit. Keep it for couch-tv only, withou
 2. Run `tv-home/tools/apply.sh`, or restart the home.
 
 To undo it, remove the key or set it to `0`. Text and pictures are a little softer than at full size. If it helps, or does not, please say which TV and Android version on [#197](https://github.com/Seagey/couch-tv/issues/197).
+
+## Home opens Google TV again after an update with Downloader
+
+On the on-TV app (option C), the Home button version (put on from a computer, or by **Make Home open
+Couch TV** from 0.13.9) has the Home button watch. Downloader's code 8180170 always gets the plain
+app, `couch-tv-ontv.apk`, which has no watch, so after an update with Downloader Home opens Google's
+home again. Your settings stay.
+
+- Open **Couch TV** and press **Make Home open Couch TV** once more. It needs **Let the phone press
+  keys** (Couch TV, More).
+- Next time, update with **Home settings**, **Updates**, **Update to**: it gets the Home button version
+  again, so the Home button stays.
+- Or put `couch-tv-ontv-watch.apk` on from a computer, as before.
+
+## The phone can't press keys (ADB or Wireless debugging won't connect)
+
+On the on-TV app (option C), open Home settings on your phone, This TV, **Let the phone press keys**,
+and press **Check now** under **Can't connect?**. It looks at the TV and says the one thing in the way,
+with the fix:
+
+| What it says | What to do |
+|---|---|
+| The phone can't reach the TV | Phone and TV on the same Wi-Fi: not a guest network, not mobile data. Check the TV is on, then load the page again. |
+| The TV is on a network cable | Wireless debugging (Android 11 or newer) only works on Wi-Fi. Join the Wi-Fi on the TV, or use the older TVs steps with Network debugging, which works on a cable. |
+| Debugging is off on the TV | Settings, System, About (older Android TV: Settings, Device Preferences, About): press OK on Android TV OS build (on some TVs, Build) seven times. Then Developer options, USB debugging on (some TVs call it Network debugging or ADB debugging). On a Fire TV: Settings, My Fire TV, About, press OK on the device name seven times, then My Fire TV, Developer options, ADB debugging on. |
+| Wireless debugging is off | Developer options, Wireless debugging on, tick Always allow on this network, then the newer TVs steps. |
+| Wireless debugging is on, but Couch TV is not paired yet | Wireless debugging, Pair device with pairing code, and type the 6 digit code on the phone. |
+| This TV has no Wireless debugging | Wireless debugging is on Android 11 or newer; Android 10 or older has none. Switch on Network debugging (on some TVs, USB debugging), then press Let the phone press keys. |
+| The TV is waiting for you, or nobody answered the TV's Allow question | Press Let the phone press keys and look at the TV straight away: tick Always allow and press Allow. If no question shows, restart the TV and try again. |
+| The TV's debugging connection is closed | Some TVs close it after a restart: switch Wireless debugging (or Network debugging) off and on again, then press Let the phone press keys. |
+| This Fire TV stops Couch TV pressing keys by itself | Amazon switched it off in a Fire TV update. Keys and typing from the phone need a home computer running couch-tv (option B). |
+
+Still stuck: press **Copy a report** and paste it into your question or a GitHub issue. It holds the
+TV model, the Android version, the network type, the debugging switches, the connection state and
+the last error. Addresses are replaced with `[address]`, and there are no keys, no passwords and no
+TV name in it. The box under the button shows exactly what was copied.
+
+## LG: the TV refuses couch-tv, or Developer Mode won't start
+
+An LG is not Android, so the Android steps (Build seven times, USB debugging) are not there. See
+"If LG says no" in [LG.md](LG.md#if-lg-says-no): Developer Mode is LG's own app, what to check when
+the TV refuses the `.ipk`, and why couch-tv opening at power on needs a computer at home.
+## A green screen, or a black background after an app
+
+A TV whose video decoder fails without saying so draws a clip as one flat green (seen on a TCL QM8K).
+The home looks at a scene's own clip, the video link and a design's video twice, 1.5 s and 5 s after it
+starts. When both looks are the same flat green, that clip goes and the still picture stays. Real
+footage, leaves and grass included, is never judged green: it has red and blue in it and is not flat.
+After a green scene clip or video link the home tries neither on that TV for a week; Home settings, Look
+says why and has **Try the video again**, and a new video link gets its own try. A design's video only
+goes for that time. The Loop look's clips are not looked at. A clip from another site cannot be looked at
+either, so if the green comes from your own video link, remove the link (Look, Remove the video).
+If the whole screen is green, also inside apps, it is the TV itself: check for a TV update.
+
+Coming back from an app opened from a video link, a Fire TV could show the home black. The background
+clip now lets go of the video decoder while an app is in front, and the photo shows until the clip
+really plays again.
+
+## An air mouse or a USB mouse
+
+On a TV with an air mouse remote (or a USB mouse), the home turns its pointer on the first time the
+pointer moves over it: pointing at a tile moves the focus there and a click opens it, as OK does, on
+the dock, Keep watching and in Home settings. A TV that never sends a moving pointer stays arrows only.
 
 ## Something else stuck
 

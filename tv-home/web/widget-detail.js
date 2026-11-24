@@ -1,4 +1,4 @@
-// The detail layer: what opens when OK is pressed on a widget (couch-tv Studio v10). The widget grows
+// The detail layer: what opens when OK is pressed on a widget (Couch TV Studio v10). The widget grows
 // into a sheet over the home, the way the wall tablet's cards do (home-hub wall/app.js openSheet:
 // the card's own box grows to the sheet with one transform, the words fade in after it, Back shrinks
 // it back into the card). On a TV it is drawn for 3 m away: words 25 px and up, one focus ring, the
@@ -8,7 +8,7 @@
 // Studio, the TV's own data on a TV, or the widget's setup record (widget-caps.js) when the TV has
 // nothing real yet. Never pretend data on a TV. What a layer does goes through design.js (api.act:
 // the app.js hooks, the same ones a widget's own buttons use) or Home Assistant through the
-// launcher (api.ha). In couch-tv Studio nothing is switched: the layer says so.
+// launcher (api.ha). In Couch TV Studio nothing is switched: the layer says so.
 //
 // Built element by element, never from markup. ES5 on purpose: old Android TV WebViews.
 (function () {
@@ -46,6 +46,10 @@
   var STAGE = { w: 1920, h: 1080 }, PANEL = { left: 80, top: 60, width: 1760, height: 960 };
   function kit() { return K || (K = window.CouchWidgets && window.CouchWidgets.kit); }
   function E() { return kit().E.apply(null, arguments); }
+  // the layer's own words in the TV's language (widget-lines.js, through the widgets kit): E() swaps a whole
+  // line by itself; tl() fills a line with a gap, wl() is for words set straight into textContent
+  function tl(en, vars) { var k = kit(); return k && k.tl ? k.tl(en, vars) : en; }
+  function wl(en) { var k = kit(); return k && k.wl ? k.wl(en) : en; }
   function ic(n, s, c, st) { return kit().ic(n, s, c || "currentColor", st); }
   function px(n) { return Math.round(n) + "px"; }
   function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
@@ -65,59 +69,70 @@
     return E("div", "cwd-head", "", [icon, E("div", "cwd-htext", "", [E("div", "cwd-title", "", [title]), S.subEl]), E("div", "cwd-back", "", [ic("back", 28, "currentColor"), "Back to close"])]);
   }
   function label(t) { return E("div", "cwd-label", "", [t]); }
+  // Open-Meteo's data is CC BY 4.0: a quiet credit, plain text (a TV cannot follow a link), under the layers it fills
+  function credit() { return E("div", "cwd-credit", "", ["Weather data by Open-Meteo.com"]); }
   function msg(t, keep) {
     if (!S || !S.msgEl) return;
-    S.msgEl.textContent = t || "";
+    S.msgEl.textContent = t ? wl(t) : "";
     S.msgEl.classList.toggle("on", !!t);
     clearTimeout(S.msgT);
     if (t && !keep) S.msgT = setTimeout(function () { if (S && S.msgEl) S.msgEl.classList.remove("on"); }, 3600);
   }
-  // In couch-tv Studio nothing in the house is switched, and the layer says so (once)
-  function designerSays() { if (S.api.designer && !S.said) { S.said = true; msg("In couch-tv Studio this only shows what OK does. Nothing is switched."); return true; } return S.api.designer; }
+  // In Couch TV Studio nothing in the house is switched, and the layer says so (once)
+  function designerSays() { if (S.api.designer && !S.said) { S.said = true; msg("In Couch TV Studio this only shows what OK does. Nothing is switched."); return true; } return S.api.designer; }
   function btn(iconName, text, cls) { return E("div", "cwd-btn" + (cls ? " " + cls : ""), "", [iconName ? ic(iconName, 34, "currentColor", "solid") : null, text ? E("span", "", "", [text]) : null]); }
   function chip(text, on) { return E("div", "cwd-chip" + (on ? " on" : ""), "", [text]); }
 
   // ---------------- the layers: B[name](o, env) adds to S.body ----------------
   var B = {};
 
-  // the setup record (widget-caps.js), for a widget with nothing real to show yet
-  var STATUS = { works: ["Works on this TV", "#30d158"], setup: ["Set it up first", "#ffd60a"], computer: ["Needs a home computer", "#ff9f0a"], no: ["Not possible on this TV", "#8e8e93"], "not-built": ["Not on couch-tv yet", "#ff9f0a"] };
+  // A widget with nothing real to show yet (owner, 23 Nov 2026: "I'd rather people not be editing their
+  // widgets on the TV screen at all"). Its name and one short line of what it shows; when it needs
+  // something private set (widget-caps.js face): "Set up on your phone", "Scan with your phone camera."
+  // and the code the phone opens at this widget's step, and one small "No phone? Set it up here" that
+  // opens its page in Home settings. Never which TVs it works on, never steps, never a paragraph.
   B.setup = function (o, env) {
     // Ask AI and From your AI with nothing to show yet open their own layer, which sets them up
     if ((o.kind === "ask" || o.kind === "agent") && B[o.kind]) return B[o.kind](o, env || {});
     var kind = (S.from && S.from.getAttribute("data-setup")) || o.kind, C = window.CouchWidgetCaps, c = C && C.get(kind);
     S.panel.classList.add("cwd-setup");
-    if (!c) { S.body.appendChild(head("info", "This widget", "It needs a newer couch-tv")); return; }
-    // what each kind of TV needs for it (widget-caps.js platforms[p].need), the best of its group
-    var RANK = ["works", "setup", "computer", "no"];
-    var group = function (keys) { var best = 3; keys.forEach(function (k) { var p = c.platforms[k], i = RANK.indexOf(p ? p.need || (p.on === "yes" ? "works" : p.on === "no" ? "no" : "setup") : "no"); if (i >= 0 && i < best) best = i; }); return RANK[best]; };
-    var WORD = { works: ["Works", "yes"], setup: ["Set up first", "setup"], computer: ["Needs a home computer", "partial"], no: ["Not possible", "no"] };
-    var tvs = [["Google TV, Android TV, Fire TV", ["Google TV", "Android TV", "Fire OS"]], ["Samsung, LG, Philips, Panasonic", ["Tizen", "webOS", "Saphi", "TiVo OS", "My Home Screen"]],
-      ["Hisense", ["VIDAA"]], ["Roku, Apple TV and others", ["Roku OS", "tvOS", "Vega OS", "Titan OS", "SmartCast", "Other"]]];
-    var left = E("div", "cwd-col", "width:820px", [label("What it shows"), E("div", "cwd-text", "", [c.what]), label("What it needs"),
-      E("div", "cwd-list", "", c.needs.map(function (n) { return E("div", "cwd-li", "", [E("i", "cwd-bullet"), E("span", "", "", [n])]); })),
-      label("Which TVs"), E("div", "cwd-col", "", tvs.map(function (g) { var v = c.status === "not-built" ? ["Not possible", "no"] : WORD[group(g[1])]; return E("div", "cwd-tvrow", "", [E("span", "", "", [g[0]]), E("b", "cwd-tv-" + v[1], "", [v[0]])]); }))]);
-    // the steps for this TV: the Android home has window.TVOS; a Hisense says so in its browser's name
-    // (the designer and a browser preview, ?mock, stand in for the Android home)
-    var sys = window.TVOS || S.api.designer || /[?&]mock\b/.test(location.search) ? "android" : /VIDAA|Hisense/i.test(navigator.userAgent || "") ? "vidaa" : "web";
-    var steps = C.steps ? C.steps(kind, sys) : [c.setup.how], none = steps.length === 1 && /^Nothing to set up\.$/.test(steps[0]);
-    // the pill says what this TV needs for it (works, set up first, a home computer, not possible)
-    var mine = c.status === "not-built" ? "not-built" : group(C.groups && C.groups[sys] ? C.groups[sys] : ["Google TV"]), st = STATUS[mine] || STATUS.setup;
-    S.body.appendChild(head("info", c.name, "", st[1]));
-    S.subEl.appendChild(E("span", "cwd-pill", "background:" + st[1], [st[0]]));
-    var right = E("div", "cwd-col", "flex:1;margin-left:64px;min-width:0", [label(c.status === "not-built" ? "What you can do" : none ? "Nothing to set up" : "How to set it up on this TV"),
-      E("div", "cwd-list", "", steps.map(function (s, i) { return E("div", "cwd-li", "", [E("b", "", "flex:none;width:44px", [String(i + 1) + "."]), E("span", "", "", [s])]); })),
-      none ? null : label("Until then"), none ? null : E("div", "cwd-text", "", [c.until]),
-      label("OK on the widget"), E("div", "cwd-text", "", [c.ok])]);
-    S.body.appendChild(E("div", "cwd-row cwd-grow", "align-items:flex-start;margin-top:30px", [left, right]));
+    if (!c) { S.body.appendChild(head("info", "This widget", "It needs a newer Couch TV")); return; }
+    var f = C.face ? C.face(kind) : null, need = (S.from && S.from.getAttribute("data-need")) || (f && f.need) || "";
+    if (need === "team" && !(S.from && S.from.getAttribute("data-need"))) need = "";
+    var id = o && o.id !== undefined && o.id !== null ? String(o.id) : S.id, api = S.api || {};
+    var NEED_ICON = { town: "partly-cloudy", photos: "picture", calendar: "calendar", spotify: "music", wifi: "wifi", text: "edit", team: "tv", ha: "home" };
+    S.body.appendChild(head(NEED_ICON[need] || "info", f ? f.name : c.name, f ? f.line : ""));
+    var here = function () { if (api.tvEdit) api.tvEdit(id); };
+    if (!need) {
+      // nothing to set on the phone (a permission on the TV, a widget not on this TV): its one line
+      var cd = C.card ? C.card(kind, false) : { line: "", sub: "" };
+      S.body.appendChild(E("div", "cwd-col cwd-grow cwd-center", "", [E("div", "cwd-mid", "text-align:center;max-width:1300px", [cd.line]),
+        cd.sub ? E("div", "cwd-small", "margin-top:16px;text-align:center;max-width:1300px", [cd.sub]) : null]));
+      return;
+    }
+    var box = E("div", "cwd-qr", "width:420px;height:420px;border-radius:32px;background:#fff;display:flex;align-items:center;justify-content:center;flex:none");
+    var noPhone = F(btn("tv", "No phone? Set it up here"), here, "No phone? Set it up here");
+    var words = E("div", "cwd-col", "margin-left:72px;max-width:900px", [E("div", "cwd-big", "", ["Set up on your phone"]),
+      E("div", "cwd-text", "margin-top:18px", ["Scan with your phone camera."]), E("div", "", "margin-top:56px", [noPhone])]);
+    if (!api.phone) {
+      // no phone page on this home: the one way left is the TV's own page
+      S.body.appendChild(E("div", "cwd-col cwd-grow cwd-center", "", [F(btn("tv", "No phone? Set it up here"), here, "No phone? Set it up here")]));
+      return;
+    }
+    S.body.appendChild(E("div", "cwd-row cwd-grow cwd-center", "", [box, words]));
+    var mine = S;
+    api.phone(id, need).then(function (link) {
+      if (S !== mine || !link || !window.TVQR) return;
+      try { var q = window.TVQR.svg(link, 372); q.style.cssText = "display:block;width:372px;height:372px"; box.appendChild(q); box.setAttribute("data-link", link); } catch (e) {}
+    }, function () {});
   };
 
   // timers: one at a time, kept on the TV (widgets.js Timer)
   var LABELS_ALL = ["Timer", "Oven", "Pizza", "Bath", "Homework", "Bedtime", "Tea"];
-  B.timers = function (o) {
+  B.timers = function (o, env) {
     var T = kit().Timer, now = kit().now();
-    // a Timer widget with a name in its design (opts.label): a timer started from it has that name
-    var own = o && o.kind === "timer" && op(o).label ? String(op(o).label).slice(0, 24) : "";
+    // a Timer widget's own settings (set on this TV or in its design): its name, and Quick start
+    var mine = o && o.kind === "timer" ? kit().timerOwn(o, env) : { label: "", minutes: 0 }, own = mine.label;
     var LABELS = own ? [own].concat(LABELS_ALL.filter(function (x) { return x !== own; })) : LABELS_ALL;
     S.body.appendChild(head("timer", "Timers", "It's " + kit().fmt12(now), "#ff9f0a"));
     var ringBox = E("div", "cwd-ringbox"), nameAt = 0;
@@ -143,15 +158,21 @@
       F(btn("close", "Stop"), function () { T.cancel(); drawRing(); msg("Timer stopped"); }, "Stop")]);
     S.body.appendChild(E("div", "cwd-row cwd-grow", "align-items:center;margin-top:20px", [ringBox, E("div", "cwd-col", "margin-left:90px", [label("Start a timer"), grid, row])]));
     S.start = T.live() ? 8 : 2;
+    // Quick start: OK on the widget starts that timer straight away (never over one already running, and
+    // never in Couch TV Studio, which switches nothing)
+    if (mine.minutes && !T.live() && !(env && env.demo)) {
+      T.start(mine.minutes, LABELS[0]); drawRing(); msg(LABELS[0] + ": " + kit().minWordsShort(mine.minutes) + ", counting down");
+      S.start = 8;
+    }
   };
 
   // the forecast: 24 hours and 7 days (Open-Meteo, the same answer the widgets read)
   B.forecast = function (o, env) {
-    var w = kit().weather(env);
+    var w = kit().weather(env, o);
     if (!w) return B.setup(o, env);
     S.body.appendChild(head(kit().wxIcon(w.code, w.is_day), w.place || "Forecast", w.temp + "° now, " + kit().wxWords(w.code).toLowerCase() + (w.hi !== undefined ? ". High " + w.hi + "°, low " + w.lo + "°" : ""), "#1b64b5"));
     var hours = w.hours || [], days = w.days || [];
-    if (!hours.length && !days.length) { S.body.appendChild(E("div", "cwd-text", "margin-top:40px", ["The full forecast comes with the next weather update."])); return; }
+    if (!hours.length && !days.length) { S.body.appendChild(E("div", "cwd-text", "margin-top:40px", ["The full forecast comes with the next weather update."])); S.body.appendChild(credit()); return; }
     if (hours.length) {
       var track = E("div", "cwd-track");
       hours.forEach(function (h, i) {
@@ -176,11 +197,13 @@
           d.rise ? E("div", "cwd-small", "", ["Sunrise " + d.rise]) : null, d.set ? E("div", "cwd-small", "", ["Sunset " + d.set]) : null]), null, d.d);
       })));
     }
+    S.body.appendChild(credit());
   };
 
   // world clocks: every city big
   B.world = function (o, env) {
-    var cities = op(o).cities && op(o).cities.length ? op(o).cities.slice(0, 4) : ["Australia/Brisbane", "Europe/London", "America/New_York", "Asia/Tokyo"];
+    // the widget's own cities and 12 or 24 hour, the same as on the widget (widgets.js worldOf)
+    var wc = kit().worldOf(o, env, 4), cities = wc.cities;
     var here = new Date();
     S.body.appendChild(head("clock", "World clocks", "Here it is " + kit().fmt12(here), "#5e5ce6"));
     var draw = function () {
@@ -193,7 +216,7 @@
           S2("line", { x1: 50, y1: 50, x2: 50, y2: 27, stroke: fg, "stroke-width": 5, "stroke-linecap": "round", transform: "rotate(" + ((t.h % 12) * 30 + t.m / 2) + " 50 50)" }),
           S2("line", { x1: 50, y1: 50, x2: 50, y2: 13, stroke: fg, "stroke-width": 3.4, "stroke-linecap": "round", transform: "rotate(" + t.m * 6 + " 50 50)" }),
           S2("circle", { cx: 50, cy: 50, r: 3.5, fill: "#ff9f0a" })]),
-          E("div", "cwd-mid", "margin-top:24px", [kit().CITY[tz] || tz.split("/").pop().replace(/_/g, " ")]), E("div", "cwd-big", "", [t.t]),
+          E("div", "cwd-mid", "margin-top:24px", [wc.name(tz)]), E("div", "cwd-big", "", [kit().tzShow(t.t ? t : null, wc.h24)]),
           E("div", "cwd-small", "", [off === 0 ? "Same time as here" : Math.abs(off) + (Math.abs(off) === 1 ? " hour " : " hours ") + (off > 0 ? "ahead" : "behind")])]));
       });
       return row;
@@ -202,27 +225,30 @@
     S.body.appendChild(cur);
     S.tick = function () { var n = draw(); S.body.replaceChild(n, cur); cur = n; };
     S.every = 30000;
-    void env;
   };
 
-  // calendar: today, this month and next
-  function monthGrid(y, m, today) {
-    var first = (new Date(y, m, 1).getDay() + 6) % 7, days = new Date(y, m + 1, 0).getDate(), cells = [];
-    ["M", "T", "W", "T", "F", "S", "S"].forEach(function (x) { cells.push(E("span", "h", "", [x])); });
+  // calendar: today, this month and next. ws: the first day of the week (0 Sunday, 1 Monday): a Month
+  // widget's own Week starts on
+  function monthGrid(y, m, today, ws) {
+    ws = ws === 0 ? 0 : 1;
+    var first = (new Date(y, m, 1).getDay() + 7 - ws) % 7, days = new Date(y, m + 1, 0).getDate(), cells = [];
+    kit().weekHead(ws).forEach(function (x) { cells.push(E("span", "h", "", [x])); });
     for (var i = 0; i < first; i++) cells.push(E("span", "", "", [""]));
     for (var k = 1; k <= days; k++) cells.push(E("span", k === today ? "today" : "", "", [k === today ? E("b", "", "", [String(k)]) : String(k)]));
     return E("div", "cwd-month", "", [E("div", "cwd-mid", "margin-bottom:14px", [kit().MONTHS[m] + " " + y]), E("div", "cwd-mgrid", "", cells)]);
   }
   B.calendar = function (o, env) {
     var d = kit().now(), y = d.getFullYear(), m = d.getMonth(), doy = Math.floor((d - new Date(y, 0, 0)) / 86400000);
-    var jan = new Date(y, 0, 1), week = Math.ceil(((d - jan) / 86400000 + ((jan.getDay() + 6) % 7) + 1) / 7);
+    var jan = new Date(y, 0, 1), week = Math.ceil(((d - jan) / 86400000 + ((jan.getDay() + 6) % 7) + 1) / 7), wsd = o && o.kind === "month" ? kit().weekStart(o, env) : 1;
     S.body.appendChild(head("calendar", "Calendar", kit().longDate(d), "#ff453a"));
     var todayCol = E("div", "cwd-col", "width:430px", [E("div", "cwd-label", "color:#ff453a", [kit().DAYS[d.getDay()]]), E("div", "cwd-huge", "font-size:220px;line-height:.9", [String(d.getDate())]),
       E("div", "cwd-mid", "", [kit().MONTHS[m] + " " + y]), E("div", "cwd-small", "margin-top:10px", ["Day " + doy + " of the year, week " + week])]);
-    var evs = o.kind === "agenda" ? (env.demo ? kit().demoEvents() : ((kit().athome(env) || {}).cal || {}).events) : null;
+    // the Agenda: the calendars picked for this widget on this TV (widgets.js agendaEvents)
+    var ae = o.kind === "agenda" && !env.demo ? kit().agendaEvents(o, env) : null;
+    var evs = o.kind === "agenda" ? (env.demo ? kit().demoEvents() : ae && ae.events) : null;
     if (o.kind === "agenda" && !evs) return B.setup(o, env);
     if (evs) return agendaDay(evs, env, todayCol);
-    S.body.appendChild(E("div", "cwd-row cwd-grow", "align-items:flex-start;margin-top:36px", [todayCol, E("div", "cwd-row", "margin-left:60px;align-items:flex-start", [monthGrid(y, m, d.getDate()), E("div", "", "width:56px"), monthGrid(m === 11 ? y + 1 : y, (m + 1) % 12, -1)])]));
+    S.body.appendChild(E("div", "cwd-row cwd-grow", "align-items:flex-start;margin-top:36px", [todayCol, E("div", "cwd-row", "margin-left:60px;align-items:flex-start", [monthGrid(y, m, d.getDate(), wsd), E("div", "", "width:56px"), monthGrid(m === 11 ? y + 1 : y, (m + 1) % 12, -1, wsd)])]));
   };
 
   // the Agenda: today's events on a timeline (6am to midnight, overlapping ones side by side), then
@@ -266,7 +292,7 @@
     S.body.appendChild(E("div", "cwd-row cwd-grow", "align-items:flex-start;margin-top:36px", [todayCol, right]));
   }
 
-  // things typed at home (Home settings, couch-tv Studio, At home), kept on this TV
+  // things typed at home (Home settings, Designs, At home), kept on this TV
   // Batteries (Batteries.kt through TVOS.batteries): every paired device that reports its charge, and on
   // Android 12 and newer the one question Android asks first ("Nearby devices")
   B.batteries = function (o, env) {
@@ -276,31 +302,42 @@
     if (!bt) return B.setup(o, env);
     S.body.appendChild(head("bolt", "Batteries", bt.need === "permission" ? "Android asks first" : "Paired with this TV by Bluetooth", "#30d158"));
     if (bt.need === "permission") {
-      S.body.appendChild(E("div", "cwd-col cwd-grow", "margin-top:30px", [E("div", "cwd-text", "", ["To read the charge of your remotes and controllers, Android asks once to let couch-tv see nearby devices. OK below shows Android's question: pick Allow."]),
+      S.body.appendChild(E("div", "cwd-col cwd-grow", "margin-top:30px", [E("div", "cwd-text", "", ["To read the charge of your remotes and controllers, Android asks once to let Couch TV see nearby devices. OK below shows Android's question: pick Allow."]),
         E("div", "cwd-row", "margin-top:30px", [F(btn("check", "Ask Android now"), function () { if (designerSays()) return; var ok = false; try { ok = T.askBatteries(); } catch (e) {} msg(ok ? "Already allowed. Close and open the widget again." : "Pick Allow on Android's question, then press Back."); }, "Allow")])]));
       return;
     }
     var icon = { remote: "remote", controller: "games", headphones: "headphones", keyboard: "edit", other: "bluetooth" };
+    // red below this widget's own "Red below" (5 to 50, else 20), as on the widget (widgets.js R.battery)
+    var low = +kit().setting(o, env, "low", 20);
+    if (!isFinite(low) || low < 5 || low > 50) low = 20;
     S.body.appendChild(E("div", "cwd-col cwd-grow", "margin-top:30px", (bt.devices || []).length ? bt.devices.map(function (x) {
-      return E("div", "cwd-tvrow", "", [E("span", "", "display:flex;align-items:center;gap:18px", [ic(icon[x.kind] || "bluetooth", 40), x.name]), E("b", x.level < 20 ? "cwd-tv-no" : "cwd-tv-yes", "", [x.level + "%"])]);
+      return E("div", "cwd-tvrow", "", [E("span", "", "display:flex;align-items:center;gap:18px", [ic(icon[x.kind] || "bluetooth", 40), x.name]), E("b", x.level < low ? "cwd-tv-no" : "cwd-tv-yes", "", [x.level + "%"])]);
     }) : [E("div", "cwd-text", "", ["No paired device reports its charge right now. Remotes and controllers that do show here by themselves."])]));
   };
   // Ask AI (ask.js): the last question and answer in full, then Ask and Set up, which open the Ask sheet
   B.ask = function (o, env) {
     var A = window.CouchAsk, st = A ? A.status() : { ready: false, by: "" };
+    // the Google Play build of the on-TV app has no Ask AI (ask.js off): say so, nothing to press
+    if (A && A.off && A.off() && !env.demo) { S.body.appendChild(head("mic", "Ask AI", "Not in this version of Couch TV")); return; }
     var v = env.demo ? { q: "How far away is the moon?", a: "About 384,000 kilometres. Light from it takes just over a second to reach us." } : A && A.last();
+    // Show the last answer: No keeps the question private here too; For an hour hides an older one
+    var keep = kit().setting(o, env, "keep");
+    if (v && !env.demo && !v.pending && (keep === "never" || (keep === "hour" && v.at && Date.now() - v.at > 3600000))) v = null;
     S.body.appendChild(head("mic", "Ask AI", env.demo ? "Answered by your own AI" : st.ready ? "Answered by " + st.by : "Pick who answers first: OK on Set up", "#5e5ce6"));
     var go = function (view) { return function () { if (designerSays()) return; close(true); if (A) A.open(view); }; };
     var row = E("div", "cwd-row", "margin-top:30px", [F(btn("mic", st.ready || env.demo ? "Ask a question" : "Set it up now"), go(st.ready ? "ask" : "setup"), "Ask"), F(btn("settings", "Set up"), go("setup"), "Set up")]);
     var words = v && v.q ? [label("You asked"), E("div", "cwd-text", "", [v.q]), label(v.pending ? "Thinking" : "The answer"), E("div", "cwd-note", "font-size:" + px(clamp(Math.sqrt(1500 * 420 / Math.max(10, String(v.err || v.a || "").length) / 1.6), 36, 84)), [v.pending ? "..." : v.err || v.a])]
       : [E("div", "cwd-text", "margin-top:30px", [st.ready ? "Ask anything. Type it, or press OK on the box and then the microphone on the TV's keyboard. Ask on the phone remote shows its answer here too."
-        : "Ask AI answers with the AI you pick: your own Claude, OpenAI, Gemini or another service with your own key kept on this TV, a model on a computer at home, or couch-tv at home. couch-tv never pays for it and never sees your key."])];
+        : "Ask AI answers with the AI you pick: your own Claude, OpenAI, Gemini or another service with your own key kept on this TV, a model on a home computer, or Couch TV at home. Couch TV never pays for it and never sees your key."])];
     S.body.appendChild(E("div", "cwd-col cwd-grow", "", words.concat([row])));
   };
   // From your AI (ask.js): the last message in full, and how to connect an agent (docs/AI-AGENT.md)
   B.agent = function (o, env) {
     var A = window.CouchAsk, m = env.demo ? { from: "Claude", text: "Your new autumn design is on its way. Press OK on the TV when it asks." } : A && A.message();
-    S.body.appendChild(head("phone", "From your AI", m ? "From " + m.from : "Your own AI agent can write to this TV", "#5e5ce6"));
+    // Show each message and Show who sent it, as on the widget: an older message waits quietly here too
+    var keep = kit().setting(o, env, "keep"), who = kit().setting(o, env, "who");
+    if (m && !env.demo && ((keep === "hour" && m.at && Date.now() - m.at > 3600000) || (keep === "day" && m.at && Date.now() - m.at > 86400000))) m = null;
+    S.body.appendChild(head("phone", "From your AI", m ? (who === false ? "From your AI" : tl("From {name}", { name: m.from })) : "Your own AI agent can write to this TV", "#5e5ce6"));
     if (m) S.body.appendChild(E("div", "cwd-note", "margin-top:24px;font-size:" + px(clamp(Math.sqrt(1500 * 300 / Math.max(10, m.text.length) / 1.6), 36, 84)), [m.text]));
     var C = window.CouchWidgetCaps, steps = C ? C.steps("agent", "android") : [];
     S.body.appendChild(E("div", "cwd-col cwd-grow", "margin-top:24px", [label("Connect your AI agent"),
@@ -309,7 +346,7 @@
   B.note = function (o, env) {
     var n = env.demo ? { text: "Dinner at 6. Feed Max!", from: "Mum" } : (kit().athome(env) || {}).note;
     if (!n || !n.text) return B.setup(o, env);
-    S.body.appendChild(head("edit", "Family note", n.from ? "From " + n.from : "Change it in Home settings, couch-tv Studio, At home", "#c79a00"));
+    S.body.appendChild(head("edit", "Family note", n.from ? tl("From {name}", { name: n.from }) : "Change it in Home settings, Designs, At home", "#c79a00"));
     var fs = clamp(Math.sqrt(1500 * 640 / Math.max(10, n.text.length) / 1.6), 44, 120);
     S.body.appendChild(E("div", "cwd-col cwd-grow cwd-center", "", [E("div", "cwd-note", "font-size:" + px(fs), [n.text])]));
   };
@@ -320,7 +357,7 @@
     S.body.appendChild(head("check", l.name, "", l.todo ? "#0a84ff" : "#30d158"));
     var sub = function () { S.subEl.textContent = (left() ? left() + " to do" : l.items.length ? "All done" : "Nothing on it yet") + (l.items.length ? ". OK ticks an item." : ""); };
     sub();
-    if (!l.items.length) { S.body.appendChild(E("div", "cwd-text", "margin-top:40px", ["Add to this list in Home settings, couch-tv Studio, At home, or with Type on the TV in the phone remote."])); return; }
+    if (!l.items.length) { S.body.appendChild(E("div", "cwd-text", "margin-top:40px", ["Add to this list in Home settings, Designs, At home, or with Type on the TV in the phone remote."])); return; }
     var grid = E("div", "cwd-grid", "align-content:flex-start;margin-top:30px");
     l.items.forEach(function (it, i) {
       var row = E("div", "cwd-item" + (it.done ? " done" : ""), "", [E("i", "cwd-box"), E("span", "cwd-ell", "", [it.t])]);
@@ -338,14 +375,14 @@
     var w = kit().wifiOf(env);
     if (!w || !w.ssid) return B.setup(o, env);
     S.body.appendChild(head("wifi", "Guest Wi-Fi", "Join from a phone", "#0a84ff"));
-    var code = kit().qrNode(w.qr, 600), nopass = w.sec === "nopass" || !w.pass;
+    var code = kit().qrNode(w.qr, 600), nopass = w.sec === "nopass" || !w.pass, hide = !nopass && !!code && kit().setting(o, env, "hidepass") === true;
     S.body.appendChild(E("div", "cwd-row cwd-grow", "margin-top:30px", [
       E("div", "cwd-qr", "", [code || E("div", "cwd-text", "color:#111", ["The name and password are too long for a code. Type them in instead."])]),
-      E("div", "cwd-col", "margin-left:80px;min-width:0;flex:1", [label("Network"), E("div", "cwd-big cwd-ell", "", [w.ssid]), label(nopass ? "No password" : "Password"), nopass ? null : E("div", "cwd-big cwd-ell", "", [w.pass]),
+      E("div", "cwd-col", "margin-left:80px;min-width:0;flex:1", [label("Network"), E("div", "cwd-big cwd-ell", "", [w.ssid]), label(nopass ? "No password" : hide ? "The password is in the code" : "Password"), nopass || hide ? null : E("div", "cwd-big cwd-ell", "", [w.pass]),
         label("How to join"), E("div", "cwd-list", "", ["Open the camera on your phone.", "Point it at the code.", "Tap the Wi-Fi note that comes up, then Join."].map(function (t, i) { return E("div", "cwd-li", "", [E("b", "", "flex:none;width:44px", [String(i + 1) + "."]), E("span", "", "", [t])]); }))])]));
   };
   B.guide = function (o, env) {
-    var g = kit().guideOf(env);
+    var g = kit().guidePart(o, env);
     if (!g.length) return B.setup(o, env);
     S.body.appendChild(head("info", "House guide", g.length === 1 ? "One thing to know" : g.length + " things to know", "#5e5ce6"));
     var w = g.length > 4 ? 520 : 800;
@@ -360,7 +397,7 @@
     S.body.appendChild(head("timer", "Screen time today", goal && CA ? CA.goalLine(s.minutes, goal) : "Time in apps on this TV today", "#5e5ce6"));
     var max = Math.max(1, (s.apps[0] || {}).minutes || 1);
     var left = E("div", "cwd-col", "width:560px", [E("div", "cwd-huge", "font-size:180px", [hm(s.minutes)]), goal ? E("div", "cwd-bar", "margin-top:30px", [E("b", "", "width:" + Math.round(clamp(s.minutes / goal, 0, 1) * 100) + "%;background:" + (s.minutes > goal ? "#ffd60a" : "#fff"))]) : null,
-      E("div", "cwd-small", "margin-top:20px", [goal ? "Daily goal " + hm(goal) + ", set in Home settings" : "Set a daily goal in Home settings, couch-tv Studio, At home"])]);
+      E("div", "cwd-small", "margin-top:20px", [goal ? tl("Daily goal {time}, set in Home settings", { time: hm(goal) }) : "Set a daily goal in Home settings, Designs, At home"])]);
     var right = E("div", "cwd-col", "margin-left:80px;flex:1;min-width:0", [label("By app")].concat(s.apps.length ? s.apps.slice(0, 7).map(function (a) {
       return F(E("div", "cwd-app-time", "", [E("span", "cwd-ell", "", [a.name || a.package || ""]), E("div", "cwd-bar", "", [E("b", "", "width:" + Math.round(a.minutes / max * 100) + "%")]), E("b", "", "", [hm(a.minutes)])]), null, a.name || a.package);
     }) : [E("div", "cwd-text", "", ["No apps yet today."])]));
@@ -368,48 +405,51 @@
   };
 
   // moon: tonight and the next four weeks
-  function moonSvg(f, s) {
+  function moonSvg(f, s, flip) {
     var S2 = kit().S, r = 44, waxing = f < 0.5, k = Math.cos(f * 2 * Math.PI), ex = Math.abs(k) * r;
     return kit().svg("0 0 100 100", s, s, [S2("circle", { cx: 50, cy: 50, r: r, fill: "#2a2a30" }),
-      S2("path", { d: "M50 6 A44 44 0 0 " + (waxing ? 1 : 0) + " 50 94 A" + ex + " 44 0 0 " + ((waxing ? k > 0 : k < 0) ? 0 : 1) + " 50 6Z", fill: "#f2efe6" })]);
+      S2("path", { d: "M50 6 A44 44 0 0 " + (waxing ? 1 : 0) + " 50 94 A" + ex + " 44 0 0 " + ((waxing ? k > 0 : k < 0) ? 0 : 1) + " 50 6Z", fill: "#f2efe6" })], flip ? "transform:scaleX(-1)" : "");
   }
-  B.moon = function () {
-    var d = kit().now(), m = kit().moon(d);
+  // the moon the way it looks from this home's half of the world (the widget's Moon seen from)
+  B.moon = function (o, env) {
+    var d = kit().now(), m = kit().moon(d), south = kit().moonSouth(o, env);
     S.body.appendChild(head("clear-night", "Moon", m.name + ". " + m.full, "#3a3a6a"));
     var grid = E("div", "cwd-mgrid cwd-moons", "");
     for (var i = 0; i < 28; i++) {
       var dd = new Date(d.getTime() + i * 86400000), mm = kit().moon(dd);
-      grid.appendChild(E("div", "cwd-col", "align-items:center", [moonSvg(mm.f, 74), E("div", "cwd-small", "", [i === 0 ? "Tonight" : kit().DAYS[dd.getDay()].slice(0, 3) + " " + dd.getDate()])]));
+      grid.appendChild(E("div", "cwd-col", "align-items:center", [moonSvg(mm.f, 74, south), E("div", "cwd-small", "", [i === 0 ? "Tonight" : (kit().dayName ? kit().dayName(dd.getDay(), true) : kit().DAYS[dd.getDay()].slice(0, 3)) + " " + dd.getDate()])]));
     }
-    S.body.appendChild(E("div", "cwd-row cwd-grow", "align-items:center", [E("div", "cwd-col", "align-items:center;width:520px", [moonSvg(m.f, 380), E("div", "cwd-big", "margin-top:24px", [m.name])]), grid]));
+    S.body.appendChild(E("div", "cwd-row cwd-grow", "align-items:center", [E("div", "cwd-col", "align-items:center;width:520px", [moonSvg(m.f, 380, south), E("div", "cwd-big", "margin-top:24px", [m.name])]), grid]));
   };
 
   // air quality and surf
   B.air = function (o, env) {
-    var a = kit().airOf(env);
+    var a = kit().airOf(env, o);
     if (!a) return B.setup(o, env);
-    var v = Math.round(a.aqi), band = kit().aqiBand(v);
-    var SAY = { Good: "A good day to open the windows.", Fair: "Fine for nearly everyone.", Moderate: "Sensitive people may want to take it easy outside.", Poor: "Keep windows shut if anyone has asthma.", "Very poor": "Best to stay inside and keep windows shut.", "Extremely poor": "Stay inside. Smoke or dust is likely." };
-    S.body.appendChild(head("wind", "Air quality", band[0] + ". " + (SAY[band[0]] || ""), band[1]));
-    var hs = a.hourly || [], top = Math.max.apply(null, hs.concat([40]));
-    S.body.appendChild(E("div", "cwd-row cwd-grow", "align-items:center", [E("div", "cwd-col", "width:560px", [E("div", "cwd-huge", "color:" + band[1], [String(v)]), E("div", "cwd-big", "", [band[0]]), E("div", "cwd-small", "margin-top:12px", ["European air quality index, from Open-Meteo"])]),
-      hs.length ? E("div", "cwd-col cwd-grow", "", [label("Next 12 hours"), E("div", "cwd-bars", "", hs.slice(0, 12).map(function (x) { return E("i", "", "height:" + Math.round(clamp(x / top, 0.06, 1) * 100) + "%;background:" + kit().aqiBand(x)[1]); })),
+    var q = kit().airIn(a, o, env), v = q.v, band = q.band;
+    var SAY = { "Unhealthy for some": "Anyone with asthma or a heart or lung problem should take it easy outside.", Unhealthy: "Everyone should take it easy outside.", "Very unhealthy": "Best to stay inside and keep windows shut.", Hazardous: "Stay inside. Smoke or dust is likely.", Good: "A good day to open the windows.", Fair: "Fine for nearly everyone.", Moderate: "Sensitive people may want to take it easy outside.", Poor: "Keep windows shut if anyone has asthma.", "Very poor": "Best to stay inside and keep windows shut.", "Extremely poor": "Stay inside. Smoke or dust is likely." };
+    S.body.appendChild(head("wind", kit().wxHead(o, env, "Air quality"), wl(band[0]) + ". " + wl(SAY[band[0]] || ""), band[1]));
+    var hs = q.hourly, top = Math.max.apply(null, hs.concat([q.top]));
+    S.body.appendChild(E("div", "cwd-row cwd-grow", "align-items:center", [E("div", "cwd-col", "width:560px", [E("div", "cwd-huge", "color:" + band[1], [String(v)]), E("div", "cwd-big", "", [band[0]]), E("div", "cwd-small", "margin-top:12px", [tl("{index}, from Open-Meteo", { index: wl(q.name) })])]),
+      hs.length ? E("div", "cwd-col cwd-grow", "", [label("Next 12 hours"), E("div", "cwd-bars", "", hs.slice(0, 12).map(function (x) { return E("i", "", "height:" + Math.round(clamp(x / top, 0.06, 1) * 100) + "%;background:" + q.bandOf(x)[1]); })),
         E("div", "cwd-row cwd-small", "justify-content:space-between;margin-top:10px", [E("span", "", "", ["Now"]), E("span", "", "", ["+6h"]), E("span", "", "", ["+12h"])])]) : null]));
+    S.body.appendChild(credit());
   };
   B.surf = function (o, env) {
-    var m = kit().surfOf(env);
+    var m = kit().surfOf(env, o);
     if (!m || !isFinite(m.wave)) return B.setup(o, env);
-    var place = op(o).label || (env.demo ? "The point" : (kit().dataOf(env).place || {}).name || "Surf");
-    S.body.appendChild(head("wind", place, kit().compass(m.dir) + " swell, " + Math.round(m.period || 0) + " seconds" + (isFinite(m.wind) ? ". Wind " + kit().compass(m.windDir) + " " + Math.round(m.wind) + " km/h" : ""), "#0a6e8a"));
+    var place = kit().surfPlace(o, env), u = env.demo ? { h: "m", w: "kmh" } : kit().surfUnits(o, env);
+    S.body.appendChild(head("wind", place, tl(isFinite(m.wind) ? "{dir} swell, {n} seconds. Wind {wdir} {wind}" : "{dir} swell, {n} seconds", { dir: m.dir == null ? "" : kit().compass(m.dir), n: Math.round(m.period || 0), wdir: kit().compass(m.windDir), wind: kit().windIn(m.wind, u) }), "#0a6e8a"));
     var hs = m.hourly || [], top = Math.max.apply(null, hs.concat([0.5]));
-    S.body.appendChild(E("div", "cwd-row cwd-grow", "align-items:center", [E("div", "cwd-col", "width:560px", [E("div", "cwd-huge", "", [String(Math.round(m.wave * 10) / 10), E("span", "", "font-size:.36em", [" m"])]), E("div", "cwd-big", "", ["Swell now"])]),
+    S.body.appendChild(E("div", "cwd-row cwd-grow", "align-items:center", [E("div", "cwd-col", "width:560px", [E("div", "cwd-huge", "", [kit().waveIn(m.wave, u), E("span", "", "font-size:.36em", [u.h === "ft" ? " ft" : " m"])]), E("div", "cwd-big", "", ["Swell now"])]),
       hs.length ? E("div", "cwd-col cwd-grow", "", [label("Swell, the next 12 hours"), E("div", "cwd-bars", "", hs.slice(0, 12).map(function (x) { return E("i", "", "height:" + Math.round(clamp(x / top, 0.06, 1) * 100) + "%;background:#64d2ff"); })),
         E("div", "cwd-row cwd-small", "justify-content:space-between;margin-top:10px", [E("span", "", "", ["Now"]), E("span", "", "", ["+6h"]), E("span", "", "", ["+12h"])])]) : null]));
+    S.body.appendChild(credit());
   };
 
   // photos: full screen, Left and Right flick, OK pauses
   B.photos = function (o, env) {
-    var q = op(o), mem = o.kind === "memory" ? (env.demo ? [{ src: kit().demoImg("camp"), years: 2 }] : (((kit().athome(env) || {}).memory || {}).today || [])) : null;
+    var q = op(o), mem = o.kind === "memory" ? (env.demo ? [{ src: kit().demoImg("camp"), years: 2 }] : kit().memoryList(o, env)) : null;
     var list = mem ? mem.map(function (m) { return m.src; }) : q.image ? [q.image] : (o.kind === "artframe" && env.demo ? [kit().demoImg("art")] : kit().photos(env, o));
     if (!list.length) return B.setup(o, env);
     S.full = true;
@@ -421,7 +461,7 @@
     set(a, list[at]); b.style.opacity = "0";
     var dots = E("div", "cwd-pdots"), count = E("div", "cwd-pcount"), pause = E("div", "cwd-pchip", "", [ic("pause", 30, "#fff", "solid"), "Paused"]);
     var paint = function () {
-      count.textContent = (mem ? "On this day, " + kit().yearsAgo(mem[at].years).toLowerCase() + (list.length > 1 ? ". " : "") : "") + (list.length > 1 || !mem ? (at + 1) + " of " + list.length : "");
+      count.textContent = (mem ? tl(kit().setting(o, env, "ago") === false ? (kit().memoryWeek(o, env) ? "This week, in {year}" : "On this day, in {year}") : (kit().memoryWeek(o, env) ? "This week, {ago}" : "On this day, {ago}"), { year: mem[at].year || kit().now().getFullYear() - mem[at].years, ago: kit().yearsAgo(mem[at].years).toLowerCase() }) + (list.length > 1 ? ". " : "") : "") + (list.length > 1 || !mem ? tl("{n} of {total}", { n: at + 1, total: list.length }) : "");
       while (dots.firstChild) dots.removeChild(dots.firstChild);
       for (var i = 0; i < Math.min(list.length, 12); i++) dots.appendChild(E("i", i === at % 12 ? "on" : ""));
       pause.style.opacity = paused ? "1" : "0";
@@ -442,16 +482,17 @@
 
   // keep watching: every show on the go, Resume on each
   B.keep = function (o, env) {
-    var list = kit().shows(env).slice(0, 10);
+    // the widget's own "Whose shows" (a person on this TV), else whoever is watching
+    var list = (kit().showsFor ? kit().showsFor(o, env) : kit().shows(env)).slice(0, 10);
     if (!list.length) return B.setup(o, env);
-    var d = kit().dataOf(env), who = (d.people || []).filter(function (p) { return p.id === d.who; })[0];
-    S.body.appendChild(head("tv", "Keep watching", (env.demo ? "Alex" : who ? who.name : "") ? "What " + (env.demo ? "Alex" : who.name) + " has on the go" : "What you have on the go", "#e50914"));
+    var d = kit().dataOf(env), who = (d.people || []).filter(function (p) { return p.id === d.who; })[0], name = env.demo ? "Alex" : list[0].owner || (who ? who.name : "");
+    S.body.appendChild(head("tv", "Keep watching", name ? tl("What {name} has on the go", { name: name }) : "What you have on the go", "#e50914"));
     var track = E("div", "cwd-track");
     list.forEach(function (s, i) {
       track.appendChild(F(E("div", "cwd-show", "", [E("div", "cwd-art", s.art ? "background-image:" + kit().cssImg(s.art) : "", [s.progress ? E("div", "cwd-prog", "", [E("b", "", "width:" + Math.round(s.progress * 100) + "%")]) : null,
         E("div", "cwd-resume", "", [ic("play", 30, "#111", "solid"), "Resume"])]),
         E("div", "cwd-row", "margin-top:18px", [s.app ? kit().appIcon(s.app, 44, env) : null, E("div", "cwd-col", "margin-left:14px;min-width:0", [E("div", "cwd-mid cwd-ell", "", [s.title]), E("div", "cwd-small cwd-ell", "", [s.sub || ""])])])]),
-        function () { if (designerSays()) return; S.api.act("show", String(i)); close(true); }, s.title));
+        function () { if (designerSays()) return; S.api.act(s.act || "show", s.arg !== undefined ? s.arg : String(i)); close(true); }, s.title));
     });
     S.body.appendChild(E("div", "cwd-scroll cwd-grow", "margin-top:40px", [track]));
     var at = S.from ? parseInt(S.from.getAttribute("data-at") || "0", 10) : 0;
@@ -517,7 +558,7 @@
   B.aircon = function (o, env) {
     var demo = !!env.demo, rooms = JSON.parse(JSON.stringify(kit().roomsOf(env)));
     if (!rooms.length) return B.setup(o, env);
-    var ent = op(o).entity, sel = Math.max(0, rooms.map(function (r) { return r.entity; }).indexOf(ent)), joinT = null;
+    var ent = kit().setting(o, env, "entity"), sel = Math.max(0, rooms.map(function (r) { return r.entity; }).indexOf(ent)), joinT = null;
     S.body.appendChild(head("aircon", "Aircon", "", "#0a84ff"));
     var main = E("div", "cwd-col", "width:780px"), side = E("div", "cwd-col cwd-grow", "margin-left:40px;min-width:0");
     S.body.appendChild(E("div", "cwd-row cwd-grow", "align-items:stretch;margin-top:26px", [main, side]));
@@ -544,7 +585,7 @@
       var nOn = rooms.filter(kit().roomOn).length;
       S.subEl.textContent = nOn + " of " + rooms.length + (rooms.length === 1 ? " room on" : " rooms on");
       var canSet = r.ok !== false && r.target != null;
-      var dialBox = kit().dial(400, canSet ? r.target : 22, r.current != null ? Math.round(r.current * 10) / 10 : null);
+      var dialBox = kit().dial(400, canSet ? r.target : (kit().roomUnit(r) === "f" ? 72 : 22), r.current != null ? Math.round(r.current * 10) / 10 : null, r, env);
       if (!on) dialBox.style.opacity = "0.5";
       main.appendChild(E("div", "cwd-row", "", [E("div", "cwd-col cwd-grow", "min-width:0", [E("div", "cwd-big cwd-ell", "", [r.name]), E("div", "cwd-mid", "color:" + (on ? col : "rgba(255,255,255,.6)"), [r.ok === false ? "Not answering" : on ? kit().roomMode(r) + (r.action === "cooling" ? ", cooling" : r.action === "heating" ? ", heating" : "") : "Off"])]),
         F(btn("power", on ? "On" : "Off", on ? "cwd-on" : ""), function () {
@@ -557,7 +598,7 @@
           if (!canSet) return msg(r.ok === false ? r.name + " is not answering" : "This room has no set temperature");
           r.target = clamp(Math.round((r.target + d * (r.step || 0.5)) * 10) / 10, r.min || 16, r.max || 30); draw();
           clearTimeout(joinT);
-          joinT = setTimeout(function () { joinT = null; sendHa("temp", r, r.target, r.name + " to " + r.target + "°"); }, 700);
+          joinT = setTimeout(function () { joinT = null; sendHa("temp", r, r.target, r.name + " to " + kit().tdeg(r.target, r, env)); }, 700);
         };
       };
       main.appendChild(E("div", "cwd-row cwd-grow", "align-items:center;justify-content:center", [F(btn("minus", "", "cwd-round"), nudge(-1), "Cooler"), E("div", "cwd-dial", "margin:0 40px", [dialBox]), F(btn("plus", "", "cwd-round"), nudge(1), "Warmer")]));
@@ -566,8 +607,8 @@
       side.appendChild(label("Rooms"));
       side.appendChild(E("div", "cwd-grid", "", rooms.slice(0, 9).map(function (z, i) {
         var zo = kit().roomOn(z);
-        return F(E("div", "cwd-room" + (i === sel ? " sel" : "") + (zo ? " on" : ""), "width:" + rw + "px;height:" + (big ? 116 : 136) + "px", [E("div", "cwd-row", "justify-content:space-between", [E("span", "cwd-mid cwd-ell", "min-width:0", [z.name]), E("span", "cwd-big", "font-size:" + (big ? 40 : 48) + "px;margin-left:10px", [kit().tdeg(z.current)])]),
-          E("div", "cwd-small cwd-ell", "color:" + (zo ? kit().MODE_COL[z.state] || "#64d2ff" : "rgba(255,255,255,.6)"), [z.ok === false ? "Not answering" : zo ? kit().roomMode(z) + " to " + kit().tdeg(z.target) : "Off"])]), function () { sel = i; draw(); }, "Room " + z.name);
+        return F(E("div", "cwd-room" + (i === sel ? " sel" : "") + (zo ? " on" : ""), "width:" + rw + "px;height:" + (big ? 116 : 136) + "px", [E("div", "cwd-row", "justify-content:space-between", [E("span", "cwd-mid cwd-ell", "min-width:0", [z.name]), E("span", "cwd-big", "font-size:" + (big ? 40 : 48) + "px;margin-left:10px", [kit().tdeg(z.current, z, env)])]),
+          E("div", "cwd-small cwd-ell", "color:" + (zo ? kit().MODE_COL[z.state] || "#64d2ff" : "rgba(255,255,255,.6)"), [z.ok === false ? "Not answering" : zo ? tl("{mode} to {temp}", { mode: wl(kit().roomMode(z)), temp: kit().tdeg(z.target, z, env) }) : "Off"])]), function () { sel = i; draw(); }, "Room " + z.name);
       })));
       var modes = (r.modes || []).filter(function (x) { return x !== "off"; });
       if (modes.length) {
@@ -597,7 +638,7 @@
 
   // scenes: every scene as a big button
   B.scenes = function (o, env) {
-    var list = kit().scenesOf(env);
+    var list = kit().scenesOf(env, o);   // the scenes picked for this widget on this TV, else every one
     if (!list.length) return B.setup(o, env);
     S.body.appendChild(head("favourite", op(o).label || "Scenes", list.length + (list.length === 1 ? " scene" : " scenes") + ". OK runs one", "#bf5af2"));
     S.body.appendChild(E("div", "cwd-grid cwd-grow", "align-content:flex-start;margin-top:36px", list.slice(0, 16).map(function (x) {
@@ -610,10 +651,11 @@
     })));
   };
 
-  // Control Centre, camera, headlines and scores: couch-tv Studio shows what they will look like; a TV
+  // Control Centre, camera, headlines and scores: Couch TV Studio shows what they will look like; a TV
   // shows their setup record (widgets.js draws them empty there, which opens B.setup)
   // Control Centre: every switch big. OK switches one through the launcher (HomeAssistant.kt "set"),
-  // which only switches what config.json names and never opens a garage door, gate or door.
+  // which only switches what config.json names. A lock, alarm, garage door, gate or door never shows at
+  // all (widgets.js houseSafe); one that somehow reached this list is still never switched.
   B.controls = function (o, env) {
     var H = kit().ha, demo = !!env.demo, info = H.haOf(env).info || {};
     if (!demo && !(info.controls && info.controls.length)) return B.setup(o, env);
@@ -627,9 +669,7 @@
       S.readAt = Date.now();
       S.api.ha("controls").then(function (r) {
         if (!S || !r || !r.ok) { if (S && !items) { items = []; draw(); msg("Home Assistant is not answering"); } return; }
-        var want = op(o).switches, l = r.controls || [];
-        if (want && want.length) l = want.map(function (e) { return l.filter(function (c) { return c.entity === e; })[0]; }).filter(Boolean);
-        items = l; draw();
+        items = H.pickedOf(H.houseSafe(r.controls || []), kit().setting(o, env, "switches")); draw();
       });
     };
     var draw = function () {
@@ -640,10 +680,10 @@
       (items || []).slice(0, 16).forEach(function (c) {
         var on = c.ok !== false && c.on;
         grid.appendChild(F(E("div", "cwd-toggle" + (on ? " on" : ""), c.ok === false ? "opacity:.6" : "", [E("div", "cwd-sic", "", [ic(c.icon || H.ctlIcon(c), 44, on ? "#1a1406" : "#fff", "solid")]),
-          E("div", "cwd-mid cwd-ell", "", [c.name || ""]), E("div", "cwd-small", "", [c.blocked ? H.ctlWord(c) + ", not from the TV" : H.ctlWord(c)])]), function () {
+          E("div", "cwd-mid cwd-ell", "", [c.name || ""]), E("div", "cwd-small", "", [H.ctlWord(c)])]), function () {
           if (demo || S.api.designer) { c.on = !c.on; designerSays(); draw(); return; }
           if (c.ok === false) return msg(c.name + " is not answering");
-          if (c.blocked) return msg("Garage doors, gates and doors are never opened from the TV");
+          if (c.blocked) return msg("Locks, alarms, garage doors and gates never open from Couch TV");
           if (!S.api.ha) return msg("Home Assistant is not set up on this TV");
           var want = c.kind === "cover" ? (c.on ? "close" : "open") : (c.on ? "off" : "on");
           c.on = !c.on; draw();
@@ -674,8 +714,11 @@
     S.full = true;
     S.panel.classList.add("cwd-photos");
     var bell = ha.bell, ring = !demo && door && ha.ring && bell && bell.kept ? ha.ring : null;
-    var cams = door ? [{ entity: "doorbell", name: op(o).label || (bell && bell.name) || "Front door" }] : (demo ? [{ entity: "camera.backyard", name: op(o).label || "Backyard" }, { entity: "camera.driveway", name: "Driveway" }] : info.cameras);
-    var sel = Math.max(0, cams.map(function (c) { return c.entity; }).indexOf(op(o).cam)), showRing = !!(ring || (demo && door));
+    var cams = door ? [{ entity: "doorbell", name: kit().devName(o, env, null, bell && bell.name, "Doorbell") }] : (demo ? [{ entity: "camera.backyard", name: op(o).label || "Backyard" }, { entity: "camera.driveway", name: "Driveway" }] : info.cameras);
+    var want = kit().setting(o, env, "cam"), sel = Math.max(0, cams.map(function (c) { return c.entity; }).indexOf(want));
+    // the camera this widget shows goes by its own heading (the same as the widget's); the rest by their names
+    if (!door && !demo && cams[sel] && cams[sel].entity === want) { cams = cams.slice(); var c0 = {}; for (var ck in cams[sel]) c0[ck] = cams[sel][ck]; c0.name = kit().devName(o, env, "cam", c0.name, "Camera"); cams[sel] = c0; }
+    var showRing = !!(ring || (demo && door));
     var img = E("div", "cwd-pimg", "background-size:contain;background-color:#000"), nameEl = E("b", "", "font-weight:680"), subEl = E("span");
     var stage = E("div", "cwd-pstage", "", [E("div", "cwd-photo", "", [img]), E("div", "cwd-live", "", [E("i"), nameEl, subEl])]);
     S.body.appendChild(stage);
@@ -718,7 +761,7 @@
   B.energy = function (o, env) {
     var H = kit().ha, ha = H.haOf(env), demo = !!env.demo, e = ha.energy;
     if (!demo && !(ha.info || {}).energy) return B.setup(o, env);
-    var name = op(o).label || (e && e.name) || "Energy";
+    var name = kit().devName(o, env, null, e && e.name, "Energy");
     S.body.appendChild(head("bolt", name + " today", "", "#ff9f0a"));
     var body = E("div", "cwd-col cwd-grow", "margin-top:30px");
     S.body.appendChild(body);
@@ -761,11 +804,11 @@
     var draw = function () {
       while (body.firstChild) body.removeChild(body.firstChild);
       var s = (sensors || []).filter(function (x) { return x.entity === sel; })[0], n = names.filter(function (x) { return x.entity === sel; })[0] || {};
-      var label = (sel === first.entity && op(o).label) || (s && s.name) || n.name || "Sensor";
+      var label = (sel === first.entity && first.name) || (s && s.name) || n.name || "Sensor";
       S.panel.querySelector(".cwd-title").textContent = label;
       if (!sensors) { S.subEl.textContent = "Checking Home Assistant"; return; }
       if (!s || s.ok === false) { S.subEl.textContent = "Home Assistant is not answering"; return; }
-      var t = H.sensorText(s), h = hist[sel], pts = h && h.points, got = (pts || []).filter(function (v) { return v != null; });
+      var t = H.sensorText(s, env), h = hist[sel], pts = h && h.points && h.points.map(function (v) { return v == null ? v : kit().sensorConv(v, s, env); }), got = (pts || []).filter(function (v) { return v != null; });
       S.subEl.textContent = got.length >= 2 ? "Last 24 hours: low " + Math.round(Math.min.apply(null, got) * 10) / 10 + ", high " + Math.round(Math.max.apply(null, got) * 10) / 10 : "Last 24 hours";
       body.appendChild(E("div", "cwd-row", "align-items:baseline", [E("div", "cwd-huge", "", [t[0]]), t[1] ? E("div", "cwd-big", "margin-left:16px;opacity:.75", [t[1]]) : null]));
       body.appendChild(E("div", "cwd-grow", "margin-top:24px;display:flex;align-items:flex-end", [h ? H.spark(pts, 1630, 300, "#64d2ff") : E("div", "cwd-mid", "opacity:.7", ["Reading the last 24 hours"])]));
@@ -819,9 +862,7 @@
       S.api.ha("speakers").then(function (r) {
         if (!S || joinT) return;
         if (!r || !r.ok) { if (!list) { list = []; draw(); msg("Home Assistant is not answering"); } return; }
-        var want = op(o).players, l = r.speakers || [];
-        if (want && want.length) l = want.map(function (e) { return l.filter(function (c) { return c.entity === e; })[0]; }).filter(Boolean);
-        list = l; draw();
+        list = H.pickedOf((r.speakers || []).filter(function (c) { return c && c.entity; }), kit().setting(o, env, "players")); draw();
       });
     };
     var draw = function () {
@@ -891,10 +932,10 @@
   function webRec(env, src, id) { var f = wk().webOf; return f ? f(env, src, id) : null; }
   function updated(rec) { if (!rec || !rec.at) return ""; var d = new Date(rec.at), h = d.getHours(), m = d.getMinutes(); return "Updated " + ((h % 12) || 12) + ":" + (m < 10 ? "0" : "") + m + (h < 12 ? "am" : "pm") + (rec.stale ? ", not lately" : ""); }
   B.news = function (o, env) {
-    var WW = window.CouchWidgetWeb, q = op(o), feed = WW ? WW.feedOf(q.feed) : "abc", name = q.label || (WW ? WW.FEEDS[feed].name : "Headlines"), rec = null, items;
+    var WW = window.CouchWidgetWeb, q = op(o), feed = WW ? WW.feedOf(kit().feedFor(kit().setting(o, env, "feed"), env)) : "abc", src = WW ? WW.FEEDS[feed].name : "", name = kit().webName(q.label, src, WW ? WW.FEEDS : null) || src || "Headlines", rec = null, items;
     if (env.demo) items = (wk().DEMO_NEWS || []).map(function (x) { return { title: x[0], at: Date.now() - x[1] * 3600000 }; });
     else { rec = webRec(env, "news", feed); if (!rec || !rec.ok || !rec.v || !rec.v.length) return B.setup(o, env); items = rec.v; }
-    S.body.appendChild(head("info", name, rec ? updated(rec) : "The latest headlines", "#ff453a"));
+    S.body.appendChild(head("info", name, [name !== src && src ? tl("From {name}", { name: src }) : "", rec ? updated(rec) : ""].filter(Boolean).join(". ") || "The latest headlines", "#ff453a"));
     // two columns of three: six headlines, each on three lines at most
     S.body.appendChild(E("div", "cwd-grid cwd-grow", "align-content:flex-start;margin-top:30px", items.slice(0, 6).map(function (x) {
       return F(E("div", "cwd-news", "width:780px", [x.at ? E("div", "cwd-small", "color:#ff453a;font-weight:700", [wk().agoOf ? wk().agoOf(x.at) : ""]) : null,
@@ -903,12 +944,17 @@
   };
   // the round: every game with its score, in the order it is played (up to 12; a line says how many more)
   B.sports = function (o, env) {
-    var WW = window.CouchWidgetWeb, q = op(o), id = WW ? WW.leagueOf(q.league) : "nrl", rec = null, v;
+    var WW = window.CouchWidgetWeb, q = op(o), id = WW ? WW.leagueOf(kit().setting(o, env, "league")) : "nrl", rec = null, v;
     if (env.demo) v = wk().demoScores ? wk().demoScores() : { games: [] };
     else { rec = webRec(env, "sports", id); if (!rec || !rec.ok || !rec.v || !rec.v.games || !rec.v.games.length) return B.setup(o, env); v = rec.v; }
-    var games = v.games.slice().sort(function (a, b) { return a.at - b.at; }), shown = games.slice(0, 12), n = shown.length;
+    // Which games: only my team, or live games and my team, as the widget shows them (else the whole round)
+    var mode = kit().setting(o, env, "games"), team = kit().setting(o, env, "team");
+    var games = (WW && mode && mode !== "all" && team ? WW.scoreFilter(v.games, team, mode, Date.now()) : v.games).slice().sort(function (a, b) { return a.at - b.at; });
+    if (!games.length) games = v.games.slice().sort(function (a, b) { return a.at - b.at; });
+    var shown = games.slice(0, 12), n = shown.length;
     var cols = n <= 6 ? 2 : n <= 9 ? 3 : 4, w = Math.floor((1600 - (cols - 1) * 24) / cols), big = cols <= 2 ? 56 : cols === 3 ? 48 : 40, mid = cols <= 3 ? 34 : 29;
-    S.body.appendChild(head("tv", q.label || v.league || "Scores", [v.round, rec ? updated(rec) : ""].filter(Boolean).join(". ") || "This round", "#0a6e8a"));
+    var real = WW && WW.LEAGUES && WW.LEAGUES[id] ? WW.LEAGUES[id].name : v.league;
+    S.body.appendChild(head("tv", kit().webName(q.label, real, WW && WW.LEAGUES) || real || "Scores", [v.round, rec ? updated(rec) : ""].filter(Boolean).join(". ") || "This round", "#0a6e8a"));
     var team = function (t, g) {
       var dim = g.state === "post" && !t.win;
       return E("div", "cwd-row", "justify-content:space-between;min-width:0", [E("div", "cwd-row", "min-width:0", [E("i", "cwd-dot", "flex:none;background:" + (t.colour || "rgba(255,255,255,.35)")), E("span", "cwd-mid cwd-ell", "font-size:" + mid + "px;font-weight:" + (g.state === "post" && t.win ? 760 : 560) + ";opacity:" + (dim ? 0.7 : 1), [t.name || t.abbr])]),
@@ -923,15 +969,16 @@
   };
   // every pick, from what everyone at home has on the go on this TV; Resume plays it
   B.picks = function (o, env) {
-    var list = wk().picksOf ? wk().picksOf(env) : [];
+    var list = wk().picksFor ? wk().picksFor(o, env) : wk().picksOf ? wk().picksOf(env) : [];
     if (!list.length) return B.setup(o, env);
-    S.body.appendChild(head("favourite", op(o).label || "Picks for you", "From what everyone at home is watching on this TV", "#bf5af2"));
+    var mix = kit().setting ? kit().setting(o, env, "mix") : null;
+    S.body.appendChild(head("favourite", op(o).label || "Picks for you", mix === "mine" ? "Shows you left part way" : mix === "others" ? "What others at home are watching" : "From what everyone at home is watching on this TV", "#bf5af2"));
     var track = E("div", "cwd-track");
     list.forEach(function (s, i) {
       track.appendChild(F(E("div", "cwd-show", "", [E("div", "cwd-art", s.art ? "background-image:" + kit().cssImg(s.art) : "", [s.progress ? E("div", "cwd-prog", "", [E("b", "", "width:" + Math.round(s.progress * 100) + "%")]) : null,
         E("div", "cwd-resume", "", [ic("play", 30, "#111", "solid"), "Play"])]),
         E("div", "cwd-row", "margin-top:18px", [s.app ? kit().appIcon(s.app, 44, env) : null, E("div", "cwd-col", "margin-left:14px;min-width:0", [E("div", "cwd-mid", "overflow-wrap:anywhere", [s.title]), E("div", "cwd-small", "", [s.why || ""])])])]),
-        function () { if (designerSays()) return; S.api.act("pick", String(i)); close(true); }, s.title));
+        function () { if (designerSays()) return; S.api.act("pick", String(s.at !== undefined ? s.at : i)); close(true); }, s.title));
     });
     S.body.appendChild(E("div", "cwd-scroll cwd-grow", "margin-top:40px", [track]));
   };
@@ -944,13 +991,13 @@
     var tile = function (name, big, sub) { return F(E("div", "cwd-game", "width:520px", [E("div", "cwd-small", "", [name]), E("div", "cwd-big", "font-size:72px;margin-top:8px", [big]), sub ? E("div", "cwd-small", "margin-top:6px", [sub]) : null]), null, name); };
     var lb = V.leave ? V.leave.replace(/^(.*?)(leave by|Leave by) /, "") : "";
     S.body.appendChild(E("div", "cwd-grid", "align-content:flex-start;margin-top:30px", [tile("Drive", V.minutes + " min", "Without traffic"), tile("Distance", V.km + " km", "By road"),
-      tile(V.leave ? (/^Leave/.test(V.leave) ? "Leave by" : V.leave.replace(/, leave by .*/, "") + ", leave by") : "Leave by", lb || "Not set", V.leave ? (V.arrive ? "To arrive by " + V.arrive : "") : "Set an arrive by time in couch-tv Studio")]));
+      tile(V.leave ? (/^Leave/.test(V.leave) ? "Leave by" : tl("{day}, leave by", { day: wl(V.leave.replace(/, leave by .*/, "")) })) : "Leave by", lb || "Not set", V.leave ? (V.arrive ? tl("To arrive by {time}", { time: V.arrive }) : "") : "Set an arrive by time in this widget's settings")]));
     S.body.appendChild(E("div", "cwd-grow"));
     S.body.appendChild(E("div", "cwd-small", "", ["Route by OSRM from OpenStreetMap. Map data © OpenStreetMap contributors."]));
   };
   // the watchlist with today's line for each (the day's prices, from the first trade to now)
   B.stocks = function (o, env) {
-    var WW = window.CouchWidgetWeb, q = op(o), list = WW ? WW.tickersOf(q.tickers) : [], rec = null, quotes;
+    var WW = window.CouchWidgetWeb, q = op(o), list = WW ? WW.tickersOf(kit().setting(o, env, "tickers")) : [], rec = null, quotes;
     if (env.demo) quotes = list.map(function (s, i) { return wk().demoQuote(s, i); });
     else {
       rec = webRec(env, "stocks", list.join(","));

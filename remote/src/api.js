@@ -13,6 +13,7 @@ export class ApiError extends Error {
 // nothing is added to any call, exactly as before more than one TV existed.
 let tvId = null;
 export const setTvId = (id) => { tvId = id || null; };
+export const getTvId = () => tvId;
 const withTv = (path) => (tvId ? `${path}${path.includes('?') ? '&' : '?'}tv=${encodeURIComponent(tvId)}` : path);
 
 let apiKey = null;
@@ -76,8 +77,8 @@ async function call(method, path, body, ms = 12000) {
     });
   } catch (e) {
     throw e.name === 'AbortError'
-      ? new ApiError('The bridge is taking too long. Try again.', 408, 'err_bridge_timeout')
-      : new ApiError('Can’t reach the bridge', 0, 'err_bridge_unreachable');
+      ? new ApiError('The home computer is taking too long. Try again.', 408, 'err_bridge_timeout')
+      : new ApiError('Can’t reach the home computer', 0, 'err_bridge_unreachable');
   } finally {
     clearTimeout(t);
   }
@@ -127,6 +128,7 @@ export const api = {
   savePeople: (people) => call('POST', '/api/people', { people }),
   settings: () => call('GET', '/api/settings'),   // the TV home's Home settings (its language)
   health: () => call('GET', '/api/health'),
+  athome: () => call('GET', '/api/athome', null, 15000),   // the TV home's At home view: the design's widgets with settings
   pair: (key) => call('POST', '/api/pair', { key }),
   find: (title) => call('GET', `/api/find?title=${encodeURIComponent(title)}`, null, 20000),
   // kids mode: the shelves, and changes to them with the parent PIN (bridge/API.md)
@@ -136,6 +138,10 @@ export const api = {
   guest: () => call('GET', '/api/guest', null, 15000),
   setGuest: (name) => call('POST', '/api/guest', { name }, 15000),
   setStayLink: (url) => call('POST', '/api/guest', { stay_url: url }, 15000),
+  // a couch-tv Studio design code for the TV home (designSend.js); the TV asks "Use this design?" first
+  sendDesign: (code) => call('POST', '/api/say/design', { code, from: 'phone' }),
+  // the next or the previous scene on the TV home (g34); the home reads it from /api/say
+  scene: (pick) => call('POST', '/api/say/scene', { pick }),
 };
 
 // Live TV state: server-sent events, with a slow poll as the fallback when the stream drops.

@@ -5,8 +5,8 @@
 //   - "backgrounds/<name>.mp4" or ".webm": a file on this TV (the built in loops below, or the
 //     household's own in backgrounds/mine/);
 //   - "store:<id>": a video kept by the design store this TV already uses (config.json
-//     design_store, else couch-tv Studio's own). The TV asks only that store, by id, never a link;
-//   - "blob:<this page>/<uuid>": only in couch-tv Studio's own preview (?designer=1), for a clip
+//     design_store, else Couch TV Studio's own). The TV asks only that store, by id, never a link;
+//   - "blob:<this page>/<uuid>": only in Couch TV Studio's own preview (?designer=1), for a clip
 //     picked on that computer and not uploaded yet.
 // Anything else (http, https, data:, //host, ../) is dropped, like a photo's link.
 //
@@ -164,23 +164,97 @@
   }
 
   // ---------------------------------------------------------------- what this TV should show
-  // env: { lighter, powerSave, saveData, reducedMotion, memory (GB, navigator.deviceMemory),
+  // env: { stillChosen, lighter, powerSave, saveData, reducedMotion, memory (GB, navigator.deviceMemory),
   //        screenPx (screen width in device pixels), slow (this TV dropped frames last week), designer }
   // "still": the still picture only; "720" or "1080": the copy to ask the store for.
   function tier(env) {
     env = env || {};
     if (env.designer) return "1080";
-    if (env.lighter) return { tier: "still", why: "Lighter home is on" };
+    // the person chose the still picture on this TV (Home settings, Designs): kept until they turn it off
+    if (env.stillChosen) return { tier: "still", why: "the still picture was chosen on this TV" };
+    // Lighter home turns itself on at 1 GB, where a video design still plays (a 939 MB TCL played the
+    // Aquarium video at about 27 frames a second, 0.13.10): there it keeps its other savings only
+    if (env.lighter && !(env.memory >= 1 && env.memory < 2)) return { tier: "still", why: "Lighter home is on" };
     if (env.powerSave) return { tier: "still", why: "the TV is saving power" };
     if (env.saveData) return { tier: "still", why: "the TV is saving data" };
     if (env.reducedMotion) return { tier: "still", why: "the TV asks for less motion" };
-    if (env.memory && env.memory <= 1) return { tier: "still", why: "this TV has little memory" };
+    // under 1 GB: the still picture. A 1 GB TV plays it (a 939 MB TCL played the Aquarium video at
+    // about 27 frames a second, 0.13.10), always the 720p copy, never the long loop (LIMIT.long.memory)
+    if (env.memory && env.memory < 1) return { tier: "still", why: "this TV has under 1 GB of memory" };
     if (env.slow) return { tier: "still", why: "this TV could not keep up with the video" };
     return env.memory >= 4 && env.screenPx >= 1920 ? "1080" : "720";
   }
   function tierOf(env) { var t = tier(env); return typeof t === "string" ? { tier: t, why: "" } : t; }
+  // The app version the "slow" mark was made on (SLOW_VER_KEY). An update can play video better (the 1 GB TCL
+  // played Aquarium after 0.13.10's smaller copy), so a mark from another version is dropped and the video
+  // is tried again, instead of keeping it off for the rest of the week. A page with no app behind it (a
+  // browser preview, the designer) has no version and keeps the week as before.
+  var SLOW_VER_KEY = "couchtv.video.slow.ver";
+  function appVersion() {
+    try { var T = window.TVOS; return T && T.version ? String(T.version() || "") : ""; } catch (e) { return ""; }
+  }
+  function markSlow(now) {
+    try {
+      localStorage.setItem(SLOW_KEY, String(now || Date.now()));
+      var v = appVersion();
+      if (v) localStorage.setItem(SLOW_VER_KEY, v); else localStorage.removeItem(SLOW_VER_KEY);
+    } catch (e) {}
+  }
   function slowMarked(now) {
-    try { var at = Number(localStorage.getItem(SLOW_KEY)); return !!at && (now || Date.now()) - at < LIMIT.slowDays * 86400000; } catch (e) { return false; }
+    try {
+      var at = Number(localStorage.getItem(SLOW_KEY));
+      if (!at) return false;
+      var v = appVersion(), was = localStorage.getItem(SLOW_VER_KEY) || "";
+      if (v && was !== v) { localStorage.removeItem(SLOW_KEY); localStorage.removeItem(SLOW_VER_KEY); return false; }
+      return (now || Date.now()) - at < LIMIT.slowDays * 86400000;
+    } catch (e) { return false; }
+  }
+
+  // ---------------------------------------------------------------- a decoder that shows only green (g33)
+  // A TCL QM8K owner saw a green screen. A video decoder that fails without an error draws its empty
+  // frames as one flat green (YUV all zero: about 0,135,0 in BT.601 and 0,80,0 in BT.709). A clip that
+  // plays is looked at small (32x18) after 1.5 s and again at 5 s. Only when both frames are that flat
+  // green (red and blue at most 24, green 60 to 160 and within 16 across the frame, on 95% of pixels) and
+  // the two frames match, the clip goes and the still picture stays; real footage (leaves, grass, a dark
+  // garden) has red and blue in it and is never this flat. The home's own clips (the video link, a scene's
+  // clip) are then not tried on this TV for a week, or until Home settings, Look, Try the video again.
+  // A design's video only goes for this time (SLOW_KEY's week is for dropped frames only). A page that
+  // may not read the frame (another site's clip) is never judged green. The Loop look's clips are not
+  // looked at (docs/TROUBLESHOOTING.md).
+  function greenLevel(v) {
+    try {
+      if (!v || !(v.videoWidth > 0)) return -1;
+      var c = document.createElement("canvas"); c.width = 32; c.height = 18;
+      var x = c.getContext("2d"); x.drawImage(v, 0, 0, 32, 18);
+      var d = x.getImageData(0, 0, 32, 18).data, n = 0, lo = 255, hi = 0, sum = 0, all = d.length / 4;
+      for (var i = 0; i < d.length; i += 4) {
+        var g = d[i + 1];
+        if (d[i] <= 24 && d[i + 2] <= 24 && g >= 60 && g <= 160) { n++; sum += g; if (g < lo) lo = g; if (g > hi) hi = g; }
+      }
+      return n >= 0.95 * all && hi - lo <= 16 ? sum / n : -1;
+    } catch (e) { return -1; }
+  }
+  function greenFrame(v) { return greenLevel(v) >= 0; }
+  var GREEN_KEY = "couchtv.video.green";
+  function markGreen() { try { localStorage.setItem(GREEN_KEY, String(Date.now())); } catch (e) {} }
+  function clearGreen() { try { localStorage.removeItem(GREEN_KEY); } catch (e) {} }
+  // the home's own clips (the video link, a scene's clip) stay off for a week after a green one
+  function greenMarked(now) {
+    try { var at = Number(localStorage.getItem(GREEN_KEY)); return !!at && (now || Date.now()) - at < LIMIT.slowDays * 86400000; } catch (e) { return false; }
+  }
+  // looks at a playing clip after 1.5 s and again at 5 s; onGreen() once if both are the same flat green.
+  // opts.noMark: a design's video, which goes for now but leaves the week's mark alone
+  function watchGreen(v, onGreen, opts) {
+    var first = -1, src = v.getAttribute("src");
+    var live = function () { return v.getAttribute("src") === src && !v.paused; };
+    setTimeout(function () { if (live()) first = greenLevel(v); }, 1500);
+    setTimeout(function () {
+      if (first < 0 || !live()) return;
+      var second = greenLevel(v);
+      if (second < 0 || Math.abs(second - first) > 4) return;
+      if (!(opts && opts.noMark)) markGreen();
+      onGreen();
+    }, 5000);
   }
 
   // ---------------------------------------------------------------- the player
@@ -271,6 +345,7 @@
           clearTimeout(watch);
           watch = setTimeout(checkFrames, 8000);
           stuckWatch(g, e.currentTime, 0);
+          watchGreen(e, function () { if (g === gen) fail("this TV showed the video as green"); }, { noMark: true });
         };
         e.onerror = function () { if (g === gen) fail("this TV could not play it"); };
         e.src = url;
@@ -294,7 +369,7 @@
       if (!v || state !== "playing" || !v.getVideoPlaybackQuality) return;
       var q = v.getVideoPlaybackQuality();
       if (q.totalVideoFrames > 60 && q.droppedVideoFrames / q.totalVideoFrames > LIMIT.dropAt) {
-        try { localStorage.setItem(SLOW_KEY, String(Date.now())); } catch (e) {}
+        markSlow();
         fail("this TV could not keep up with the video");
       }
     }
@@ -358,6 +433,7 @@
     };
   })();
 
-  window.CouchVideo = { LIMIT: LIMIT, LOOPS: LOOPS, SLOW_KEY: SLOW_KEY, refOk: refOk, storeId: storeId, localOk: localOk,
-    sniff: sniff, tier: function (env) { return tierOf(env).tier; }, tierWhy: tierOf, slowMarked: slowMarked, player: player };
+  window.CouchVideo = { LIMIT: LIMIT, LOOPS: LOOPS, SLOW_KEY: SLOW_KEY, SLOW_VER_KEY: SLOW_VER_KEY, markSlow: markSlow, refOk: refOk, storeId: storeId, localOk: localOk,
+    sniff: sniff, tier: function (env) { return tierOf(env).tier; }, tierWhy: tierOf, slowMarked: slowMarked, player: player,
+    greenFrame: greenFrame, greenLevel: greenLevel, watchGreen: watchGreen, greenMarked: greenMarked, clearGreen: clearGreen, GREEN_KEY: GREEN_KEY };
 })();

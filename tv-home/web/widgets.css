@@ -19,6 +19,25 @@
 .cw-paper { color: #1d1b18; --ink: #1d1b18; --sub: rgba(29, 27, 24, 0.74); --faint: rgba(29, 27, 24, 0.45); }
 .cw-paper > .cw-bg { background: var(--paperbg); }
 .cw-tint > .cw-bg { background: var(--tile, #0a84ff); }
+/* Glass words (style.ink "glass", widgets.js shell): see through white with a light top edge and a soft
+   shadow, or smoked dark glass on a light box. A slower TV (lighter, glass lite) draws them solid. */
+.cw-ink-glass, .cw-ink-glass * { text-shadow: 0 -1px 0 rgba(255, 255, 255, 0.5), 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 24px rgba(0, 0, 0, 0.34) !important; }
+.cw-ink-smoke, .cw-ink-smoke * { text-shadow: 0 1px 0 rgba(255, 255, 255, 0.75), 0 -1px 1px rgba(0, 0, 0, 0.12) !important; }
+html.lighter .cw-ink-glass, html.glass-lite .cw-ink-glass { --ink: #fff !important; --sub: rgba(255, 255, 255, 0.78) !important; }
+html.lighter .cw-ink-glass, html.lighter .cw-ink-glass *, html.glass-lite .cw-ink-glass, html.glass-lite .cw-ink-glass * { text-shadow: 0 2px 6px rgba(0, 0, 0, 0.35) !important; }
+html.lighter .cw-ink-smoke, html.glass-lite .cw-ink-smoke { --ink: #1d1b18 !important; --sub: rgba(29, 27, 24, 0.74) !important; }
+html.lighter .cw-ink-smoke, html.lighter .cw-ink-smoke *, html.glass-lite .cw-ink-smoke, html.glass-lite .cw-ink-smoke * { text-shadow: none !important; }
+/* Liquid glass words (style.ink "liquid", widgets.js shell and liquidBack): the home's photo, or its frosted copy,
+   fills every letter, lined up with the photo on screen, lightened at the top like glass, with a bright rim and a
+   shadow under. Only with .cw-lq-on and never on a slower TV; otherwise .cw-ink-glass above draws frosted words. */
+html:not(.lighter):not(.glass-lite) .cw-ink-liquid.cw-lq-on > :not(.cw-bg) {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.08) 48%, rgba(255, 255, 255, 0.16)), var(--lq-img);
+  background-size: 100% 100%, var(--lq-size); background-position: 0 0, var(--lq-pos); background-repeat: no-repeat; background-attachment: scroll, fixed;
+  -webkit-background-clip: text; background-clip: text;
+  filter: drop-shadow(0 -1px 0 rgba(255, 255, 255, 0.4)) drop-shadow(0 4px 10px rgba(0, 0, 0, 0.38)); }
+html:not(.lighter):not(.glass-lite) .cw-ink-liquid.cw-lq-on > :not(.cw-bg),
+html:not(.lighter):not(.glass-lite) .cw-ink-liquid.cw-lq-on > :not(.cw-bg) * {
+  -webkit-text-fill-color: transparent; -webkit-text-stroke: 1px rgba(255, 255, 255, 0.62); text-shadow: none !important; }
 .cw-bare { padding: 0; border-radius: 0; overflow: visible; }
 .cw-photo { padding: 0; }
 .cw-sh-soft { box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22); }
@@ -129,8 +148,9 @@
 .cw-ifocus { outline: 5px solid var(--focus); outline-offset: 5px; }
 .cw .cw-app.cw-ifocus { -webkit-transform: scale(1.06); transform: scale(1.06); }
 
-/* widget mode: the design's widgets are the home, the home's own parts step aside (design.js) */
-html.cd-wmode header.top, html.cd-wmode .scrim, html.cd-wmode #shelf-section, html.cd-wmode #scenes .gclock, html.cd-wmode #scenes .fg { visibility: hidden !important; }
+/* widget mode: the design's widgets are the home, the home's own parts step aside (design.js), the weather line a
+   design copies out of the date (#cd-weather) too: it was drawn over a big stack and behind a Wi-Fi tile (0.13.10) */
+html.cd-wmode header.top, html.cd-wmode #cd-weather, html.cd-wmode .scrim, html.cd-wmode #shelf-section, html.cd-wmode #scenes .gclock, html.cd-wmode #scenes .fg { visibility: hidden !important; }
 html.cd-wmode:not(.expanded) #apps-section { visibility: hidden !important; }
 html.cd-wmode.expanded #cd-front, html.cd-wmode.expanded #cd-back { visibility: hidden; }
 html.cd-wmode #grid .app.focus { outline: none; }
@@ -140,11 +160,38 @@ html.cd-wmode #grid .app.focus { outline: none; }
   background: rgba(6, 7, 10, 0.72); -webkit-backdrop-filter: blur(30px); backdrop-filter: blur(30px); color: #fff; font-family: "Inter", sans-serif;
   display: -webkit-flex; display: flex; -webkit-flex-direction: column; flex-direction: column; -webkit-align-items: center; align-items: center; -webkit-justify-content: center; justify-content: center; }
 .cw-sheet h2 { font-size: 52px; font-weight: 720; letter-spacing: -0.02em; margin: 0 0 48px; }
-.cw-sheet .cw-sheet-apps { display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap; -webkit-justify-content: center; justify-content: center; max-width: 1200px; }
+.cw-sheet .cw-sheet-apps { display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap; -webkit-justify-content: center; justify-content: center; max-width: 1200px;
+  max-height: 720px; overflow: hidden; position: relative; -webkit-flex-shrink: 0; flex-shrink: 0; }
 .cw-sheet .cw-sheet-apps .cw-app { margin: 22px; }
 .cw-sheet .cw-hint { margin-top: 40px; font-size: 25px; color: rgba(255, 255, 255, 0.72); }
 .cw-menu .cw-mi { width: 640px; padding: 26px 34px; margin: 10px 0; border-radius: 28px; font-size: 34px; font-weight: 650; background: rgba(255, 255, 255, 0.1); }
 .cw-menu .cw-mi.cw-ifocus { background: #fff; color: #111; outline: none; }
+/* the hold OK menu (design.js openSheet, items.menu): solid, so nothing on the home (a big clock) shows through on a TV
+   without backdrop blur, and compact, so the title, up to nine rows and the hint all fit on a 1080 screen */
+.cw-sheet.cw-msheet { background: rgb(10, 11, 15); -webkit-backdrop-filter: none; backdrop-filter: none; padding: 40px 0; box-sizing: border-box; }
+.cw-sheet.cw-msheet h2 { font-size: 44px; margin: 0 0 24px; max-width: 1600px; text-align: center; }
+.cw-sheet.cw-msheet .cw-menu .cw-mi { padding: 16px 34px; margin: 6px 0; font-size: 30px; background: rgb(40, 42, 50); }
+.cw-sheet.cw-msheet .cw-menu .cw-mi.cw-ifocus { background: #fff; color: #111; }
+.cw-sheet.cw-msheet .cw-hint { margin-top: 22px; max-width: 1600px; text-align: center; }
+/* Add apps (design.js appSheet): every app on this TV, seven across, the picked ones numbered in their
+   order; the focus is a thick white ring with a dark gap, so it reads on any icon colour from the couch */
+.cw-appsheet { -webkit-align-items: flex-start; align-items: flex-start; padding: 0 160px; box-sizing: border-box; }
+.cw-appsheet .cw-as-head { display: -webkit-flex; display: flex; -webkit-align-items: baseline; align-items: baseline; margin: 0 0 44px; }
+.cw-appsheet .cw-as-head h2 { margin: 0 32px 0 0; font-size: 60px; }
+.cw-appsheet .cw-as-count { font-size: 34px; font-weight: 560; color: rgba(255, 255, 255, 0.68); }
+.cw-appsheet .cw-as-grid { -webkit-justify-content: flex-start; justify-content: flex-start; max-width: 1630px; width: 1630px; max-height: 720px; padding: 30px 0 0 30px; margin: -30px 0 0 -30px; }
+.cw-appsheet .cw-as-tile { position: relative; width: 184px; height: 184px; margin: 0 42px 46px 0; border-radius: 44px;
+  -webkit-transition: -webkit-transform 0.12s ease-out; transition: transform 0.12s ease-out; }
+.cw-appsheet .cw-as-tile .cw-app { margin: 0; }
+.cw-appsheet .cw-as-tile.cw-ifocus { outline: none; box-shadow: 0 0 0 7px rgba(8, 9, 12, 0.95), 0 0 0 14px #fff, 0 18px 44px rgba(0, 0, 0, 0.55);
+  -webkit-transform: scale(1.07); transform: scale(1.07); z-index: 2; }
+.cw-appsheet .cw-as-badge { position: absolute; top: -14px; right: -14px; width: 56px; height: 56px; border-radius: 50%; background: #30c75a; color: #fff;
+  border: 5px solid #0c0d10; box-sizing: border-box; font: 760 26px/46px "Inter", sans-serif; text-align: center; z-index: 3; }
+.cw-appsheet .cw-as-tile.cw-as-moving { -webkit-transform: scale(1.12); transform: scale(1.12); }
+.cw-appsheet .cw-as-tile.cw-as-moving .cw-as-badge { background: #fff; color: #111; }
+.cw-appsheet .cw-as-hint { margin-top: 34px; font-size: 30px; color: rgba(255, 255, 255, 0.78); }
+.cw-appsheet .cw-as-hint span { margin-right: 48px; }
+.cw-appsheet .cw-as-hint b { color: #fff; font-weight: 720; }
 /* the Settings button on a design (design.js gearChip): top right on every design, so settings are always
    one press away; it grows into a labelled pill while it has the focus */
 .cw-gearchip { display: none; position: fixed; top: 28px; right: 28px; z-index: 58; height: 64px; min-width: 64px; padding: 0 12px; box-sizing: border-box;
@@ -183,6 +230,8 @@ html.lighter .cwd-panel { background: rgb(24, 26, 34); -webkit-backdrop-filter: 
 .cwd-in { position: relative; z-index: 1; display: -webkit-flex; display: flex; -webkit-flex-direction: column; flex-direction: column; width: 100%; height: 100%; padding: 56px 64px;
   opacity: 0; -webkit-transition: opacity 0.26s ease 0.16s; transition: opacity 0.26s ease 0.16s; }
 .cwd-panel.on .cwd-in { opacity: 1; }
+/* the data credit (Open-Meteo, CC BY 4.0): quiet, in the bottom corner, never moving the layer above it */
+.cwd-credit { position: absolute; right: 64px; bottom: 22px; font-size: 20px; font-weight: 500; color: rgba(255, 255, 255, 0.42); pointer-events: none; }
 .cwd-panel.closing .cwd-in { opacity: 0; -webkit-transition: opacity 0.1s ease; transition: opacity 0.1s ease; }
 
 /* the header: an icon, the title and a line, and how to get out */
@@ -402,3 +451,16 @@ html.lighter .cwd-artbg { -webkit-filter: none; filter: none; opacity: 0.18; }
 .cw-ah.cw-strip > .cw-row > svg { width: 34px !important; height: 34px !important; }
 .cw-ah.cw-strip > .cw-row > .cw-col { margin-left: 0 !important; margin-top: 6px; -webkit-align-items: center; align-items: center; max-width: 100%; }
 .cw-ah.cw-strip .cw-e1 { text-align: center; font-size: 24px; line-height: 1.2; }
+/* a widget waiting for something private (widgets.js setupFace): its name, one line, "Set up on your phone" and the code */
+.cw-face { -webkit-align-items: center; align-items: center; text-align: center; }
+.cw-face .cw-f1 { font-size: 34px; font-weight: 720; line-height: 1.15; margin-top: 12px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-face .cw-f2 { font-size: 25px; font-weight: 560; color: var(--sub); margin-top: 6px; line-height: 1.25; max-width: 100%; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cw-face .cw-f3 { font-size: 26px; font-weight: 700; color: var(--on, #ffd60a); margin-top: 12px; line-height: 1.2; max-width: 100%; }
+.cw-face.cw-tiny .cw-f1 { font-size: 26px; margin-top: 4px; } .cw-face.cw-tiny .cw-f3 { font-size: 24px; margin-top: 2px; line-height: 1.15; }
+.cw-face.cw-strip .cw-f1 { margin-top: 0; font-size: 28px; } .cw-face.cw-strip .cw-f3 { margin-top: 2px; font-size: 23px; text-align: left; } .cw-face.cw-strip .cw-col { -webkit-align-items: flex-start; align-items: flex-start; }
+.cw-fqr { background: #fff; border-radius: 20px; padding: 14px; box-sizing: border-box; display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; -webkit-justify-content: center; justify-content: center; }
+.cw-fqr svg { display: block; }
+.cw-face.cw-face-tile .cw-f3 { color: var(--ink); text-decoration: underline; text-underline-offset: 6px; }
+/* Set up on your phone (design.js phoneSheet): the code, one line, and a smaller "No phone? Set it up here" */
+.cw-sheet.cw-phone .cw-menu { display: -webkit-flex; display: flex; -webkit-flex-direction: column; flex-direction: column; -webkit-align-items: center; align-items: center; }
+.cw-sheet.cw-phone .cw-menu .cw-mi { width: auto; font-size: 28px; padding: 18px 34px; text-align: center; }

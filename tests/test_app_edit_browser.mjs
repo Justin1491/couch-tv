@@ -2,9 +2,10 @@
 // 1920x1080 (mock.js stands in for the TV and its installed apps):
 //  1. a dock naming ["netflix", "hotstar", "stan"]: Netflix and Stan open by this TV's packages; JioHotstar
 //     is not installed, so it is dimmed "Not on this TV" and OK on it says how to get it;
-//  2. Hold OK on an app: Change app (a picker of the TV's own apps), Move, Remove, Add app, and All apps
+//  2. Hold OK on an app: Change app (a picker of the TV's own apps), Move, Remove, Add apps, and All apps
 //     (every installed app stays reachable); each change is kept on the TV and survives a reload;
-//  3. a folder: Add app to folder, Remove from folder; the Add app place at the end of a dock;
+//  3. a folder: Add apps, Remove from folder; the Add app place at the end of a dock (Add apps itself:
+//     tests/test_app_sheet_browser.mjs);
 //  4. a new design by code with app changes kept: the question offers to keep them or take its own.
 // Needs Playwright (Chromium). Without it the test says so and passes:
 //   COUCHTV_PLAYWRIGHT=<a folder whose node_modules has playwright> node tests/test_app_edit_browser.mjs
@@ -68,6 +69,14 @@ async function pick(pkg) {
   for (let k = 0; k < at.i % at.cols; k++) await press("ArrowRight", 60);
   await press("Enter", 500);
 }
+// Add apps (0.13.11): the sheet with every app; OK on one app adds it, Back saves
+async function sheetAdd(pkg) {
+  const at = await page.evaluate((p) => { const ns = [...document.querySelectorAll(".cw-appsheet .cw-as-tile")]; return { i: ns.findIndex((x) => x.getAttribute("data-pkg") === p), cols: ns.filter((x) => x.offsetTop === ns[0].offsetTop).length }; }, pkg);
+  assert.ok(at.i >= 0, "the sheet lists " + pkg);
+  for (let k = 0; k < Math.floor(at.i / at.cols); k++) await press("ArrowDown", 60);
+  for (let k = 0; k < at.i % at.cols; k++) await press("ArrowRight", 60);
+  await press("Enter", 400); await press("Escape", 500);
+}
 const edits = () => page.evaluate(() => window.CouchDesign.appEdits());
 
 console.log("Running app editing browser tests...");
@@ -85,7 +94,7 @@ ok(/Not on this TV\. Install it from the App Store/.test(await page.evaluate(() 
 // 2. Hold OK: change, remove, move, all apps
 await focus("d", 0); await hold();
 const m = await menu();
-ok(["Change app", "Move", "Remove", "Add app", "All apps", "Settings"].every((x) => m.indexOf(x) >= 0), "Hold OK on an app: Change app, Move, Remove, Add app, All apps, Settings (" + m.join(", ") + ")");
+ok(["Change app", "Move", "Remove", "Add apps", "All apps", "Settings"].every((x) => m.indexOf(x) >= 0), "Hold OK on an app: Change app, Move, Remove, Add apps, All apps, Settings (" + m.join(", ") + ")");
 await choose("Change app");
 ok(await page.evaluate(() => !!document.querySelector(".cw-sheet .cw-sheet-apps") && !document.querySelector('.cw-sheet [data-arg="com.android.tv.settings"]')), "Change app opens a picker of the TV's own apps, without Settings");
 await pick("com.disney.disneyplus");
@@ -98,10 +107,10 @@ ok(await page.evaluate(() => window.CouchDesign.nav.moving()), "Move: the app is
 await press("ArrowLeft", 400); await press("Enter", 300);
 ok(JSON.stringify((await edits())["d|dock"]) === '["stan","disney"]', "Move: Left puts Stan first, OK puts it down");
 ok(!(await page.evaluate(() => window.CouchDesign.nav.moving())), "Move: done");
-// the Add app place: OK opens the picker
+// the Add app place: OK opens Add apps
 s = await slots("d");
 await focus("d", s.findIndex((x) => x[0] === "addapp")); await press("Enter", 500);
-await pick("com.sbs.ondemand.tv");
+await sheetAdd("com.sbs.ondemand.tv");
 ok(JSON.stringify((await edits())["d|dock"]) === '["stan","disney","sbs"]', "Add app: SBS On Demand added at the end");
 // All apps stays reachable
 await focus("d", 0); await hold(); await choose("All apps");
@@ -112,10 +121,10 @@ await press("Escape", 400);
 await load(false);
 await focus("f", 0); await hold();
 const fm = await menu();
-ok(fm.indexOf("Remove from folder") >= 0 && fm.indexOf("Add app to folder") >= 0, "Hold OK in a folder: Remove from folder, Add app to folder (" + fm.join(", ") + ")");
-await choose("Add app to folder");
-await pick("au.com.kayosports.tv");
-ok(JSON.stringify((await edits())["f|folder"]) === '["iview","youtube","kayo"]', "Add app to folder: Kayo added");
+ok(fm.indexOf("Remove from folder") >= 0 && fm.indexOf("Add apps") >= 0, "Hold OK in a folder: Remove from folder, Add apps (" + fm.join(", ") + ")");
+await choose("Add apps");
+await sheetAdd("au.com.kayosports.tv");
+ok(JSON.stringify((await edits())["f|folder"]) === '["iview","youtube","kayo"]', "Add apps in a folder: Kayo added");
 await focus("f", 1); await hold(); await choose("Remove from folder");
 ok(JSON.stringify((await edits())["f|folder"]) === '["iview","kayo"]', "Remove from folder: YouTube gone");
 
@@ -124,6 +133,28 @@ await load(false);
 s = await slots("d");
 ok(s[0][1] === "au.com.stan.and" && s[1][1] === "com.disney.disneyplus" && s[2][1] === "com.sbs.ondemand.tv", "after a reload the dock is as the person left it");
 ok((await slots("f")).filter((x) => x[0] === "app").map((x) => x[1]).join(",") === "au.net.abc.iview,au.com.kayosports.tv", "and the folder too");
+
+// Hebrew (right to left): the Change app picker's tiles run from the right, so Left goes on to the next app
+await page.evaluate(() => window.I18N.set("he"));
+ok(await page.evaluate(() => document.documentElement.dir) === "rtl", "Hebrew turns the page right to left");
+await focus("d", 0); await hold();
+const hm = await page.evaluate(() => [...document.querySelectorAll(".cw-sheet .cw-mi")].map((e) => e.getAttribute("data-name")));
+ok(hm.indexOf("Change app") >= 0, "Hold OK in Hebrew still offers Change app (" + hm.join(", ") + ")");
+for (let k = 0; k < hm.indexOf("Change app"); k++) await press("ArrowDown", 80);
+await press("Enter", 400);
+const picked = () => page.evaluate(() => { const ns = [...document.querySelectorAll(".cw-sheet [data-act=pick]")]; return { at: ns.findIndex((x) => x.classList.contains("cw-ifocus")), lefts: ns.slice(0, 2).map((x) => x.getBoundingClientRect().left) }; });
+let pk = await picked();
+ok(pk.at === 0 && pk.lefts[0] > pk.lefts[1], "the picker's first app is on the right: " + pk.lefts.join(" > "));
+await press("ArrowRight", 100);
+ok((await picked()).at === 0, "Right at the first app (the right edge) stays on it");
+await press("ArrowLeft", 100);
+ok((await picked()).at === 1, "Left goes on to the next app, to its left");
+await press("ArrowRight", 100);
+ok((await picked()).at === 0, "and Right comes back to the first");
+await press("Escape", 400);
+ok(!(await page.evaluate(() => !!document.querySelector(".cw-sheet"))) && (await slots("d"))[0][1] === "au.com.stan.and", "Back closes the picker and changes nothing");
+await page.evaluate(() => window.I18N.set("en"));
+ok(await page.evaluate(() => document.documentElement.dir) === "ltr", "English turns it back");
 await page.screenshot({ path: path.join(process.env.SHOTS || "/tmp", "app-edit.png") });
 
 // 5. a new design by code: keep the app changes, or take the design's own apps

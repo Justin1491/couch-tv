@@ -21,7 +21,7 @@
 // The key: only ever sent to the exact address it was saved with (scheme, host and port). Changing the
 // address without typing a new key deletes it. On a Google TV, Android TV or Fire TV it is kept in the
 // launcher's private store, left out of Android's backups (TVOS.keepPrivate, AtHome.kt); on other TVs
-// in this TV's own browser storage. Never in a design, never in a share, never sent to couch-tv Studio.
+// in this TV's own browser storage. Never in a design, never in a share, never sent to Couch TV Studio.
 //
 // ES5 on purpose: old Android TV WebViews. Also a CommonJS module for tests.
 (function (root) {
@@ -138,6 +138,10 @@
     return { on: !offline && !mock && !!W.XMLHttpRequest, api: api, key: key, tv: tv };
   }
 
+  // the Google Play build of the on-TV app has no Ask AI (window.TVPLAY.askOff, HomeActivity.kt,
+  // coord/GOOGLE-PLAY-BUILD.md): no Ask sheet, and an Ask AI widget in a design says it is not here
+  function off() { try { return !!(W.TVPLAY && typeof W.TVPLAY.askOff === "function" && W.TVPLAY.askOff()); } catch (e) { return false; } }
+
   // what is set up, in plain words (never the key)
   function status() {
     var c = config(), p = provider(c.provider), h = home(), key = keyFor(c);
@@ -145,7 +149,7 @@
     var route = c.route === "home" && h.on ? "home" : own ? "own" : h.on && c.route !== "own" ? "home" : "";
     return { ready: !!route, route: route, own: own, homeAvailable: h.on, provider: p ? p.id : "", providerName: p ? p.name : "",
       base: c.base, model: c.model, hasKey: !!key, needsKey: !!(p && p.key && !(p.wire === "openai" && isLocalHost(hostOf(c.base)))),
-      by: route === "home" ? "Your couch-tv at home" : p ? p.name + (c.model ? ", " + c.model : "") : "" };
+      by: route === "home" ? "Your Couch TV at home" : p ? p.name + (c.model ? ", " + c.model : "") : "" };
   }
 
   // ---------------- one request to a service ----------------
@@ -228,17 +232,17 @@
         var j = null; try { j = JSON.parse(r.text); } catch (e) {}
         if (r.status >= 200 && r.status < 300 && j && j.ok !== false) return plain(j.say || j.reply || "Done.", 1200);
         if (r.status === 409) throw new Error("The home computer's Claude ask is switched off (ask.enabled in config.json). Pick Set up to use your own AI service instead.");
-        if (r.status === 501) throw new Error("Ask is off in the couch-tv TV app. Add your key on its setup page, or pick Set up to use your own AI service here.");
+        if (r.status === 501) throw new Error("Ask is off in the Couch TV app on this TV. Add your key on its setup page, or pick Set up to use your own AI service here.");
         if (r.status === 403) throw new Error("Ask is off for a kids profile.");
-        throw new Error(plain((j && j.error) || "couch-tv at home could not answer just now.", 200));
-      }, function () { throw new Error("couch-tv at home did not answer. Is the computer or the TV app on?"); });
+        throw new Error(plain((j && j.error) || "Couch TV at home could not answer just now.", 200));
+      }, function () { throw new Error("Couch TV at home did not answer. Is the computer or the TV app on?"); });
     } else {
       var c = config(), rq = request(c, keyFor(c), text), wire = (provider(c.provider) || {}).wire;
       job = xhr("POST", rq.url, rq.headers, rq.body, 60000).then(function (r) {
         if (r.status < 200 || r.status >= 300) throw new Error(errorOf(r.status, r.text));
         var j = null; try { j = JSON.parse(r.text); } catch (e) {}
         var a = answerOf(wire, j);
-        if (a === null) throw new Error("The service answered in a way couch-tv does not understand. Check the model name.");
+        if (a === null) throw new Error("The service answered in a way Couch TV does not understand. Check the model name.");
         return plain(a, 1200) || "(no words in the answer)";
       }, function (e) {
         var local = isLocalHost(hostOf(c.base));
@@ -259,19 +263,27 @@
   // ---------------- what the home computer or the TV app says (GET /api/say) ----------------
   var seen = readJson(SEEN_KEY) || { msg: 0, design: 0 }, pollT = null, firstPoll = true;
   function markSeen() { setItem(SEEN_KEY, JSON.stringify(seen)); }
-  // Opt in: the home computer is asked only once Ask AI is set up on this TV, while the Ask sheet is
-  // open, or while an Ask AI or From your AI widget is on the home. A home with none of them asks nothing.
+  // Who asks: a home that can get designs (a design store set, the usual case) asks every 6 s so a design
+  // sent from the phone shows at once; otherwise only once Ask AI is set up on this TV, while the Ask
+  // sheet is open, or while an Ask AI or From your AI widget is on the home. ?home=1 tells the home
+  // computer or the TV app it is the home asking (say.py heard), so the phone remote can say whether
+  // the TV will see a design now.
   function wanted() {
     var c = readJson(CFG_KEY);
     if (c && (c.route || c.provider)) return true;
     if (sheet) return true;
+    // a TV that can get designs listens for one sent from the phone remote (Send a design), so a
+    // design chosen on the phone needs no presses on the TV but the "Use this design?" answer
+    if (W.CouchDesignCode && W.CouchDesignCode.base && W.CouchDesignCode.base()) return true;
     try { return !!(DOC && DOC.querySelector && DOC.querySelector(".cw-k-ask, .cw-k-agent")); } catch (e) { return false; }
   }
-  function poll() {
+  // force: the slow look every 30 s while the home is on screen, even with nothing set up, so the phone
+  // remote's Scene buttons (g34) reach a TV with no design store and no Ask AI within half a minute
+  function poll(force) {
     var h = home();
-    if (!h.on || !wanted()) return;
+    if (!h.on || !(force || wanted())) return;
     var hd = {}; if (h.key) hd.Authorization = "Bearer " + h.key;
-    xhr("GET", h.api + "/api/say" + (h.tv ? "?tv=" + h.tv : ""), hd, null, 8000).then(function (r) {
+    xhr("GET", h.api + "/api/say?home=1" + (h.tv ? "&tv=" + h.tv : ""), hd, null, 8000).then(function (r) {
       var j = null; try { j = JSON.parse(r.text); } catch (e) {}
       if (!j || j.ok === false) return;
       took(j, Date.now());
@@ -281,7 +293,7 @@
   function took(j, now) {
     var a = j.ask;
     if (a && a.q && (!last || (a.at || 0) > (last.at || 0) + 500 || (last.pending && plain(a.q) === last.q && !a.pending && a.a))) {
-      if (!(last && last.pending && !a.a)) { last = { q: plain(a.q, 400), a: plain(a.a, 1200), by: String(a.by || "Your couch-tv at home"), at: a.at || now, pending: !!a.pending }; changed(); }
+      if (!(last && last.pending && !a.a)) { last = { q: plain(a.q, 400), a: plain(a.a, 1200), by: String(a.by || "Your Couch TV at home"), at: a.at || now, pending: !!a.pending }; changed(); }
     }
     var m = j.message;
     if (m && m.text && (m.at || 0) > (seen.msg || 0)) {
@@ -294,11 +306,17 @@
     var d = j.design;
     if (d && d.code && (d.at || 0) > (seen.design || 0)) {
       seen.design = d.at || now; markSeen();
-      if (now - (d.at || now) < 600000) useDesign(d.code);
+      if (now - (d.at || now) < 600000) useDesign(d.code, d.from === "phone" ? "phone" : "ai");
+    }
+    // the phone remote's Scene buttons (g34): the next or the previous scene, if it was pressed in the last minute
+    var sc = j.scene;
+    if (sc && (sc.pick === "next" || sc.pick === "prev") && (sc.at || 0) > (seen.scene || 0)) {
+      seen.scene = sc.at || now; markSeen();
+      if (now - (sc.at || now) < 60000 && W.tv && W.tv.scene) W.tv.scene(sc.pick);
     }
     firstPoll = false;
   }
-  // couch-tv Studio is opt in: an agent's design is used only where the person at this TV turned couch-tv
+  // Couch TV Studio is opt in: an agent's design is used only where the person at this TV turned couch-tv
   // Studio on and designs are not switched off. An agent never turns it on, and never clears an off.
   function studioOff() {
     var v = null, off = null;
@@ -307,20 +325,22 @@
     try { off = W.localStorage.getItem("couchtv.design.off"); } catch (e) {}
     return v !== "on" || !!off;
   }
-  function useDesign(code) {
-    var C = W.CouchDesignCode;
-    if (!C || !C.get || !C.readCode(code)) { banner({ from: "couch-tv", text: "A design was sent, but this TV cannot get designs. Update couch-tv.", seconds: 15 }); return; }
-    if (studioOff()) { banner({ from: "couch-tv", text: "Your AI sent a design. couch-tv Studio is switched off on this TV, so it was not used. To use designs, turn it on in Home settings, couch-tv Studio.", seconds: 20 }); return; }
-    banner({ from: "couch-tv", text: "Getting the design your AI sent...", seconds: 20 });
+  // who: "phone" (the phone remote's Send a design) or "ai" (the person's own AI agent)
+  function useDesign(code, who) {
+    var C = W.CouchDesignCode, by = who === "phone" ? "your phone" : "your AI";
+    if (!C || !C.get || !C.readCode(code)) { banner({ from: "Couch TV", text: "A design was sent, but this TV cannot get designs. Update Couch TV.", seconds: 15 }); return; }
+    if (studioOff()) { banner({ from: "Couch TV", text: "A design came from " + by + ". Designs are switched off on this TV, so it was not used. To use designs, turn them on in Home settings, Designs.", seconds: 20 }); return; }
+    banner({ from: "Couch TV", text: "Getting the design from " + by + "...", seconds: 20 });
     C.get(code).then(function () {
       // "Use this design?" comes first, as for a code typed at the TV; this TV's on or off choice is left as it is
       setTimeout(function () { try { W.location.reload(); } catch (e) {} }, 800);
-    }, function (e) { banner({ from: "couch-tv", text: (e && e.message) || "That design could not be used.", seconds: 15 }); });
+    }, function (e) { banner({ from: "Couch TV", text: (e && e.message) || "That design could not be used.", seconds: 15 }); });
   }
   function startPolling() {
     if (pollT || !home().on) return;
     poll();
-    pollT = setInterval(function () { if (!DOC || !DOC.hidden) poll(); }, 6000);
+    var ticks = 0;
+    pollT = setInterval(function () { ticks++; if (!DOC || !DOC.hidden) poll(ticks % 5 === 0); }, 6000);
   }
 
   // ---------------- a message over the home ----------------
@@ -366,6 +386,13 @@
   function labelRow(K, iconName, text) {
     return K.E("div", "cw-lab", "max-width:100%;flex:none", [K.ic(iconName, 30, "currentColor"), K.E("span", "cw-ell", "flex:0 1 auto;min-width:0;margin-right:0", [text])]);
   }
+  // the question over its answer: up to two lines, wrapping (a question longer than that is shortened
+  // at a word, never cut mid line); rows says how many lines it takes
+  function askRow(K, text, w) {
+    var f = fitWords(text, w - 40, 2 * 25 * 1.22, 25), per = Math.max(1, Math.floor((w - 40) / (f.fs * 0.58)));
+    return { rows: f.text.length > per * 0.82 ? 2 : 1, el: K.E("div", "cw-lab", "max-width:100%;flex:none;white-space:normal;overflow:visible;text-overflow:clip;align-items:flex-start", [K.ic("mic", 30, "currentColor"),
+      K.E("span", "", "flex:0 1 auto;min-width:0;margin-right:0;font-size:" + f.fs + "px;line-height:1.22;overflow-wrap:break-word", [f.text])]) };
+  }
   // the empty card, at the side the design picks (widgets.js empty() is always in the middle)
   function blank(K, root, o, b, iconName, line, sub) {
     var a = o && o.opts && o.opts.align;
@@ -374,15 +401,26 @@
     K.add(root, col(K, o, root, [K.ic(iconName, 40, "currentColor"), K.E("div", "cw-e1", "max-width:100%", [line]), sub && b.h >= 220 && b.w >= 300 ? K.E("div", "cw-e2", "max-width:100%", [sub]) : null]));
     return root;
   }
+  // this widget's own settings (widget-caps.js ask and agent): keep says how long the last answer or
+  // message shows ("always" until the next, "hour", "day", or "never": the question stays private)
+  function own(K, o, env, key, dflt) { var v = K.setting ? K.setting(o, env || {}, key) : undefined; return v === undefined || v === null || v === "" ? dflt : v; }
+  var KEEP_MS = { hour: 3600000, day: 86400000 };
+  function kept(K, o, env, at) {
+    var k = own(K, o, env, "keep", "always");
+    if (k === "never") return false;
+    return !KEEP_MS[k] || !at || Date.now() - at < KEEP_MS[k];
+  }
   function drawAsk(root, o, b, env) {
     var K = kit(); if (!K) return root;
+    if (off() && !(env && env.demo)) return blank(K, root, o, b, "mic", "Ask AI", "Not in this version of Couch TV");
     var v = env && env.demo ? DEMO_ASK : last, s = status(), tiny = b.w < 300 || b.h < 220;
+    if (v && !(env && env.demo) && !v.pending && !kept(K, o, env, v.at)) v = null;
     if (!(env && env.demo) && !s.ready) return blank(K, root, o, b, "mic", tiny ? "Set up Ask AI" : "Ask AI: pick who answers", "OK here sets it up, step by step");
     if (!v || !v.q) return blank(K, root, o, b, "mic", tiny ? "Ask AI" : "Ask anything", "Press OK, then type or say it. Or use Ask on the phone remote");
-    var a = v.pending ? "Thinking..." : v.err ? v.err : v.a, w = b.w - 48, by = b.h >= 300, h = b.h - 48 - 40 - 12 - (by ? 44 : 0);
+    var a = v.pending ? "Thinking..." : v.err ? v.err : v.a, w = b.w - 48, by = b.h >= 300, qr = askRow(K, v.q, w), h = b.h - 48 - 40 - (qr.rows - 1) * 31 - 12 - (by ? 44 : 0);
     if (b.w < 300) { var f0 = fitWords(a, w, b.h - 48, 34); K.add(root, col(K, o, root, [K.E("div", "", "font-size:" + f0.fs + "px;font-weight:650;line-height:1.2", [f0.text])])); return root; }
     var f = fitWords(a, w, h, 64);
-    K.add(root, col(K, o, root, [labelRow(K, "mic", v.q),
+    K.add(root, col(K, o, root, [qr.el,
       K.E("div", "", "max-width:100%;font-size:" + f.fs + "px;font-weight:680;line-height:1.2;margin-top:12px;letter-spacing:-.01em;overflow-wrap:break-word", [f.text]),
       by ? K.E("div", "cw-t23 cw-ell", "max-width:100%;margin-top:14px;color:var(--sub)", [v.pending ? "Asking " + (v.by || "your AI") : "Answered by " + (v.by || "your AI")]) : null]));
     return root;
@@ -390,14 +428,15 @@
   function drawAgent(root, o, b, env) {
     var K = kit(); if (!K) return root;
     var m = env && env.demo ? DEMO_MSG : message, tiny = b.w < 300 || b.h < 220;
+    if (m && !(env && env.demo) && !kept(K, o, env, m.at)) m = null;
     if (!m) {
-      if (!home().on) return blank(K, root, o, b, "phone", tiny ? "Connect your AI" : "Connect your AI agent", "It needs the couch-tv TV app or a home computer. OK here shows how");
+      if (!home().on) return blank(K, root, o, b, "phone", tiny ? "Connect your AI" : "Connect your AI agent", "It needs the Couch TV app on this TV or a home computer. OK here shows how");
       return blank(K, root, o, b, "phone", tiny ? "No messages yet" : "Nothing from your AI yet", "OK here shows how to connect it");
     }
     var w = b.w - 48;
     if (b.w < 300) { var f0 = fitWords(m.text, w, b.h - 48, 34); K.add(root, col(K, o, root, [K.E("div", "", "font-size:" + f0.fs + "px;font-weight:650;line-height:1.2", [f0.text])])); return root; }
     var f = fitWords(m.text, w, b.h - 48 - 40 - 10, 60);
-    K.add(root, col(K, o, root, [labelRow(K, "phone", "From " + m.from),
+    K.add(root, col(K, o, root, [labelRow(K, "phone", own(K, o, env, "who", true) === false ? "From your AI" : "From " + m.from),
       K.E("div", "", "max-width:100%;font-size:" + f.fs + "px;font-weight:680;line-height:1.2;margin-top:10px;overflow-wrap:break-word", [f.text])]));
     return root;
   }
@@ -430,7 +469,7 @@
     return inp;
   }
   function open(view) {
-    if (!DOC || !DOC.body) return false;
+    if (!DOC || !DOC.body || off()) return false;
     if (W.CouchDetail && W.CouchDetail.isOpen && W.CouchDetail.isOpen()) W.CouchDetail.close(true);
     if (!sheet) {
       var el = E("div", "cask"), panel = E("div", "cask-panel");
@@ -469,7 +508,7 @@
     var answer = E("div", "cask-answer");
     function draw() {
       while (answer.firstChild) answer.removeChild(answer.firstChild);
-      if (!last) { answer.appendChild(E("div", "cask-hint", "Ask anything. On a Google TV, press OK on the box and then the microphone on the TV's keyboard to say it. Or use Ask on the phone remote: its answer shows here too.")); return; }
+      if (!last) { answer.appendChild(E("div", "cask-hint", "Ask anything. Press OK on the box, then the microphone on the TV's keyboard, to say it. Or use Ask on the phone remote: its answer shows here too.")); return; }
       answer.appendChild(E("div", "cask-q", last.q));
       answer.appendChild(E("div", "cask-a" + (last.err ? " err" : ""), last.pending ? "Thinking..." : last.err || last.a));
     }
@@ -483,11 +522,11 @@
   function viewSetup(b) {
     var s = status(), h = home();
     line(b, "cask-h", "Who answers your questions?");
-    line(b, "cask-p", "Pick one. Your key stays on this TV and is only ever sent to the service you pick. couch-tv never sees it and never pays for it.");
-    if (h.on) button(b, "couch-tv at home" + (s.route === "home" ? "  (in use)" : ""), function () { save({ route: "home" }); show("setup"); },
-      "The home computer's Claude on your own Claude plan, or the couch-tv TV app with the key on its setup page");
+    line(b, "cask-p", "Pick one. Your key stays on this TV and is only ever sent to the service you pick. Couch TV never sees it and never pays for it.");
+    if (h.on) button(b, "Couch TV at home" + (s.route === "home" ? "  (in use)" : ""), function () { save({ route: "home" }); show("setup"); },
+      "The home computer's Claude on your own Claude plan, or the Couch TV app on this TV with the key on its setup page");
     PROVIDERS.forEach(function (p) {
-      button(b, p.name + (s.route === "own" && s.provider === p.id ? "  (in use)" : s.provider === p.id ? "  (saved)" : ""), function () { show("service", p.id); }, p.key ? "Your own key" : "No key: a computer at home runs it");
+      button(b, p.name + (s.route === "own" && s.provider === p.id ? "  (in use)" : s.provider === p.id ? "  (saved)" : ""), function () { show("service", p.id); }, p.key ? "Your own key" : "No key: a home computer runs it");
     });
     if (s.provider || s.route) button(b, "Remove Ask AI from this TV", function () { forget(); show("setup"); }, "Deletes the key and the choices kept on this TV");
   }
@@ -571,13 +610,21 @@
 
   var API = {
     providers: function () { return PROVIDERS.map(function (p) { return { id: p.id, name: p.name, base: p.base, model: p.model, key: p.key, where: p.where }; }); },
-    status: status, save: save, forget: forget, ask: ask, open: open, close: close, isOpen: function () { return !!sheet; },
+    status: status, save: save, forget: forget, ask: ask, open: open, close: close, isOpen: function () { return !!sheet; }, off: off,
     last: function () { return last; }, message: function () { return message; },
     on: function (f) { listeners.push(f); },
     // the home network address a model at home is asked on, for the design page policy (designer-gate.js)
     connectOrigin: function () { var c = config(), o = originOf(c.base); return c.provider === "local" && /^http:\/\//.test(o) && isLocalHost(hostOf(o)) && !isThisDevice(hostOf(o)) ? o : ""; },
     // for the setup sheet and tests
     current: function () { return sheet ? { view: sheet.view, stops: sheet.stops.length, focus: sheet.cur, text: sheet.el.textContent } : null; },
+    // the Android apps' Back (app.js tv.back, never a key): what the Back key does here; false with no sheet
+    back: function () {
+      if (!sheet) return false;
+      var s = sheet.stops[sheet.cur];
+      if (s && s.input && DOC.activeElement === s.input.el) { s.input.el.blur(); return true; }
+      if (sheet.view === "service") show("setup"); else if (sheet.view === "setup" && status().ready) show("ask"); else close();
+      return true;
+    },
     move: function (d) { if (!sheet) return false; sheet.cur = Math.max(0, Math.min(sheet.stops.length - 1, sheet.cur + d)); paint(); return true; },
     ok: function () { if (!sheet) return false; var s = sheet.stops[sheet.cur]; if (s && s.input) { submitted(s.input, s.input.el.value); return true; } if (s && s.ok) s.ok(); return true; },
     type: function (text) { if (!sheet) return false; var s = sheet.stops[sheet.cur]; if (!s || !s.input) return false; s.input.el.value = text; return true; },

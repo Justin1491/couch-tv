@@ -66,6 +66,45 @@ class ReleaseChannelTest {
         assertTrue(ReleaseChannel.newer("v0.13.6", "0.13"))
         assertFalse(ReleaseChannel.newer("v0.13.6", "0.13.6"))
         assertFalse(ReleaseChannel.newer("v0.13.5", "0.13.6"))
+        // 0.13.7 (Hold OK on a TCL, the gear by arrow, Samsung About) reaches 0.13.6 and older TVs
+        assertTrue(ReleaseChannel.newer("v0.13.7", "0.13.6"))
+        assertTrue(ReleaseChannel.newer("v0.13.7", "0.13"))
+        assertFalse(ReleaseChannel.newer("v0.13.7", "0.13.7"))
+        assertFalse(ReleaseChannel.newer("v0.13.6", "0.13.7"))
+        // 0.13.8 (Home settings pages open at the top, Up reaches the lines above) reaches 0.13.7 and older TVs
+        assertTrue(ReleaseChannel.newer("v0.13.8", "0.13.7"))
+        assertTrue(ReleaseChannel.newer("v0.13.8", "0.13"))
+        assertFalse(ReleaseChannel.newer("v0.13.8", "0.13.8"))
+        assertFalse(ReleaseChannel.newer("v0.13.7", "0.13.8"))
+        // 0.13.9 (Update now on the on-TV app, Home settings from a phone, Send a design) reaches 0.13.8 and older TVs
+        assertTrue(ReleaseChannel.newer("v0.13.9", "0.13.8"))
+        assertTrue(ReleaseChannel.newer("v0.13.9", "0.13"))
+        assertFalse(ReleaseChannel.newer("v0.13.9", "0.13.9"))
+        // 0.13.10 (setup in two steps, the first-run welcome, widgets set up on the phone): two digits after the
+        // last dot still count as a number, so it reaches 0.13.9 and older TVs, and is never older than 0.13.9
+        assertTrue(ReleaseChannel.newer("v0.13.10", "0.13.9"))
+        assertTrue(ReleaseChannel.newer("v0.13.10", "0.13"))
+        assertFalse(ReleaseChannel.newer("v0.13.10", "0.13.10"))
+        assertFalse(ReleaseChannel.newer("v0.13.9", "0.13.10"))
+        // 0.13.11 (Add apps in one sheet, Jost and Cormorant on the TV, the on-TV app's own key) reaches 0.13.10
+        // and older TVs, and is never older than 0.13.10
+        assertTrue(ReleaseChannel.newer("v0.13.11", "0.13.10"))
+        assertTrue(ReleaseChannel.newer("v0.13.11", "0.13.9"))
+        assertTrue(ReleaseChannel.newer("v0.13.11", "0.13"))
+        assertFalse(ReleaseChannel.newer("v0.13.11", "0.13.11"))
+        // 0.13.12 (the TV reports its version and memory with a design fetch, Spotify tidy-ups) reaches 0.13.11 and
+        // older TVs, and is never older than 0.13.11
+        assertTrue(ReleaseChannel.newer("v0.13.12", "0.13.11"))
+        assertTrue(ReleaseChannel.newer("v0.13.12", "0.13.10"))
+        assertFalse(ReleaseChannel.newer("v0.13.12", "0.13.12"))
+        assertFalse(ReleaseChannel.newer("v0.13.11", "0.13.12"))
+        // 0.13.13 (Your home from the account, Setup's account link and inbox, Glass text) reaches 0.13.12 and older TVs
+        assertTrue(ReleaseChannel.newer("v0.13.13", "0.13.12"))
+        assertTrue(ReleaseChannel.newer("v0.13.13", "0.13.11"))
+        assertFalse(ReleaseChannel.newer("v0.13.13", "0.13.13"))
+        assertFalse(ReleaseChannel.newer("v0.13.12", "0.13.13"))
+        assertFalse(ReleaseChannel.newer("v0.13.10", "0.13.11"))
+        assertFalse(ReleaseChannel.newer("v0.13.8", "0.13.9"))
     }
 
     @Test fun theOldRulesStillHoldForEveryReleaseSoFar() {

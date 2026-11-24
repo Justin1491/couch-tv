@@ -1,11 +1,12 @@
 // What a real beginner hit on a TCL Android TV with couch-tv 0.13.3 (19 Nov 2026), checked in a real
 // browser at 1920x1080 (the TV home in its ?mock preview, the same page the TV runs), with the remote's keys:
-//  1. Turn on couch-tv Studio said "couch-tv Studio is on" while the row above still said "Off" and the
+//  1. Turn on Couch TV Studio said "Couch TV Studio is on" while the row above still said "Off" and the
 //     button "Turn on". The rows now follow the choice at once, both ways.
 //  2. The TV's keyboard dropped a letter from a design code typed fast ("rstfd-5een"). The box shows
 //     the code as ABCDE-FGHJK and how many letters are in while typing, and OK shows a big Check page
 //     first: a short code says one letter is missing and goes back to the box with it in; a whole code,
-//     typed in any case with no dash, is sent as RSTFD-5EEDN only after "Yes, get this design".
+//     typed in any case with no dash, is sent as RSTFD-5EEDN at once: the TV's own "Use this design?"
+//     is the one question (a second Check page made two confirmations for one choice, launch audit 0.13.9).
 // Needs Playwright (Chromium). Without it the test says so and passes:
 //   COUCHTV_PLAYWRIGHT=<a folder whose node_modules has playwright> node tests/test_tcl_fixes_browser.mjs
 import { createRequire } from "node:module";
@@ -51,26 +52,26 @@ try {
   const rowsText = () => page.evaluate(() => document.getElementById("set-rows").textContent);
   const msg = () => page.evaluate(() => document.getElementById("set-msg").textContent);
   const head = () => page.evaluate(() => document.getElementById("set-head").textContent);
-  const studioValue = () => page.evaluate(() => { const r = [...document.querySelectorAll("#set-rows .srow")].find((x) => (x.querySelector("b") || {}).textContent === "couch-tv Studio"); return r ? ((r.querySelector(".sv") || {}).textContent || "") : null; });
+  const studioValue = () => page.evaluate(() => { const r = [...document.querySelectorAll("#set-rows .srow")].find((x) => (x.querySelector("b") || {}).textContent === "Designs"); return r ? ((r.querySelector(".sv") || {}).textContent || "") : null; });
   const toRow = async (re) => { for (let i = 0; i < 40; i++) { if (re.test(await focused())) return true; await press("ArrowDown", 120); } return false; };
 
   await page.evaluate(() => window.tv.settingsKey()); await page.waitForTimeout(300); await press("Enter", 400);   // the gear menu, then Home settings
-  for (let i = 0; i < 16 && !(await page.evaluate(() => /couch-tv Studio/.test((document.querySelector(".ssec.focus") || {}).textContent || ""))); i++) await press("ArrowDown");
+  for (let i = 0; i < 16 && !(await page.evaluate(() => /Designs/.test((document.querySelector(".ssec.focus") || {}).textContent || ""))); i++) await press("ArrowDown");
   await press("ArrowRight");
 
   // 1. the Studio row follows the switch at once
   ok(await studioValue() === "Off", "before: the row says Off");
-  ok(await toRow(/^Turn on couch-tv Studio/), "a Turn on row");
+  ok(await toRow(/^Turn on designs/), "a Turn on row");
   await press("Enter", 300);
-  ok(/couch-tv Studio is on/.test(await msg()), "it says couch-tv Studio is on");
+  ok(/Designs are on/.test(await msg()), "it says designs are on");
   let rows = await rowsText();
-  ok(await studioValue() !== "Off" && !/Turn on couch-tv Studio/.test(rows), "and the row no longer says Off or Turn on (" + rows.slice(0, 120) + ")");
-  ok(/Back to my classic home/.test(rows), "the way back is there at once");
-  ok(await toRow(/^Back to my classic home/), "Back to my classic home row");
+  ok(await studioValue() !== "Off" && !/Turn on designs/.test(rows), "and the row no longer says Off or Turn on (" + rows.slice(0, 120) + ")");
+  ok(/No design on this TV yet/.test(rows), "the switch says there is no design yet, at once");
+  ok(await toRow(/^Designs/), "the Designs switch");
   await press("Enter", 300);
   rows = await rowsText();
-  ok(await studioValue() === "Off" && /Turn on couch-tv Studio/.test(rows), "switched off: the row says Off again at once");
-  ok(await toRow(/^Turn on couch-tv Studio/), "Turn on again"); await press("Enter", 300);
+  ok(await studioValue() === "Off" && /Turn on designs/.test(rows), "switched off: the row says Off again at once");
+  ok(await toRow(/^Turn on designs/), "Turn on again"); await press("Enter", 300);
 
   // 2. a design code, typed with a letter dropped, then right
   ok(await toRow(/^Get a design/), "a Get a design row");
@@ -92,11 +93,9 @@ try {
   ok(await page.evaluate(() => document.getElementById("set-type").classList.contains("on") && document.getElementById("set-input").value === "rstfd-5een"), "back in the box, with what was typed in it");
   await page.fill("#set-input", "rstfd5eedn");
   ok(/^RSTFD-5EEDN\s+all 10 letters$/.test(await page.evaluate(() => document.getElementById("set-type-check").textContent)), "no dash, lower case: shown as RSTFD-5EEDN, all 10 letters");
-  await press("Enter", 400);
-  ok(/Check the code/.test(await head()) && asked.length === 0, "a whole code is checked first too, and not sent yet");
-  ok(/^Yes, get this design/.test(await focused()), "focus is on Yes, get this design");
   await press("Enter", 800);
-  ok(asked.length === 1 && JSON.parse(asked[0]).code === "RSTFD-5EEDN", "Yes sends the code as RSTFD-5EEDN (" + asked[0] + ")");
+  ok(!/Check the code/.test(await head()), "a whole code: no second Check page");
+  ok(asked.length === 1 && JSON.parse(asked[0]).code === "RSTFD-5EEDN", "OK sends the code as RSTFD-5EEDN (" + asked[0] + ")");
   ok(/That code did not work/.test(await msg()), "and the store's answer is said in plain words");
   ok(!/Check the code/.test(await head()), "and the Check page is gone");
   await press("Escape", 250);

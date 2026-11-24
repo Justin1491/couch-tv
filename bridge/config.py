@@ -7,6 +7,7 @@ and edit it. config.json is in .gitignore: it never gets committed.
 Secrets never go in here. They are environment variables (see env.example).
 """
 import json
+import logging
 import os
 import re
 import shutil
@@ -277,12 +278,135 @@ def _my_scenes(items):
                 "text": "dark" if m.get("text") == "dark" else "light", "cutout": m.get("cutout") is True}
         if m.get("video") is True:   # backgrounds/mine/scene-<id>.mp4 loops over the photo
             item["video"] = True
+        if m.get("when") in ("dawn", "day", "dusk", "night"):   # Follow the sun shows it then (app.js)
+            item["when"] = m["when"]
         if isinstance(m.get("name"), str) and m["name"].strip():
             item["name"] = m["name"].strip()[:40]
         out.append(item)
         if len(out) >= 20:
             break
     return out
+
+
+# The four looks the home can wear. Loop is the video one (docs/LOOP.md): it needs the files below.
+LOOKS = ("night", "classic", "oled", "loop")
+
+# The Loop look's footage, made by scripts/make-loop.sh on this computer (git ignores the folder):
+# <variant>.mp4 and its 160x90 blurred copy <variant>-blur.mp4 for the glass, with a poster of
+# each (<variant>.jpg, <variant>-blur.jpg). One variant per time of day, in this order. A photo's
+# loop made with --matte also has <variant>-fg.png, the cut-out the home draws over the clock, and
+# every run writes loop.json, the loop's length and motion (docs/LOOP.md, the depth effect).
+LOOP_DIR = os.path.join(ROOT, "tv-home", "web", "loop")
+LOOP_VARIANTS = ("dawn", "day", "dusk", "night")
+LOOP_SCREEN = (1920, 1080)   # the home's design pixels, which loop.json's fg rectangle is in
+_log = logging.getLogger("config")
+_loop_json_told = set()      # the loop.json files (path, size, time) already logged as ignored
+
+
+def loop_files(folder):
+    """What the Loop look can play from `folder`: the variants whose .mp4 is there, in the order
+    dawn, day, dusk, night, and `blur` true only when every present variant has its blurred copy
+    (one without it would make the glass go dark at that time of day). A missing folder gives an
+    empty list, so the key is always there for the home to read. `meta` is loop.json when it is
+    there and sound, else None; `fg` is true only when meta has a cut-out rectangle and every
+    present variant has its <variant>-fg.png (one without it would lose the depth at that time of
+    day).
+
+    Only those exact names count, in `folder` itself: make-loop.sh makes each run's files in a hidden
+    folder inside it (.staging-<pid>/.dawn.mp4 and so on) and moves them in only when every encode has
+    worked, loop.json last, so a run under way, or one that failed or was stopped, is never listed. A
+    dotfile, a temp name (dawn.mp4.part, .dawn.mp4) or anything in a subfolder is not a variant."""
+    variants = [v for v in LOOP_VARIANTS if os.path.isfile(os.path.join(folder, v + ".mp4"))]
+    blur = bool(variants) and all(os.path.isfile(os.path.join(folder, v + "-blur.mp4")) for v in variants)
+    meta = loop_meta(folder)
+    fg = bool(variants) and bool(meta and meta["fg"]) and \
+        all(os.path.isfile(os.path.join(folder, v + "-fg.png")) for v in variants)
+    return {"variants": variants, "blur": blur, "version": loop_version(folder, variants), "meta": meta, "fg": fg}
+
+
+def _in_range(v, lo, hi):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi
+
+
+def _whole(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def loop_meta(folder):
+    """loop.json from make-loop.sh: {"still", "seconds", "fps", "zoom", "sway", "fg"}, checked:
+    seconds 15 to 60, fps 30, zoom 0 to 0.2, sway 0 to 1 (a share of the room the zoom leaves, so
+    ffmpeg never clamps it), fg null or whole numbers x, y, w, h
+    with the rectangle inside the 1920x1080 screen. None when the file is missing; when it is there
+    but not sound, None and one log line (once for each version of the file, since this is read on
+    every request for config.js)."""
+    path = os.path.join(folder, "loop.json")
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        return _loop_meta_bad(path, None, "it could not be read (%s)" % e)
+    try:
+        with open(path, encoding="utf-8") as f:
+            m = json.load(f)
+    except (OSError, ValueError) as e:
+        return _loop_meta_bad(path, st, "it could not be read (%s)" % e)
+    if not isinstance(m, dict):
+        return _loop_meta_bad(path, st, "it is not an object")
+    fg = m.get("fg")
+    sw, sh = LOOP_SCREEN
+    why = None
+    if not isinstance(m.get("still"), bool):
+        why = "still is not true or false"
+    elif not _in_range(m.get("seconds"), 15, 60):
+        why = "seconds is not from 15 to 60"
+    elif m.get("fps") != 30 or isinstance(m.get("fps"), bool):
+        why = "fps is not 30"
+    elif not _in_range(m.get("zoom"), 0, 0.2):
+        why = "zoom is not from 0 to 0.2"
+    elif not _in_range(m.get("sway"), 0, 1):
+        why = "sway is not from 0 to 1"
+    elif fg is not None:
+        if not (isinstance(fg, dict) and all(_whole(fg.get(k)) for k in ("x", "y", "w", "h"))):
+            why = "fg is not whole numbers x, y, w and h"
+        elif not (fg["x"] >= 0 and fg["y"] >= 0 and fg["w"] > 0 and fg["h"] > 0
+                  and fg["x"] + fg["w"] <= sw and fg["y"] + fg["h"] <= sh):
+            why = "fg is not inside the %dx%d screen" % (sw, sh)
+    if why:
+        return _loop_meta_bad(path, st, why)
+    return {"still": m["still"], "seconds": m["seconds"], "fps": 30, "zoom": m["zoom"], "sway": m["sway"],
+            "fg": None if fg is None else {k: fg[k] for k in ("x", "y", "w", "h")}}
+
+
+def _loop_meta_bad(path, st, why):
+    key = (path, st.st_size, st.st_mtime_ns) if st else (path, why)
+    if key not in _loop_json_told:
+        _loop_json_told.add(key)
+        _log.warning("the Loop look ignores %s: %s; run scripts/make-loop.sh again (docs/LOOP.md)", path, why)
+    return None
+
+
+def loop_version(folder, variants):
+    """A short mark of the loop files as they are now (names, sizes and times), which the home adds to
+    the files' addresses: the bridge serves them with an hour of caching, and without it a TV would go
+    on playing the old files for an hour after make-loop.sh made new ones. loop.json counts too, as the
+    cut-out's motion lives there. Empty with no variants."""
+    import hashlib
+    h = hashlib.sha1()
+    names = [v + suffix for v in variants for suffix in (".mp4", "-blur.mp4", ".jpg", "-blur.jpg", "-fg.png")]
+    for name in names + ["loop.json"]:
+        try:
+            st = os.stat(os.path.join(folder, name))
+        except OSError:
+            continue
+        h.update(f"{name}:{st.st_size}:{int(st.st_mtime)}\n".encode())
+    return h.hexdigest()[:10] if variants else ""
+
+
+# g24: icon packs. home.icon_set (or Home settings, Look, Icon style) draws the home's own tiles (Settings,
+# More apps, Inputs, Screens) from couch-tv's icon sets (tv-home/web/icon-sets.js STYLES); "builtin" is
+# the usual drawing. Your own app icons are tv-home/tools/app-icons.sh (since 0.13, docs/TV-HOME.md).
+ICON_SETS = ("builtin", "line", "solid", "duotone", "tile", "glass", "playful")
 
 
 def _home(h):
@@ -294,13 +418,17 @@ def _home(h):
     out = {
         # Android package names never shown on the home or in More apps (a maker's own clutter).
         "hide_packages": [p for p in dict.fromkeys(hide) if isinstance(p, str) and re.fullmatch(r"[A-Za-z0-9_.]{1,200}", p)],
-        "look": h.get("look") if h.get("look") in ("night", "classic", "oled") else "night",
+        # Android package names the built-in hidden list would hide, shown anyway (the Google TV app, say).
+        "show_packages": [p for p in dict.fromkeys(h.get("show_packages") if isinstance(h.get("show_packages"), list) else []) if isinstance(p, str) and re.fullmatch(r"[A-Za-z0-9_.]{1,200}", p)],
+        "look": h.get("look") if h.get("look") in LOOKS else "night",
         "scenes": scenes or list(SCENE_IDS),
         "scene_seconds": _int(h.get("scene_seconds"), 20, 5, 3600),
         "dock_size": _int(h.get("dock_size"), DOCK_LIMIT, 1, DOCK_LIMIT),
         # your own scenes, in backgrounds/mine/ (docs/MAKE-A-SCENE.md)
         "my_scenes": mine,
     }
+    if h.get("icon_set") in ICON_SETS:
+        out["icon_set"] = h["icon_set"]
     idle_photo_seconds = h.get("idle_photo_seconds")
     if type(idle_photo_seconds) is int and idle_photo_seconds in (0, 5, 10, 15, 30, 60):
         out["idle_photo_seconds"] = idle_photo_seconds
@@ -310,6 +438,8 @@ def _home(h):
     clock = str(h.get("clock") or "").lower()
     if clock in ("12h", "24h"):
         out["clock"] = clock
+    if isinstance(h.get("clock_seconds"), bool):
+        out["clock_seconds"] = h["clock_seconds"]
     if h.get("language") in LANGUAGES:
         out["language"] = h["language"]
     # The setup's answer to "tell you when a new version is out?": notify (the TV looks once a week)
@@ -336,6 +466,9 @@ def _home(h):
     # lighter home for a slow box (#58): no blur, no soft shadows, a still photo, smaller pictures
     if isinstance(h.get("lighter"), bool):
         out["lighter"] = h["lighter"]
+    # the clock on the home (g17): false hides it in the Night, Classic, OLED and Loop looks
+    if isinstance(h.get("show_clock"), bool):
+        out["show_clock"] = h["show_clock"]
     # draw the home at a lower resolution and let the TV scale it up (weak GPUs, MediaTek/Mali projectors):
     # the app reads it from the saved settings, so it only needs to get through here
     if isinstance(h.get("render_height"), int) and not isinstance(h.get("render_height"), bool) and 360 <= h["render_height"] <= 2160:
@@ -343,7 +476,7 @@ def _home(h):
     # remote buttons that open an app (KeyWatch.kt): "KEYCODE_BUTTON_3:org.smarttube.stable", "190:pkg" or "scan384:pkg"
     if isinstance(h.get("app_keys"), list):
         keys = [k for k in h["app_keys"] if isinstance(k, str) and re.fullmatch(
-            r"(KEYCODE_[A-Z0-9_]{1,40}|\d{1,4}|scan\d{1,4}):[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+", k)]
+            r"(KEYCODE_[A-Z0-9_]{1,40}|\d{1,4}|scan\d{1,4}):(gear|[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+)", k)]
         if keys:
             out["app_keys"] = keys[:30]
     # "always": the 4K copies on a 4K panel whose interface is drawn at 1080 (#191). false: a 4K screen with a weak chip keeps the 1080 backgrounds (lg/build.py then leaves the 4K copies out)
@@ -360,13 +493,49 @@ def _home(h):
     # Now playing on or off (#31), and the navigation sound: the TV's own, soft or off (#32)
     if isinstance(h.get("now_playing"), bool):
         out["now_playing"] = h["now_playing"]
+    if h.get("spotify_player") is True:
+        out["spotify_player"] = True
+    if h.get("football_scores") is True:
+        out["football_scores"] = True
     # false hides the whole Keep watching row and stops the home asking for it. Home settings win over it.
     if isinstance(h.get("keep_watching"), bool):
         out["keep_watching"] = h["keep_watching"]
+    # "poster" shows the Night look's Keep watching as Classic poster tiles, more to a row (#192)
+    if h.get("keep_watching_style") in ("card", "poster"):
+        out["keep_watching_style"] = h["keep_watching_style"]
+    # true puts an Inputs tile first in the dock (#154). Home settings win over it.
+    if isinstance(h.get("input_tile"), bool):
+        out["input_tile"] = h["input_tile"]
+    # true makes the row follow the app the remote is on ("Recently on <app>"). Home settings win over it.
+    if isinstance(h.get("shelf_follows_app"), bool):
+        out["shelf_follows_app"] = h["shelf_follows_app"]
     if isinstance(h.get("ambient_music"), bool):
         out["ambient_music"] = h["ambient_music"]
     if isinstance(h.get("sun_sync"), bool):
         out["sun_sync"] = h["sun_sync"]
+    # the built-in scenes' slow depth zoom (off unless true)
+    if isinstance(h.get("scene_zoom"), bool):
+        out["scene_zoom"] = h["scene_zoom"]
+
+    # a greeting and a short line under the clock (off unless true)
+    if isinstance(h.get("greeting"), bool):
+        out["greeting"] = h["greeting"]
+    # each person's own style of greeting and lines: {"<person id>": "gentle" | "electric"}
+    ps = h.get("person_styles")
+    if isinstance(ps, dict):
+        ps = {k: v for k, v in ps.items() if isinstance(k, str) and v in ("gentle", "electric")}
+        if ps:
+            out["person_styles"] = ps
+    # with sun_sync: how long each scene of the time of day stays, 5 to 240 minutes (app.js)
+    srm = h.get("sun_rotate_minutes")
+    if isinstance(srm, int) and not isinstance(srm, bool) and 5 <= srm <= 240:
+        out["sun_rotate_minutes"] = srm
+    # your own scenes' clips keep playing with Lighter home on
+    if isinstance(h.get("scene_clips_lighter"), bool):
+        out["scene_clips_lighter"] = h["scene_clips_lighter"]
+    # false: the clips never pause when the home sits idle, and the home never starts the screensaver
+    if isinstance(h.get("scene_clips_idle"), bool):
+        out["scene_clips_idle"] = h["scene_clips_idle"]
     if isinstance(h.get("ambient_weather"), bool):
         out["ambient_weather"] = h["ambient_weather"]
     if isinstance(h.get("ambient_sun_grade"), bool):
@@ -381,6 +550,8 @@ def _home(h):
     vid = h.get("video_url")
     if isinstance(vid, str) and re.match(r"https?://", vid) and len(vid) <= 2000:
         out["video_url"] = vid
+    if h.get("bing_daily_background") is True:
+        out["bing_daily_background"] = True
     skip_wn = h.get("skip_watch_next") if isinstance(h.get("skip_watch_next"), list) else []
     out["skip_watch_next"] = [p for p in dict.fromkeys(skip_wn) if isinstance(p, str) and re.fullmatch(r"[A-Za-z0-9_.]{1,200}", p)]
     out["bedtime_dim"] = h.get("bedtime_dim") is True
@@ -406,6 +577,8 @@ def _home(h):
     if src:
         out["custom_cards"] = src[1] if src[0] == "url" else True
     out["watch_next_per_app"] = _int(h.get("watch_next_per_app"), 5, 1, 20)
+    # the Loop look's files on this computer (read only: the bridge builds it, config.json cannot set it)
+    out["loop"] = loop_files(LOOP_DIR)
     out["smart_idle"] = _smart_idle(h.get("smart_idle"))
     if "inputs" in h:
         out["inputs"] = _inputs(h.get("inputs"))
@@ -526,7 +699,10 @@ CUSTOM_CARDS = custom_cards.source((CONFIG.get("home") or {}).get("custom_cards"
                                    os.path.dirname(os.path.abspath(CONFIG_FILE)))
 
 # ---------- quick settings (per TV) and picture modes ----------
-QUICK_IDS = ["sleep", "picture", "look", "soundscape", "screen_off", "input", "screensaver", "headphones", "tvsettings", "extend"]
+# Every button the TV home offers (QUICK_ALL in tv-home/web/app.js): an id missing here is dropped from
+# the bridge's copy of Home settings, and the TV takes that copy back, so the button vanished (g31).
+QUICK_IDS = ["sleep", "picture", "look", "soundscape", "screen_off", "input", "screensaver", "headphones", "tvsettings", "extend",
+             "bluetooth", "network", "reminder"]
 
 
 def quick_for(tv_cfg):
@@ -599,6 +775,41 @@ _ask = CONFIG.get("ask") if isinstance(CONFIG.get("ask"), dict) else {}
 ASK_ENABLED = bool(_ask["enabled"]) if isinstance(_ask.get("enabled"), bool) else _claude_present()
 
 
+# The Spotify card's skip step, in seconds: the one rule for config.json, Home settings (server.clean_settings)
+# and the home itself (app.js cycles through the same four). Anything else is the default, 10.
+SPOTIFY_SEEK_STEPS = (5, 10, 15, 30)
+
+
+def spotify_seek(v):
+    """v when it is one of SPOTIFY_SEEK_STEPS (a whole number, never True or False), else None."""
+    return v if isinstance(v, int) and not isinstance(v, bool) and v in SPOTIFY_SEEK_STEPS else None
+
+
+def _spotify(raw):
+    """Configuration for Spotify local media session integration."""
+    if not isinstance(raw, dict):
+        return {"enabled": False, "seek_seconds": 10, "hide_idle": False, "title_mode": "pingpong", "show_app": True, "align": "classic"}
+    out = {}
+    out["enabled"] = bool(raw.get("enabled", False))
+    out["seek_seconds"] = spotify_seek(raw.get("seek_seconds")) or 10
+    out["hide_idle"] = bool(raw.get("hide_idle", False))
+    mode = raw.get("title_mode")
+    if mode in ("dots", "pingpong", "continuous"):
+        out["title_mode"] = mode
+    else:
+        out["title_mode"] = "pingpong"
+    out["show_app"] = bool(raw.get("show_app", True))
+    align = raw.get("align")
+    if align in ("classic", "center"):
+        out["align"] = align
+    else:
+        out["align"] = "classic"
+    return out
+
+
+SPOTIFY = _spotify(CONFIG.get("spotify"))
+
+
 def save_tvs():
     """Write the TV list back (used by pair_tv.py after pairing). Writes config.json."""
     data = dict(CONFIG)
@@ -611,7 +822,8 @@ def save_tvs():
 def public():
     """The parts the TV home and the phone remote are allowed to see."""
     import kids   # kids mode: the shelf and the PIN's hash (never the PIN) on each kids profile
-    return {"people": kids.attach(PEOPLE), "weather": WEATHER, "home": HOME,
+    # home.loop is read afresh: make-loop.sh may have run since the bridge started
+    return {"people": kids.attach(PEOPLE), "weather": WEATHER, "home": dict(HOME, loop=loop_files(LOOP_DIR)),
             "tvs": [dict({"id": t["id"], "name": t["name"], "quick": quick_for(t),
                           "extend_devmode": t.get("extend_devmode", True) is not False,
                           "picture_modes": [m["name"] for m in picture_modes(t.get("picture"))]},
@@ -619,6 +831,7 @@ def public():
                          **({"inputs": _inputs(t["inputs"])} if isinstance(t.get("inputs"), list) else {}))
                      for t in TVS],
             "default_tv": DEFAULT_TV, "ask": {"enabled": ASK_ENABLED}, "phone_remote": PHONE_REMOTE,
+            "spotify": SPOTIFY,
             # only when config.json has one: without it the home is exactly as before
             **({"design": DESIGN} if DESIGN else {}),
             **({"design_store": DESIGN_STORE} if DESIGN_STORE is not None else {})}

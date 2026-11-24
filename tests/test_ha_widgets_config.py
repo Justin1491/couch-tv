@@ -46,6 +46,24 @@ class HaWidgetsConfig(unittest.TestCase):
         self.assertEqual([c["entity"] for c in ha["controls"]],
                          ["light.lounge", "switch.heater", "fan.bed", "cover.blinds", "light.front_door_light"])
         self.assertIn("nothing that opens the house", err)
+        # a script or scene named for a garage, gate, door, lock or alarm is refused the same way
+        ha, err = self.section(scenes=["scene.movie", "script.open_garage", "scene.alarm_off", "script.front_door_unlock", "script.good_night"])
+        self.assertEqual([s["entity"] for s in ha["scenes"]], ["scene.movie", "script.good_night"])
+        self.assertIn("nothing that opens the house", err)
+
+    def test_the_house_test_agrees_with_every_other_copy(self):
+        # the same ids every copy is tested with (tests/fixtures/opens_house_ids.json)
+        t = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "opens_house_ids.json")))
+        for key, doms, most in (("controls", ("cover", "switch"), 16), ("scenes", ("script", "scene"), 10)):
+            refuse = [e for e in t["refuse"] if e.split(".")[0] in doms]
+            ok = [e for e in t["pass"] if e.split(".")[0] in doms]
+            for i in range(0, len(refuse), most):
+                ha, err = self.section(**{key: [{"entity": e} for e in refuse[i:i + most]]})
+                self.assertFalse((ha or {}).get(key), "refused: %s" % refuse[i:i + most])
+            for i in range(0, len(ok), most):
+                ha, _ = self.section(**{key: [{"entity": e} for e in ok[i:i + most]]})
+                self.assertEqual([c["entity"] for c in ha[key]], ok[i:i + most])
+        self.assertIn("nothing that opens the house", err)
 
     def test_limits_and_bad_ids(self):
         ha, _ = self.section(cameras=[f"camera.c{i}" for i in range(6)] + ["sensor.x"],

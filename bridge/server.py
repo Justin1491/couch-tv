@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import logging
 import mimetypes
 import os
@@ -21,7 +22,7 @@ from collections.abc import MutableMapping
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from aiohttp import web
+from aiohttp import ClientError, web
 
 import apps
 import config
@@ -50,9 +51,12 @@ import spotify_now
 import webdata
 import plex
 import smarthome
+import haphone
 import bookings
 import direct
+import matter
 import say
+import phonepage
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -60,6 +64,7 @@ REMOTE_DIR = os.path.join(ROOT, "remote", "dist")
 LAUNCHER_DIR = os.path.join(ROOT, "tv-home", "web")
 TITAN_DIR = os.path.join(ROOT, "titan")   # the start page a Titan OS app opens (docs/PHILIPS-TITAN.md), and a TiVo OS tile
 SHIM_PATH = os.path.join(HERE, "web", "shim.js")
+PHONE_PAGE_DIR = os.path.join(ROOT, "on-tv", "web")   # the phone's Home settings page (setup.html, shim.js)
 PORT = int(os.environ.get("PORT") or config.BRIDGE["port"])
 HOME_TZ = ZoneInfo(config.TIMEZONE)   # the home's time zone (weather.timezone in config.json)
 
@@ -170,16 +175,23 @@ def now_iso():
     return datetime.now(HOME_TZ).isoformat(timespec="seconds")
 
 
+def settings_stamp():
+    """Home settings' "updated": to the millisecond, so a phone change in the same second as the TV's
+    last copy still counts as newer (the seen merge, h_settings_set)."""
+    return datetime.now(HOME_TZ).isoformat(timespec="milliseconds")
+
+
 def cur_who():
     """Who is on the couch at the TV this request or loop is for (each TV keeps its own)."""
     return store.current_who(_current.get())
 
 
 class ApiError(Exception):
-    def __init__(self, status, message, key=None, vars=None):
+    def __init__(self, status, message, key=None, vars=None, retry_after=None):
         super().__init__(message)
         self.status, self.message = status, message
         self.key, self.vars = key, vars
+        self.retry_after = retry_after   # seconds, for a 429: the Retry-After header and retry_after field
 
 
 def ok(**fields):
@@ -306,6 +318,8 @@ def extract_auth_key(request):
     q_key = (request.query.get("key") or request.query.get("token") or "").strip()
     if q_key:
         return q_key
+    # (no cookie: the phone's Home settings page fetches its photos with the header, so the key is never in
+    # a cookie, which every other web service on this computer would be sent too)
     return None
 
 
@@ -331,6 +345,104 @@ _failed_attempts = {}
 RATE_LIMIT_MAX = 5
 RATE_LIMIT_WINDOW = 60.0
 RATE_LIMIT_ADDRESSES = 1000   # memory bound: at most this many addresses are remembered
+
+
+# The Apple TV's six digit codes (21 Nov 2026), the same rules as the on-TV app's Auth.kt and the phone
+# page (phonepage.py, PhoneAuth.kt): at /api/appletv/claim, while a code is live, one address may make 5
+# different wrong tries in 10 minutes, then it waits (429, Wait N min) and nobody else does; the same wrong
+# code again from that address is not a new try. 15 wrong tries in 10 minutes across every address (so 3
+# addresses or more) lock the claim for everyone for 10 minutes. An IPv6 caller counts by its /64. Only
+# while a code is live, so nobody can keep it locked when no Apple TV is pairing. The pairing key
+# (/api/pair) and the VIDAA and Panasonic claim codes are long, so they keep only the per address limit
+# above: a lock there would let one caller shut the owner out. The clock is monotonic, so a clock change
+# can't open it.
+PAIR_LOCK_MAX = 15            # across every address
+PAIR_ADDRESS_MAX = 5          # different wrong codes from one address in the window
+PAIR_LOCK_WINDOW = 600.0
+PAIR_LOCK_SECS = 600.0
+PAIR_LOCK_ADDRESSES = 1000    # memory bound (as RATE_LIMIT_ADDRESSES): the oldest address goes first
+
+
+class _PairLock:
+    def __init__(self, most):
+        self.most, self.tries, self.until = most, [], 0.0
+
+    def left(self, now):
+        left = self.until - now
+        return int(-(-left // 1)) if left > 0 else 0
+
+    def wrong(self, now):
+        cutoff = now - PAIR_LOCK_WINDOW
+        while self.tries and self.tries[0] <= cutoff:
+            self.tries.pop(0)
+        self.tries.append(now)
+        if len(self.tries) >= self.most:
+            self.until, self.tries = now + PAIR_LOCK_SECS, []
+            return True
+        return False
+
+
+_pair_all = _PairLock(PAIR_LOCK_MAX)
+_pair_by_address = {}     # address key -> [(time, guess)] in the window, oldest address first
+
+
+def pair_address_key(ip):
+    """What a caller's wrong tries count under: its IPv4 address, or the /64 of an IPv6 one."""
+    s = (ip or "").strip()
+    try:
+        a = ipaddress.ip_address(s.split("%")[0])
+    except ValueError:
+        return s
+    if a.version == 6 and a.ipv4_mapped:
+        return str(a.ipv4_mapped)
+    if a.version == 6:
+        return str(ipaddress.ip_network(f"{a}/64", strict=False))
+    return str(a)
+
+
+def _address_tries(k, now):
+    return [t for t in _pair_by_address.get(k, []) if now - t[0] < PAIR_LOCK_WINDOW]
+
+
+def pair_locked_for(now=None, ip=None):
+    """Seconds pairing stays locked for this caller (0: open): its own wait or the lock for everyone. With no
+    address (ip None: the computer itself, or a caller that passes none) only the lock for everyone applies."""
+    now = time.monotonic() if now is None else now
+    mine = _address_tries(pair_address_key(ip), now) if ip is not None else []
+    wait = 0
+    if len(mine) >= PAIR_ADDRESS_MAX:
+        wait = max(1, int(-(-(mine[0][0] + PAIR_LOCK_WINDOW - now) // 1)))
+    return max(_pair_all.left(now), wait)
+
+
+def pair_wrong(now=None, ip=None, guess=None):
+    """Counts one wrong pairing try from this caller (the same wrong guess again from it is not counted);
+    True when it has just locked pairing for everyone."""
+    now = time.monotonic() if now is None else now
+    if ip is None:   # no address: counts only toward the lock for everyone, never a shared "" address
+        return _pair_all.wrong(now)
+    k = pair_address_key(ip)
+    mine = _address_tries(k, now)
+    if guess is not None and any(g == guess for _, g in mine):
+        return False
+    _pair_by_address.pop(k, None)
+    _pair_by_address[k] = mine + [(now, guess if guess is not None else object())]   # newest last
+    while len(_pair_by_address) > PAIR_LOCK_ADDRESSES:
+        _pair_by_address.pop(next(iter(_pair_by_address)))
+    return _pair_all.wrong(now)
+
+
+def pair_lock_reset():
+    _pair_all.tries, _pair_all.until = [], 0.0
+    _pair_by_address.clear()
+
+
+def check_pair_lock(ip=None):
+    left = pair_locked_for(ip=ip)
+    if left > 0:
+        mins = max(1, -(-left // 60))
+        raise ApiError(429, f"Too many wrong codes. Wait {mins} min, then try again.",
+                       key="err_pairing_locked", vars={"minutes": mins}, retry_after=left)
 
 
 def client_ip(request):
@@ -409,7 +521,10 @@ def record_action(request, tool, args, success):
 # The Spotify login (bridge/spotify_now.py) is opened in a browser on the bridge computer, and Spotify's
 # redirect back can't carry the pairing key: it is guarded by _loopback_only and a one-time state instead.
 OPEN_PATHS = {"/api/health", "/api/pair", "/api/vidaa/claim", "/api/appletv/claim",
-              "/api/spotify/login", "/api/spotify/callback"}
+              "/api/spotify/login", "/api/spotify/callback", "/api/pair/start"}
+# POSTs whose body is not JSON: a photo from the phone's Home settings page (the picture itself, read as a
+# stream after the key is checked) and "Show a code on the TV" (no body at all)
+RAW_POSTS = {"/api/photos", "/api/pair/start"}
 
 
 @web.middleware
@@ -432,7 +547,7 @@ async def middleware(request, handler):
     else:
         try:
             # 3. Refuse POST without application/json (couch-tv#73)
-            if request.method == "POST" and request.content_type != "application/json":
+            if request.method == "POST" and request.content_type != "application/json" and request.path not in RAW_POSTS:
                 raise ApiError(415, "Content-Type must be application/json", key="err_content_type_json")
 
             # 4. Check pairing key authentication & rate limiting for protected API endpoints (couch-tv#73)
@@ -456,7 +571,7 @@ async def middleware(request, handler):
                     raise ApiError(401, "pairing key required", key="err_pairing_key_required")
 
             tv_id = request.query.get("tv")
-            if not tv_id and request.method == "POST" and request.body_exists:
+            if not tv_id and request.method == "POST" and request.body_exists and request.path not in RAW_POSTS:
                 try:
                     data = await request.json()  # aiohttp keeps the body, handlers read it again
                     tv_id = data.get("tv") if isinstance(data, dict) else None
@@ -473,7 +588,10 @@ async def middleware(request, handler):
             _current.set(tv_id)
             resp = await handler(request)
         except ApiError as e:
-            resp = web.json_response({"ok": False, "error": e.message, **messages.err_fields(e)}, status=e.status)
+            extra = {"retry_after": e.retry_after} if e.retry_after else {}
+            resp = web.json_response({"ok": False, "error": e.message, **messages.err_fields(e), **extra}, status=e.status)
+            if e.retry_after:
+                resp.headers["Retry-After"] = str(e.retry_after)
         except TVUnavailable as e:
             resp = web.json_response({"ok": False, "error": str(e), **messages.err_fields(e)}, status=503)
         except ValueError as e:
@@ -605,6 +723,15 @@ def now_payload():
 
 
 # ---------- handlers ----------
+def serves_phone_page(app):
+    """Whether this computer serves the phone's Home settings page (/setup): the phone remote shows
+    Home settings on this phone, and Widgets on this TV, only then."""
+    try:
+        return any((r.resource.get_info().get("path") == "/setup") for r in app.router.routes() if r.resource is not None)
+    except Exception:
+        return False
+
+
 async def h_health(request):
     authed = is_authed(request)
     return ok(
@@ -613,11 +740,14 @@ async def h_health(request):
         version="1",
         auth="ok" if authed else "required",
         paired=authed,
+        phone_page=serves_phone_page(request.app),
     )
 
 
 async def h_pair(request):
     b = await body(request)
+    if "pin" in b and "key" not in b:
+        return await pair_with_code(request, b.get("pin"))
     given = str(b.get("key") or "").strip()
     if not config.PAIRING_KEY:
         return ok(paired=True, note="no pairing key required",
@@ -832,6 +962,20 @@ SEARCH_LINKS = {
     "youtube": "https://www.youtube.com/results?search_query={q}",
 }
 
+# The same, for a build of the app that wants another link: Amazon's YouTube on a Fire TV takes the
+# web results link but shows its home, and opens its results page for the link Alexa's own voice
+# search sends it (youtube://search?query=..., with or without &isVoice=true, with or without the
+# BROWSABLE category; its results page takes about ten seconds to draw). Tested on a Fire TV Cube,
+# Fire OS 7.7, YouTube 24.40, cold and already open.
+SEARCH_LINKS_BY_PACKAGE = {
+    "com.amazon.firetv.youtube": "youtube://search?query={q}",
+}
+
+
+def search_link(app, pkg):
+    """The search link for this app as this TV has it: the build's own if it needs one, else the app's."""
+    return SEARCH_LINKS_BY_PACKAGE.get(pkg) or SEARCH_LINKS.get(app["id"])
+
 
 # Apps not on JustWatch that open a title's page by its IMDb id, tested on this TV (DEEPLINKS.md).
 # Nuvio takes only the show or film: "nuvio://series/tt22202452:1:8" is read as one id and fails.
@@ -866,7 +1010,7 @@ async def search_in_app(app, title, best=None):
                 return "deeplink", f"Opened the {title} page in {app['name']}."
         except Exception as e:
             log.warning("title link failed for %s: %s", app["id"], e)
-    link = SEARCH_LINKS.get(app["id"]) if tv.kind == "android" else None
+    link = search_link(app, pkg) if tv.kind == "android" else None
     if link:
         await tv.start_intent(link.format(q=quote(title)), pkg)
         if await tv.wait_for_app({pkg}, timeout=8):
@@ -909,11 +1053,54 @@ def resume_link(app_id, link, title):
     return link
 
 
+LINK_LOST = "Couch TV lost its link to this TV. On the TV, switch Network debugging off and on in Developer options."
+
+
+def _adb_lost():
+    """The TV's adb is known to be down right now (tv.py adb_known_down; never a network probe)."""
+    return bool(getattr(tv, "adb_known_down", False))
+
+
+def _link_lost():
+    return ApiError(503, LINK_LOST, key="err_tv_link_lost")
+
+
+def _retry_adb_soon():
+    """One background adb reconnect, never waited on (tv.py retry_adb_soon)."""
+    retry = getattr(tv, "retry_adb_soon", None)
+    if retry:
+        try:
+            retry()
+        except Exception as e:
+            log.info("adb reconnect not started: %s %s", type(e).__name__, e)
+
+
+async def _open_link_by_remote(link):
+    """adb is down: hand the show's link to the TV over the remote protocol (port 6466), which
+    answers at once. A TV that is off or out of reach says so (TVUnavailable, err_tv_not_connected,
+    unchanged); any other failure of that link is err_tv_link_lost."""
+    try:
+        await tv.open_link(intent_to_link(str(link).replace("'", "")))
+    except TVUnavailable:
+        raise
+    except Exception as e:
+        log.warning("remote protocol could not open the link either: %s %s", type(e).__name__, e)
+        raise _link_lost()
+
+
 async def play(title, season=None, episode=None, service=None, who=None, resume=False, exact=False,
                same=None):
     """`exact`: only a result with this title will do (finder.same_title, or `same` when given); the
-    search's best guess for a name it does not know is a 404 instead of another show."""
-    await installed_packages()
+    search's best guess for a name it does not know is a 404 instead of another show.
+
+    When the TV's adb is known to be down (adb_lost), nothing waits on adb: the show's link goes over
+    the remote protocol at once, without checking that it plays, or err_tv_link_lost comes back
+    (err_tv_not_connected when the TV is off or out of reach). One adb reconnect starts in the
+    background, so the next play uses adb again once the link is back."""
+    adb_lost = _adb_lost()
+    if adb_lost:
+        _retry_adb_soon()   # so the next play uses adb again once the link is back
+    await installed_packages(wait=not adb_lost)
     best, _ = await finder.find(title)
     if not best or (exact and not (same or finder.same_title)(best["title"], title)):
         raise ApiError(404, f"could not find {title}", key="err_title_not_found", vars={"title": title})
@@ -938,6 +1125,9 @@ async def play(title, season=None, episode=None, service=None, who=None, resume=
             if not app:
                 raise ApiError(400, f"unknown service: {service}", key="err_unknown_service", vars={"service": service})
             # Not listed by JustWatch on that service: open it and search.
+            if adb_lost:
+                tv.require()   # a TV that is off or out of reach says so, not "lost its link"
+                raise _link_lost()
             method, note = await search_in_app(app, best["title"], best)
             note_key, note_vars = _search_note_fields(method, app, best["title"])
             return finish_play(best, app, method, note, season, episode, who, ep_info,
@@ -976,6 +1166,16 @@ async def play(title, season=None, episode=None, service=None, who=None, resume=
         note_key, note_vars = "note_opened_show_season_picked", {"season": season}
     elif resume and best["type"] == "tv":
         link = resume_link(app["id"], link, best["title"])
+
+    if adb_lost:
+        if not (app["deeplink"] == "jw" and link and tv.can_deeplink(app)):
+            tv.require()   # a TV that is off or out of reach says so, not "lost its link"
+            raise _link_lost()
+        await _open_link_by_remote(link)
+        log.info("play %s in %s: opened over the remote protocol (adb is down), not checked", best["title"], app["name"])
+        return finish_play(best, app, "deeplink", f"Opened the {best['title']} page in {app['name']}.",
+                           season, episode, who, note_key="note_opened_title_page",
+                           note_vars={"title": best["title"], "app": app["name"]})
 
     method, started = None, None
     pkg = pkg_of(app)
@@ -1041,6 +1241,18 @@ async def h_webos_apps(request):
     if tv.kind != "lg":
         raise ApiError(400, "only for LG TVs", key="err_only_lg")
     return ok(apps=await tv.apps_on_tv())
+
+
+async def h_webos_icon(request):
+    """An LG app's icon: the TV serves it only on its self-signed port, which the couch-tv page refuses."""
+    if tv.kind != "lg":
+        raise ApiError(400, "only for LG TVs", key="err_only_lg")
+    try:
+        data, kind = await tv.icon(request.match_info["id"])
+    except (ValueError, TVUnavailable, ClientError, asyncio.TimeoutError) as e:
+        raise ApiError(404, str(e), key=getattr(e, "key", None) or "err_lg_no_icon",
+                       vars=getattr(e, "vars", None) or {"id": request.match_info["id"]})
+    return web.Response(body=data, content_type=kind.split(";")[0], headers={"Cache-Control": "max-age=86400"})
 
 
 async def h_roku_apps(request):
@@ -1156,11 +1368,14 @@ async def h_appletv_claim(request):
     data = await body(request)
     code = str(data.get("code") or "").strip()
     ip = client_ip(request)
+    check_pair_lock(ip)
     if is_rate_limited(ip):
         raise ApiError(429, "Too many wrong codes. Please wait a minute.", key="err_too_many_codes")
     found = appletv_codes.pop(code, None) if re.fullmatch(r"\d{6}", code) else None
     if not found or found[0] <= time.monotonic() or found[1] not in TVS:
         record_failed_attempt(ip, code)
+        if any(exp > time.monotonic() for exp, _ in appletv_codes.values()):
+            pair_wrong(ip=ip, guess=code[:12])   # only while a code is live: nobody can keep the claim locked
         await asyncio.sleep(0.3)
         raise ApiError(401, "that code is not valid (a code works once, for ten minutes)", key="err_invalid_code_10m")
     t = TVS[found[1]]
@@ -1654,9 +1869,11 @@ async def get_it_playing(app, link, who):
     return await wait_until_playing(pkg, timeout=6), picked
 
 
-async def wait_until_playing(pkg, timeout=30):
+async def wait_until_playing(pkg, timeout=30, seen=None):
     """True once the app's media session says PLAYING and its position moves on (a profile
-    screen or a stuck page never gets there). Netflix started fresh takes about 20 s."""
+    screen or a stuck page never gets there). Netflix started fresh takes about 20 s.
+    `seen`, when given, gets "at": the moment (time.monotonic) it was first read as playing and has
+    been ever since; a read that is not playing takes it away again."""
     end = time.monotonic() + timeout
     first = None
     while time.monotonic() < end:
@@ -1668,9 +1885,13 @@ async def wait_until_playing(pkg, timeout=30):
         s = next((s for s in _sessions(out) if s.get("package") == pkg and s.get("state")), None)
         if not s or s["state"] != "PLAYING" or s.get("position") is None:
             first = None
+            if seen is not None:
+                seen.pop("at", None)   # it stopped again: it has not been playing since then
             continue
         if first is None:
             first = s["position"]
+            if seen is not None:
+                seen["at"] = time.monotonic()
         elif s["position"] != first:
             return True
     return False
@@ -2134,6 +2355,8 @@ async def h_ask(request):
 
 # ---------- Ask AI on the TV, and messages and designs from the person's own AI agent (say.py) ----------
 async def h_say(request):
+    if request.query.get("home") == "1":   # the TV home itself (ask.js), not an agent reading it
+        say.heard(_current.get())
     return ok(**say.snapshot(_current.get(), claude._last.get(_current.get() or "default")))
 
 
@@ -2145,7 +2368,17 @@ async def h_say_message(request):
 async def h_say_design(request):
     data = await body(request)
     # the TV fetches it and always asks "Use this design?" first: someone at the TV says yes
-    return ok(design=say.design(_current.get(), data.get("code")), asks_first=True)
+    # listening: the TV home asked in the last 30 s; false means it shows the design when it next opens
+    # (within 10 minutes, ask.js), and the phone remote says so instead of "Sent"
+    return ok(design=say.design(_current.get(), data.get("code"), data.get("from")), asks_first=True,
+              listening=say.listening(_current.get()))
+
+
+async def h_say_scene(request):
+    data = await body(request)
+    sc = say.scene(_current.get(), data.get("pick"))   # anything but next or prev: a 400
+    # listening false: the TV home is not on screen now, so the phone remote says it changes once it is
+    return ok(scene=sc, listening=say.listening(_current.get()))
 
 
 async def h_recs(request):
@@ -2153,6 +2386,286 @@ async def h_recs(request):
     picks, updated = await claude.cached_recs(who, lang=home_settings().get("settings", {}).get("lang"))
     return web.json_response({"ok": True, "updated": updated,
                               "continue": continue_items(who, request_base(request)), "picks": picks})
+
+
+# ---------- the phone's Home settings page (on-tv/web/setup.html), served here for a bridge TV ----------
+# Same page and endpoints as the on-TV app's /setup (Server.kt), with the bridge's own key: the 6 digit
+# code from the TV's Home settings QR (or "Show a code on the TV") is swapped for the pairing key, the
+# key the phone remote pairs with. At home and a design's widget settings stay in the TV home's own
+# store: they are handed to it through phonepage.py (the TV home asks GET /api/phone/inbox).
+PHONE_KEYS = ("place", "photos")          # Home settings keys the phone's page changes (SettingsMerge.PHONE_KEYS)
+PHONE_PATCH_KEYS = {"place"}              # what settings_patch may change (Server.kt PATCH_KEYS)
+ATHOME_EDIT_KEYS = {"note", "lists", "wifi", "guide", "cal_url", "stay_url", "checkin", "checkout", "widget_set", "design_apps"}
+_TV_ID_SAFE = re.compile(r"[A-Za-z0-9_-]{1,40}")
+_pair_start_at = [0.0]
+_photo_one = [None]   # (loop, asyncio.Semaphore(1)), made in the running loop: one phone photo decoded at a time
+
+
+def _same_site_only(request):
+    """The code calls answer only the phone's page itself (its own http address) or a client with no
+    Origin: never Origin null or file:, which any web page can send from a sandboxed frame (the TV apps
+    that send those never pair by code)."""
+    origin = (request.headers.get("Origin") or "").strip().lower()
+    if origin and not origin.startswith(("http://", "https://")):
+        raise ApiError(403, "forbidden origin", key="err_something_wrong")
+
+
+async def pair_with_code(request, pin):
+    """POST /api/pair {"pin": "123456"}: the code shown on the TV, once, for the pairing key."""
+    _same_site_only(request)
+    check_pair_lock()   # 15 wrong codes in 10 minutes, while a code was live, lock code pairing for 10 minutes
+    ip = client_ip(request)
+    # one address: 5 different wrong codes in 10 minutes, then it waits (about 720 guesses a day at most)
+    if is_rate_limited(ip):
+        raise ApiError(429, "Too many wrong codes. Wait a minute, then try again.", key="err_too_many_codes")
+    wait = phonepage.address_wait(ip, PAIR_LOCK_WINDOW, time.monotonic())
+    if wait:
+        mins = max(1, -(-wait // 60))
+        raise ApiError(429, f"Too many wrong codes. Wait {mins} min, then try again.",
+                       key="err_pairing_locked", vars={"minutes": mins}, retry_after=wait)
+    await asyncio.sleep(0.4)   # slows guessing a little more (Server.kt)
+    check_pair_lock()   # (a lock made while this one waited)
+    was_live = phonepage.current_pin() is not None
+    if not phonepage.pair(pin, ip):
+        if was_live:
+            # only a guess at a live code counts (with no code there is nothing to guess, so nobody can keep
+            # pairing locked that way), and the same wrong code again from one address is not a new guess
+            record_failed_attempt(ip, "pin:" + str(pin))
+            if phonepage.counts_for_lock(ip, pin, PAIR_LOCK_WINDOW, time.monotonic()):
+                pair_wrong()
+        raise ApiError(401, "That code has expired. Ask the TV for a new one." if not phonepage.current_pin()
+                       else "That code is not right. Check the TV.", key="err_code_expired" if not phonepage.current_pin() else "err_code_wrong")
+    # no pairing key set: every call is open already, so there is nothing to hand over
+    return ok(paired=True, token=config.PAIRING_KEY or "open")
+
+
+async def h_pair_start(request):
+    """"Show a code on the TV" on the phone's pairing screen: the TV's live code (the one in its QR), or a new
+    one when it has 90 s or less left, shown as a line on that TV's home. Never swaps a live code."""
+    _same_site_only(request)
+    check_pair_lock()
+    now = time.time()
+    if now - _pair_start_at[0] < 5:
+        raise ApiError(429, "A code is on the TV already. Wait a moment, then ask again.", key="err_code_on_tv")
+    _pair_start_at[0] = now
+    phonepage.show_pin(_current.get())
+    return ok(digits=6, expires_in=phonepage.pin_seconds_left(), note="The code is on the TV now.", **messages.note_fields("note_code_on_tv"))
+
+
+def phone_extras():
+    """What the phone's Home settings page reads besides the settings: that this is a home computer
+    (the page leaves out what only the on-TV app does), the people and the town now."""
+    w = config.WEATHER or {}
+    kind = next((t.get("kind") for t in TV_CONFIG["tvs"] if t["id"] == _current.get()), None)
+    # what draws this TV's home: the couch-tv home page ("web": Samsung, LG, Android TV...), the Roku channel,
+    # the Apple TV app, or nothing of couch-tv's (a VIZIO: the phone remote only). Only the web home keeps At
+    # home, your photos and a design's widgets; the others take the town and the people from here.
+    home = {"roku": "roku", "appletv": "appletv", "vizio": "none"}.get(kind, "web")
+    return {"mode": "bridge", "home": home, "people": [{"id": p["id"], "name": p["name"]} for p in config.PEOPLE],
+            "weather": {"place": w.get("place")} if w.get("place") else None,
+            "tv_name": next((t.get("name") for t in TV_CONFIG["tvs"] if t["id"] == _current.get()), "") or ""}
+
+
+def _write_settings(settings):
+    updated = settings_stamp()
+    store._write(_settings_path(), {"settings": settings, "updated": updated})
+    phonepage.settings_changed(_current.get(), updated)
+    return updated
+
+
+def settings_patch(p):
+    """The phone's change to Home settings: only the keys it names (null takes one out), so a town picked
+    on the phone never undoes a look picked on the TV. "place" is the home's Location, as the TV saves it."""
+    if not isinstance(p, dict) or not p:
+        raise ApiError(400, "settings_patch must be an object", key="err_body_must_be_json_object")
+    for k in p:
+        if k not in PHONE_PATCH_KEYS:
+            raise ApiError(400, f"{k} is not changed from the phone", key="err_unknown_key", vars={"key": k})
+    pl = p.get("place")
+    if pl is not None:
+        if not isinstance(pl, dict):
+            raise ApiError(400, "place must be an object or null", key="err_body_must_be_json_object")
+        if not (_num(pl.get("lat"), -90, 90) and _num(pl.get("lon"), -180, 180)) or not str(pl.get("name") or "").strip():
+            raise ApiError(400, "place needs a name, and lat and lon as numbers", key="err_body_must_be_json_object")
+    s = dict(home_settings()["settings"])
+    for k, v in p.items():
+        if v is None:
+            s.pop(k, None)
+        else:
+            s[k] = v
+    s = clean_settings(s)
+    updated = _write_settings(s)
+    return {"settings": s, "updated": updated}
+
+
+async def h_phone_link(request):
+    """For the TV home's Home settings QR and Hold OK, Edit on your phone: this computer's /setup with a
+    pairing code inside (#pin=, the phone remote's pairing QR format). Only the TV home asks (it has the
+    key); the address is the one the TV reached this computer by, so the phone on the same Wi-Fi can too."""
+    host = (request.headers.get("Host") or "").strip()
+    name = host_name(host)
+    if not name or name in ("localhost", "::1") or name.startswith("127."):
+        ip = lan_ipv4()
+        if not ip:
+            raise ApiError(503, "This computer is not on a network yet.", key="err_something_wrong")
+        host = f"{ip}:{PORT}"
+    check_pair_lock()   # locked: no QR with a code that cannot work (the TV home hides it and asks again)
+    tv = _current.get()
+    q = f"?tv={tv}" if tv != DEFAULT_TV and _TV_ID_SAFE.fullmatch(tv) else ""
+    pin = phonepage.pin_for_qr(tv)
+    return ok(url=f"http://{host}/setup{q}#pin={pin}", pin_expires_in=phonepage.pin_seconds_left())
+
+
+def _athome_answer(r):
+    if r is None:
+        return ok(live=False, queued=True)
+    if r.get("refused"):
+        raise ApiError(409, str(r.get("error") or "Open the Couch TV home on the TV first, then save again."), key="err_tv_home_closed")
+    if not r.get("ok"):
+        raise ApiError(400, str(r.get("error") or "That did not save."), key="err_something_wrong")
+    return ok(live=True, athome=r.get("athome") if isinstance(r.get("athome"), dict) else {})
+
+
+async def h_athome_get(request):
+    view = phonepage.read(_current.get())
+    return ok(live=False) if view is None else ok(live=True, athome=view)
+
+
+async def h_athome_set(request):
+    data = await body(request)
+    e = data.get("edit")
+    if not isinstance(e, dict) or not e:
+        raise ApiError(400, "edit is required", key="err_body_must_be_json_object")
+    if phonepage.json_size(e) > phonepage.EDIT_MAX:
+        raise ApiError(413, "That is too much to send at once.", key="err_too_big")
+    bad = [k for k in e if k not in ATHOME_EDIT_KEYS]
+    if bad:
+        raise ApiError(400, f"{bad[0]} is not changed from the phone", key="err_unknown_key", vars={"key": bad[0]})
+    try:
+        r = await phonepage.edit(_current.get(), e)
+    except phonepage.Refused as x:
+        raise ApiError(x.status, str(x), key=x.key)
+    return _athome_answer(r)
+
+
+async def h_phone_inbox(request):
+    """The TV home's side: the phone's changes waiting for it, and what else it should know now."""
+    return ok(**phonepage.inbox(_current.get()))
+
+
+async def h_phone_view(request):
+    data = await body(request)
+    v = data.get("athome")
+    if v is not None and not isinstance(v, dict):
+        raise ApiError(400, "athome must be an object or null", key="err_body_must_be_json_object")
+    if phonepage.json_size(v) > phonepage.VIEW_MAX:
+        raise ApiError(413, "too big", key="err_too_big")
+    phonepage.take_view(_current.get(), v)
+    return ok()
+
+
+async def h_phone_done(request):
+    data = await body(request)
+    eid, result = data.get("id"), data.get("result")
+    if not isinstance(eid, int) or isinstance(eid, bool) or not isinstance(result, dict):
+        raise ApiError(400, "id (a number) and result (an object) are required", key="err_body_must_be_json_object")
+    if phonepage.json_size(result) > phonepage.VIEW_MAX:
+        raise ApiError(413, "too big", key="err_too_big")
+    return ok(taken=phonepage.done(_current.get(), eid, result))
+
+
+def _photo_count(s):
+    return len(s.get("photos") or [])
+
+
+def _listed_photos():
+    names = set()
+    for t in TV_CONFIG["tvs"]:
+        d = store._read(os.path.join(store.DATA, f"settings.{t['id']}.json"), None)
+        for ph in ((d or {}).get("settings") or {}).get("photos") or []:
+            if isinstance(ph, dict) and isinstance(ph.get("file"), str):
+                names.add(ph["file"])
+    return names
+
+
+async def h_photos_add(request):
+    """A photo from the phone's Home settings page: the picture itself is the body (up to 25 MB), read
+    only after the key was checked (the middleware). A refused upload closes the connection, so its
+    unread bytes are never taken as the next request."""
+    def refuse(status, msg):
+        resp = web.json_response({"ok": False, "error": msg}, status=status)
+        resp.force_close()
+        return resp
+    length = request.content_length
+    if not length:
+        return refuse(400, "No photo came through. Try again.")
+    if length > phonepage.PHOTO_MAX_UPLOAD:
+        return refuse(413, "That photo is too big. Pick one under 25 MB.")
+    if _photo_count(home_settings()["settings"]) >= MAX_PHOTOS:
+        return refuse(409, f"The TV holds {MAX_PHOTOS} photos. Remove one first.")
+    raw = bytearray()
+    async for chunk in request.content.iter_chunked(64 * 1024):
+        raw.extend(chunk)
+        if len(raw) > phonepage.PHOTO_MAX_UPLOAD:
+            return refuse(413, "That photo is too big. Pick one under 25 MB.")
+    loop = asyncio.get_running_loop()
+    if _photo_one[0] is None or _photo_one[0][0] is not loop:
+        _photo_one[0] = (loop, asyncio.Semaphore(1))
+    try:
+        # one photo at a time: decoding a big picture takes a lot of memory, and a small home computer
+        # must never decode several at once
+        async with _photo_one[0][1]:
+            name = await asyncio.get_running_loop().run_in_executor(None, phonepage.make_photo, bytes(raw), store.DATA)
+    except phonepage.Refused as x:
+        return refuse(x.status, str(x))
+    s = dict(home_settings()["settings"])
+    photos = list(s.get("photos") or [])
+    if len(photos) >= MAX_PHOTOS:
+        os.remove(os.path.join(phonepage.photo_dir(store.DATA), name))
+        return refuse(409, f"The TV holds {MAX_PHOTOS} photos. Remove one first.")
+    pid = format(int(time.time() * 1000), "x")[-8:] + secrets.token_hex(2)
+    photo = {"id": pid, "file": name}
+    photos.append(photo)
+    s["photos"] = photos
+    _write_settings(clean_settings(s))
+    phonepage.drop_strays(store.DATA, _listed_photos())
+    return ok(photo=photo, count=len(photos))
+
+
+async def h_photos_remove(request):
+    data = await body(request)
+    pid = data.get("id")
+    s = dict(home_settings()["settings"])
+    photos = [p for p in (s.get("photos") or []) if isinstance(p, dict)]
+    gone = next((p for p in photos if p.get("id") == pid), None) if isinstance(pid, str) and pid else None
+    if gone is None:
+        raise ApiError(404, "That photo is not on the TV any more.", key="err_not_found")
+    s["photos"] = [p for p in photos if p is not gone]
+    _write_settings(clean_settings(s))
+    path = phonepage.photo_path(store.DATA, gone.get("file"))
+    if path and gone.get("file") not in _listed_photos():
+        with contextlib.suppress(OSError):
+            os.remove(path)
+    return ok(count=len(s["photos"]))
+
+
+async def h_photo_get(request):
+    """A photo the phone sent, for the TV home's scenes and the phone page's list (the key is needed)."""
+    path = phonepage.photo_path(store.DATA, request.match_info.get("name"))
+    if not path:
+        raise ApiError(404, "no such photo", key="err_not_found")
+    # the name is new for every photo, so the TV may keep it; private: never in a shared cache
+    return web.FileResponse(path, headers={"Content-Type": "image/jpeg", "Cache-Control": "private, max-age=86400"})
+
+
+async def h_setup_page(request):
+    return web.FileResponse(os.path.join(PHONE_PAGE_DIR, "setup.html"),
+                            headers={"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"})
+
+
+async def h_setup_script(request):
+    return web.FileResponse(os.path.join(PHONE_PAGE_DIR, request.match_info["script"]),
+                            headers={"Content-Type": "application/javascript", "Cache-Control": "no-cache"})
 
 
 async def h_api_missing(request):
@@ -2250,6 +2763,19 @@ def static_handler(folder, name):
             etag = f"{st.st_mtime_ns:x}-{st.st_size:x}"
             if static_not_modified(request, etag, st.st_mtime):
                 return web.Response(status=304, headers={**headers, "ETag": '"%s"' % etag})
+        # FileResponse answers a Range request by itself (aiohttp 3.14): 206 with Content-Range and
+        # Accept-Ranges: bytes for one byte range (a start and end, a suffix, or open ended), 416
+        # with "bytes */<size>" for a range past the end, a malformed one or several at once, and
+        # HEAD the same way with no body. The Loop look's video (tv-home/web/loop/) depends on it:
+        # the WebView's media player seeks with Range, and a seek at the loop's wrap must not fetch
+        # the whole file again. Pinned by tests/test_loop_serving.py. Media is never compressed,
+        # so a partial answer is always plain bytes.
+        # Two corners aiohttp leaves as they are, accepted here: If-Range is honoured only in its
+        # date form (an entity tag in it is not compared, so a Range request with a stale tag still
+        # gets 206 of the new file; RFC 9110 wants the whole file), and an unknown range unit
+        # ("bits=0-9") gets 416 where the RFC says to ignore the header. The tag case needs
+        # make-loop.sh re-run while the TV plays, and Chromium's media loader compares each 206's
+        # validators and starts the load again when they change, so no splice was seen.
         resp = web.FileResponse(target, headers=headers)
         if ctype in COMPRESSIBLE_TYPES:
             resp.enable_compression()   # only when the page says it accepts it
@@ -2273,6 +2799,18 @@ def static_not_modified(request, etag, mtime):
 # The TV app copies these files into its own storage, so its home still works with the computer off.
 # The fingerprint changes whenever any file changes; the TV only copies when it does.
 OFFLINE_SKIP = ("mock",)
+
+
+def offline_skips(rel):
+    """True for a file the offline copy leaves out: the mock bridge, and the Loop look's video
+    (loop/*.mp4, up to 80 MB), which the bridge streams. The rest of loop/ is small and stays in:
+    the posters (loop/*.jpg, a few hundred KB in all), so a Loop home with the computer off shows a
+    still of its loop, the cut-outs (loop/*-fg.png, tens of KB), so the clock stays behind the
+    peak over that still instead of dropping and jumping back up when the picture is missing, and
+    loop.json (docs/LOOP.md)."""
+    return rel.startswith(OFFLINE_SKIP) or (rel.startswith("loop/") and rel.endswith(".mp4"))
+
+
 async def h_tv_manifest(request):
     import hashlib
     files, h = [], hashlib.sha256()
@@ -2280,7 +2818,7 @@ async def h_tv_manifest(request):
         for n in sorted(names):
             full = os.path.join(dirpath, n)
             rel = os.path.relpath(full, LAUNCHER_DIR).replace(os.sep, "/")
-            if n.startswith(".") or rel.startswith(OFFLINE_SKIP):
+            if n.startswith(".") or offline_skips(rel):
                 continue
             st = os.stat(full)
             files.append({"path": rel, "size": st.st_size})
@@ -2440,35 +2978,50 @@ WMO = {0: "Clear", 1: "Mostly clear", 2: "Partly cloudy", 3: "Cloudy", 45: "Fog"
        61: "Light rain", 63: "Rain", 65: "Heavy rain", 66: "Rain", 67: "Rain",
        80: "Showers", 81: "Showers", 82: "Heavy showers", 95: "Storms", 96: "Storms", 99: "Storms"}
 weather_cache = {"at": 0.0, "data": None}
+_weather_by_town = {}   # a TV whose town was picked in Home settings (the TV or the phone's page): {(lat, lon): cache}
 
 
-async def get_weather():
-    if weather_cache["data"] and time.time() - weather_cache["at"] < WEATHER_EVERY:
-        return weather_cache["data"]
+def tv_town():
+    """This TV's town from its Home settings (the TV's Location, or the phone's Home settings page), else None:
+    Roku and Apple TV read the weather from here, so a town picked on the phone reaches them too."""
+    pl = home_settings()["settings"].get("place")
+    if isinstance(pl, dict) and _num(pl.get("lat"), -90, 90) and _num(pl.get("lon"), -180, 180):
+        return {"lat": pl["lat"], "lon": pl["lon"], "place": str(pl.get("name") or "")[:40],
+                "timezone": str(pl.get("timezone") or "auto")}
+    return None
+
+
+async def get_weather(at=None):
+    cache = weather_cache if at is None else _weather_by_town.setdefault((at["lat"], at["lon"]), {"at": 0.0, "data": None})
+    if len(_weather_by_town) > 20:
+        _weather_by_town.clear()
+    where = at or dict(WEATHER_AT, timezone=config.WEATHER["timezone"])
+    if cache["data"] and time.time() - cache["at"] < WEATHER_EVERY:
+        return cache["data"]
     import aiohttp
     url = ("https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
            "&current=temperature_2m,weather_code,is_day&daily=temperature_2m_max,temperature_2m_min"
-           "&timezone={tz}&forecast_days=1").format(tz=config.WEATHER["timezone"].replace("/", "%2F"), **WEATHER_AT)
+           "&timezone={tz}&forecast_days=1").format(tz=str(where["timezone"]).replace("/", "%2F"), lat=where["lat"], lon=where["lon"])
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as s:
             async with s.get(url) as r:
                 j = await r.json()
         cur, day = j["current"], j.get("daily", {})
         code = int(cur.get("weather_code", -1))
-        weather_cache["data"] = {
-            "place": WEATHER_AT["place"], "temp": round(cur["temperature_2m"]),
+        cache["data"] = {
+            "place": where["place"], "temp": round(cur["temperature_2m"]),
             "code": code, "text": WMO.get(code, ""), "is_day": bool(cur.get("is_day")),
             "high": round(day["temperature_2m_max"][0]) if day.get("temperature_2m_max") else None,
             "low": round(day["temperature_2m_min"][0]) if day.get("temperature_2m_min") else None,
         }
-        weather_cache["at"] = time.time()
+        cache["at"] = time.time()
     except Exception as e:  # keep the last good reading; the home shows the date alone without one
         log.warning("weather: %s", e)
-    return weather_cache["data"]
+    return cache["data"]
 
 
 async def h_weather(request):
-    w = await get_weather()
+    w = await get_weather(tv_town())
     if not w:
         raise ApiError(503, "No weather right now.", key="err_no_weather")
     return ok(**w)
@@ -2617,13 +3170,15 @@ def clean_settings(s):
         # two decimals is the town, never the house
         out["place"] = {"name": str(p.get("name") or "")[:80], "lat": round(p["lat"], 2), "lon": round(p["lon"], 2),
                         "timezone": str(p.get("timezone") or "auto")[:64]}
+        if isinstance(p.get("area"), str) and p["area"].strip():   # the region and country the TV shows under the town
+            out["place"]["area"] = p["area"].strip()[:80]
     if isinstance(s.get("wx_show"), bool):
         out["wx_show"] = s["wx_show"]
     if s.get("wx_unit") in ("c", "f"):
         out["wx_unit"] = s["wx_unit"]
     if s.get("wx_every") in (15, 30, 60):
         out["wx_every"] = s["wx_every"]
-    if s.get("look") in ("night", "oled", "classic"):
+    if s.get("look") in config.LOOKS:
         out["look"] = s["look"]
     idle_photo_seconds = s.get("idle_photo_seconds")
     if type(idle_photo_seconds) is int and idle_photo_seconds in (0, 5, 10, 15, 30, 60):
@@ -2636,21 +3191,45 @@ def clean_settings(s):
         out["glass"] = s["glass"]
     if isinstance(s.get("glass_icons"), bool):
         out["glass_icons"] = s["glass_icons"]
+    if s.get("icon_set") in config.ICON_SETS:   # Home settings, Look, Icon style (g24)
+        out["icon_set"] = s["icon_set"]
     if isinstance(s.get("moving_tiles"), bool):   # the focused tile's slow sway (#52)
         out["moving_tiles"] = s["moving_tiles"]
     if s.get("dock") in ("mac", "classic"):   # the Mac-style dock
         out["dock"] = s["dock"]
     if isinstance(s.get("lighter"), bool):   # lighter home for a slow box (#58)
         out["lighter"] = s["lighter"]
+    if isinstance(s.get("show_clock"), bool):   # Look, Show the clock (g17)
+        out["show_clock"] = s["show_clock"]
+    if s.get("hi_res") in ("auto", "always", "off"):   # Look, Sharp pictures on a 4K TV (g30)
+        out["hi_res"] = s["hi_res"]
     if isinstance(s.get("glass_amount"), int) and not isinstance(s.get("glass_amount"), bool) and 1 <= s["glass_amount"] <= 5:
         out["glass_amount"] = s["glass_amount"]
     if s.get("clock_style") in ("frosted", "liquid"):
         out["clock_style"] = s["clock_style"]
+    if isinstance(s.get("clock_seconds"), bool):
+        out["clock_seconds"] = s["clock_seconds"]
+    if isinstance(s.get("football_leagues"), list):
+        allowed = {"47", "55", "42", "73", "77", "nations", "54", "87", "53", "523", "141", "138", "132", "209"}
+        out["football_leagues"] = list(dict.fromkeys(x for x in s["football_leagues"] if isinstance(x, str) and x in allowed))
     # Now playing on or off (#31), and the navigation sound: the TV's own, soft or off (#32)
     if isinstance(s.get("now_playing"), bool):
         out["now_playing"] = s["now_playing"]
     if isinstance(s.get("keep_watching"), bool):
         out["keep_watching"] = s["keep_watching"]
+    if s.get("keep_watching_style") in ("card", "poster"):   # Night: wide cards or poster tiles (#192)
+        out["keep_watching_style"] = s["keep_watching_style"]
+    sp = s.get("spotify")   # Home settings, Spotify (the local Now playing card): only the known keys
+    if isinstance(sp, dict):
+        o = {k: sp[k] for k in ("enabled", "show_card", "controls", "show_app", "hide_idle") if isinstance(sp.get(k), bool)}
+        if config.spotify_seek(sp.get("seek_seconds")):   # the one rule: config.SPOTIFY_SEEK_STEPS
+            o["seek_seconds"] = sp["seek_seconds"]
+        if sp.get("title_mode") in ("dots", "pingpong", "continuous"):
+            o["title_mode"] = sp["title_mode"]
+        if sp.get("align") in ("classic", "center"):
+            o["align"] = sp["align"]
+        if o:
+            out["spotify"] = o
     if isinstance(s.get("ambient_music"), bool):
         out["ambient_music"] = s["ambient_music"]
     if isinstance(s.get("sun_sync"), bool):
@@ -2698,25 +3277,125 @@ def clean_settings(s):
                              "fade_with_sleep": sc.get("fade_with_sleep") is not False}
     if isinstance(s.get("smart_idle"), dict):
         out["smart_idle"] = config._smart_idle(s["smart_idle"])
+    # the Inputs tile (#154) and the row that follows the app: the TV writes both, so the copy keeps them
+    for k in ("input_tile", "shelf_follows_app"):
+        if isinstance(s.get(k), bool):
+            out[k] = s[k]
+    if isinstance(s.get("widgets_design"), str) and re.fullmatch(r"-?[0-9]{1,12}", s["widgets_design"]):   # which design the widget settings were set on
+        out["widgets_design"] = s["widgets_design"]
+    w = clean_widget_settings(s.get("widgets"))
+    if w is not None:
+        out["widgets"] = w
+    # what the design said for each design-kept widget setting (short hashes), so a resend that changes
+    # only one choice drops only that override
+    b = clean_widget_settings(s.get("widgets_base"))
+    if b is not None:
+        out["widgets_base"] = b
+    return out
+
+
+_WS_KEY = re.compile(r"[A-Za-z0-9_/-]{1,70}\|[a-z]{1,20}")
+_WS_NAME = re.compile(r"[A-Za-z0-9_]{1,30}")
+
+
+def _ws_value(v):
+    """One widget setting's value, in a shape the TV home writes, or None to drop it."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v if math.isfinite(v) else None
+    if isinstance(v, str):
+        return v if len(v) <= 600 else None
+    if isinstance(v, list):
+        if len(v) > 16 or not all((isinstance(x, str) and len(x) <= 600) or (isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)) for x in v):
+            return None
+        return list(v)
+    if isinstance(v, dict) and _num(v.get("lat"), -90, 90) and _num(v.get("lon"), -180, 180):
+        # a place: the town, never the house (two decimals)
+        p = {"name": str(v.get("name") or "")[:60], "lat": round(v["lat"], 2), "lon": round(v["lon"], 2), "timezone": str(v.get("timezone") or "auto")[:64]}
+        if v.get("area"):
+            p["area"] = str(v["area"])[:80]
+        return p
+    return None
+
+
+def clean_widget_settings(w):
+    """Each widget's own settings (ST.widgets in the TV home: docs/WIDGET-SETTINGS-CONTRACT.md):
+    { "<object id>|<kind>": { "<setting>": value } }. Kept as the TV wrote them, checked, so the copy
+    the bridge hands back never drops them (and the home never starts again for nothing)."""
+    if not isinstance(w, dict):
+        return None
+    out = {}
+    for k in list(w)[:60]:
+        if not isinstance(k, str) or not _WS_KEY.fullmatch(k) or not isinstance(w[k], dict):
+            continue
+        vals = {}
+        for name in list(w[k])[:16]:
+            if not isinstance(name, str) or not _WS_NAME.fullmatch(name):
+                continue
+            v = _ws_value(w[k][name])
+            if v is not None:
+                vals[name] = v
+        if vals:
+            out[k] = vals
     return out
 
 
 async def h_settings_get(request):
-    return ok(**home_settings())
+    return ok(**home_settings(), **phone_extras())
 
 
 async def h_settings_set(request):
     data = await body(request)
+    if "settings" not in data and "settings_patch" in data:
+        return ok(**settings_patch(data.get("settings_patch")), **phone_extras())
     s = data.get("settings")
     if not isinstance(s, dict):
         raise ApiError(400, "settings (an object) is required", key="err_settings_object_required")
     if len(json.dumps(s)) > SETTINGS_MAX:
         raise ApiError(413, "settings are too big", key="err_settings_too_big")
     cleaned = clean_settings(s)
-    updated = now_iso()
+    # The TV home sends its whole copy with "seen", the "updated" it last read. If the phone's Home
+    # settings page changed the town or a photo since, the TV's copy is older: those keys stay as they
+    # are here, and "kept" tells the TV home to take them (the on-TV app's SettingsMerge, the same rule).
+    kept = []
+    seen = data.get("seen")
+    now = home_settings()
+    if isinstance(seen, str) and seen and now["updated"] and seen != now["updated"]:
+        for k in PHONE_KEYS:
+            if k in now["settings"]:
+                cleaned[k] = now["settings"][k]
+            else:
+                cleaned.pop(k, None)
+            kept.append(k)
+    elif not isinstance(seen, str):
+        # an older TV home sends no "seen" and knows nothing of the phone's photos: they stay listed
+        mine = [p for p in (now["settings"].get("photos") or []) if isinstance(p, dict) and phonepage.PHOTO_NAME.fullmatch(str(p.get("file") or ""))]
+        have = {p.get("id") for p in (cleaned.get("photos") or []) if isinstance(p, dict)}
+        add = [p for p in mine if p.get("id") not in have]
+        if add:
+            cleaned["photos"] = (list(cleaned.get("photos") or []) + add)[:MAX_PHOTOS]
+            kept.append("photos")
+    before = _listed_photos()
+    updated = settings_stamp()
     store._write(_settings_path(), {"settings": cleaned, "updated": updated})
+    _drop_unlisted_photos(before)
     record_action(request, "settings", {"keys": sorted(cleaned)}, True)
-    return ok(settings=cleaned, updated=updated)
+    return ok(settings=cleaned, updated=updated, kept=kept)
+
+
+def _drop_unlisted_photos(before):
+    """A phone photo taken off on the TV: its file goes now (it was listed, so no upload is in flight),
+    and any older file nobody lists goes too."""
+    after = _listed_photos()
+    if before == after:
+        return
+    for f in before - after:
+        path = phonepage.photo_path(store.DATA, f)
+        if path:
+            with contextlib.suppress(OSError):
+                os.remove(path)
+    phonepage.drop_strays(store.DATA, after)
 
 
 # ---------- the guest's name for the Welcome widget, typed on the TV or the phone remote ----------
@@ -2835,7 +3514,7 @@ def tv_or_paired(handler):
 
 @tv_or_paired
 async def h_direct(request):
-    """Set up Hue or AirTouch from the TV: Home settings, couch-tv Studio, Smart home."""
+    """Set up Hue or AirTouch from the TV: Home settings, Designs, Smart home."""
     data = await body(request)
     what, d = str(data.get("action") or ""), HA.direct
     if what == "status":
@@ -2871,7 +3550,18 @@ async def h_stay_names(request):
 
 
 async def h_ha_info(request):
-    return ok(info=HA.info(), status=HA.status())
+    # phone: this bridge serves the phone page that sets smart home up (bridge/haphone.py, /ha)
+    return ok(info=HA.info(), status=dict(HA.status(), phone=True))
+
+
+# Smart home set up from a phone: the TV shows a QR code for /ha (bridge/haphone.py). One entry URL,
+# /ha/?k=<key>, which another page (a phone Home settings page) may link to through /api/ha/phone.
+HA_PHONE = haphone.Phone(HA, LAUNCHER_DIR, PORT, lan_ipv4)
+
+
+@tv_or_paired
+async def h_ha_phone(request):
+    return ok(result=HA_PHONE.start())
 
 
 @tv_or_paired
@@ -2897,7 +3587,85 @@ async def h_ha_save(request):
 
 @tv_or_paired
 async def h_ha_forget(request):
-    return ok(result=HA.forget())
+    HA_PHONE.stop()
+    return ok(result=await HA.disconnect())
+
+
+# ---------- Matter devices shared from Google Home, Apple Home, SmartThings or Alexa (bridge/matter.py, docs/MATTER.md)
+matter_clients = set()
+MATTER_WRITE_WAIT = 30   # seconds a page may take to read one event before it is let go (it reconnects)
+
+
+def _matter_event():
+    return "event: matter\ndata: " + json.dumps({"ok": True, **MATTER.answer()}) + "\n\n"
+
+
+def push_matter(_devices=None):
+    """Every page listening on /api/matter/events (behind the pairing rule, the same as the on-TV app's)
+    gets the new device list at once ("event: matter"). Never on /api/events, which has no such rule."""
+    payload = _matter_event()
+    for q in list(matter_clients):
+        while q.qsize() >= 20:   # a slow page: drop the oldest lists, the newest one says it all
+            q.get_nowait()
+        q.put_nowait(payload)
+
+
+MATTER = matter.Matter(config.DATA, config.CONFIG.get("matter"), on_change=push_matter)
+
+
+@tv_or_paired
+async def h_matter_devices(request):
+    return ok(**MATTER.answer())
+
+
+@tv_or_paired
+async def h_matter_events(request):
+    headers = {"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    origin = request.headers.get("Origin")
+    if origin and is_allowed_origin(request, origin):
+        headers.update({"Access-Control-Allow-Origin": origin, "Vary": "Origin"})
+    resp = web.StreamResponse(headers=headers)
+    await resp.prepare(request)
+    q = asyncio.Queue()
+    matter_clients.add(q)
+    try:
+        await asyncio.wait_for(resp.write(_matter_event().encode()), MATTER_WRITE_WAIT)
+        while True:
+            try:
+                msg = await asyncio.wait_for(q.get(), timeout=20)
+            except asyncio.TimeoutError:
+                msg = ": keepalive\n\n"
+            await asyncio.wait_for(resp.write(msg.encode()), MATTER_WRITE_WAIT)
+    except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, asyncio.CancelledError, asyncio.TimeoutError):
+        pass   # gone, or stuck for 30 seconds: the same, the page reconnects
+    finally:
+        matter_clients.discard(q)
+    return resp
+
+
+@tv_or_paired
+async def h_matter_commission(request):
+    data = await body(request)
+    r = await MATTER.commission(data.get("code"), data.get("address"))
+    return web.json_response(r, status=200 if r.get("ok") else 400)
+
+
+@tv_or_paired
+async def h_matter_command(request):
+    data = await body(request)
+    return web.json_response(await MATTER.command(data.get("id"), data.get("action"), data.get("value")))
+
+
+@tv_or_paired
+async def h_matter_remove(request):
+    data = await body(request)
+    return web.json_response(await MATTER.remove(data.get("id")))
+
+
+@tv_or_paired
+async def h_matter_rename(request):
+    data = await body(request)
+    return web.json_response(MATTER.rename(data.get("id"), data.get("name")))
 
 
 async def h_sleep_get(request):
@@ -3058,13 +3826,33 @@ def continue_videos(who=None):
     """The YouTube videos this person watched on this TV (store.keep_videos): one card per title, newest
     first, up to 10, within 30 days, minus the ones removed by hand. A list of its own, next to Keep
     watching's "items", so the home can show it for the YouTube tile alone and never in the shared row.
-    The card's app is YouTube's installed build (Amazon's on a Fire TV), like any item's."""
+    The card's app is YouTube's installed build (Amazon's on a Fire TV), like any item's.
+
+    A video whose id is known (store.video_id, found by the lookup and kept on disk) carries it as
+    "video_id" and YouTube's own thumbnail for it as "backdrop" (video_thumbnail; the page draws the
+    backdrop first, and the TV fetches it straight from YouTube's image host, as it does JustWatch's
+    posters). Without one, and with the channel or the length to be sure by, the lookup is started
+    in the background (_video_lookup, never awaited here: this is a plain function called from the
+    handler) unless it said unsure lately or is already running, so the next fetch of the row has the
+    picture. A line with neither channel nor length keeps no picture and starts no lookup. A line
+    log_seen marked live (a channel and no length) carries "live": true, so the card can say so;
+    every other card carries "live": false."""
     who = who or cur_who()
     app = apps.describe_package(pkg_of(apps.BY_ID["youtube"]))
-    return [{"id": h["id"], "title": h["title"], "episode_title": None, "season": None, "episode": None,
-             "app": app, "service": "youtube", "poster": None, "backdrop": None, "progress": None,
-             "kind": "video", "last_played": h.get("when"), "source": "bridge"}
-            for h in store.keep_videos(_current.get(), who)]
+    cards = []
+    for h in store.keep_videos(_current.get(), who):
+        video_id = None
+        if h.get("channel") or h.get("duration_ms"):
+            video_id = store.video_id(h["title"], h.get("channel"), h.get("duration_ms"))
+            if not video_id and not _video_unsure_lately(h["title"], h.get("channel"), h.get("duration_ms"),
+                                                         backoff=True):
+                _video_lookup(h["title"], h.get("channel"), h.get("duration_ms"))
+        cards.append({"id": h["id"], "title": h["title"], "episode_title": None, "season": None, "episode": None,
+                      "app": app, "service": "youtube", "poster": None,
+                      "backdrop": video_thumbnail(video_id) if video_id else None, "progress": None,
+                      "kind": "video", "live": h.get("live") is True, "last_played": h.get("when"), "source": "bridge",
+                      "video_id": video_id})
+    return cards
 
 
 def request_base(request):
@@ -3201,6 +3989,84 @@ async def h_music(request):
     return ok(music=await music_now())
 
 
+# ---------- Spotify local media session integration ----------
+SPOTIFY_PACKAGES = {"com.spotify.tv.android", "com.spotify.music"}
+
+
+async def spotify_session_now():
+    """Spotify media session state, read via dumpsys media_session."""
+    if not (tv.connected and tv.is_on and await tv.adb_ready()):
+        return {"available": False, "state": "stopped"}
+    try:
+        out = await tv.adb("shell", "cat /proc/uptime; dumpsys media_session", timeout=8)
+    except Exception:
+        return {"available": False, "state": "stopped"}
+    found = [x for x in _sessions(out) if x.get("package") in SPOTIFY_PACKAGES and x.get("title")]
+    if not found:
+        return {"available": False, "state": "stopped"}
+    pick = next((x for x in found if x.get("state") == "PLAYING"), found[0])
+    key = ((pick.get("subtitle") or "").lower(), pick["title"].lower())
+    if key not in music_art and key not in music_art_pending:
+        music_art_pending.add(key)
+        asyncio.ensure_future(_music_artwork(pick.get("subtitle"), pick["title"]))
+    return {
+        "available": True,
+        "package": pick.get("package"),
+        "title": pick.get("title", ""),
+        "artist": pick.get("subtitle", ""),
+        "album": pick.get("album", ""),
+        "duration": pick.get("duration", 0),
+        "state": STATES.get(pick.get("state"), "stopped"),
+        "position": pick.get("position", 0),
+        "last_update": pick.get("updated", 0),
+        "speed": pick.get("speed", 0.0),
+        "actions": pick.get("actions", 0),
+        "art": music_art.get(key) or None,
+    }
+
+
+async def h_spotify_now(request):
+    return ok(spotify=await spotify_session_now())
+
+
+async def h_spotify_control(request):
+    data = await body(request)
+    action = data.get("action")
+    # a number, a list or nothing is the caller's mistake: 400, never a 500. (Before 0.13.12 these paths called
+    # an undefined bad(), so every refusal here came back as a 500.)
+    if not isinstance(action, str):
+        raise ApiError(400, "unknown key: %s" % str(action)[:40], key="err_unknown_key", vars={"key": str(action)[:40]})
+    action = action.lower()
+    cmd_map = {
+        "play": "play",
+        "pause": "pause",
+        "play_pause": "play-pause",
+        "next": "next",
+        "previous": "previous",
+        "rewind": "rewind",
+        "fast_forward": "fast-forward",
+    }
+    cmd_key = cmd_map.get(action)
+    if not cmd_key:
+        raise ApiError(400, "unknown key: %s" % action[:40], key="err_unknown_key", vars={"key": action[:40]})
+    if not (tv.connected and tv.is_on and await tv.adb_ready()):
+        raise ApiError(503, "TV not connected over ADB", key="err_tv_not_connected")
+    try:
+        await tv.adb("shell", "cmd", "media_session", "dispatch", cmd_key, timeout=5)
+    except Exception:
+        key_map = {
+            "play": "KEYCODE_MEDIA_PLAY",
+            "pause": "KEYCODE_MEDIA_PAUSE",
+            "play_pause": "KEYCODE_MEDIA_PLAY_PAUSE",
+            "next": "KEYCODE_MEDIA_NEXT",
+            "previous": "KEYCODE_MEDIA_PREVIOUS",
+            "rewind": "KEYCODE_MEDIA_REWIND",
+            "fast_forward": "KEYCODE_MEDIA_FAST_FORWARD",
+        }
+        await tv.adb("shell", "input", "keyevent", key_map[action], timeout=5)   # every cmd_map action has one
+    return ok(success=True)
+
+
 async def h_music_queue(request):
     """The Up next widget: the next songs on the Spotify account (bridge/spotify_now.py), or queue None
     when Spotify is not connected here. TVs do not share any app's queue, so Spotify is the only source."""
@@ -3255,32 +4121,169 @@ async def h_continue(request):
     return ok(items=continue_items(who, request_base(request)), videos=continue_videos(who))
 
 
+# How long an OK press on a video card waits for the video's id. The lookup was warmed when the
+# line was written, so it is usually remembered; a fresh one goes to YouTube's results page up to
+# three times (move.LOOKUP_TRIES, 10 s each), and the card must not sit on that.
+OPEN_VIDEO_LOOKUP_S = 15
+# How long an unsure answer is remembered. move only remembers a found id, and an unsure lookup
+# costs three fetches and 2 s at least (15 s when YouTube is slow), which an OK press must not pay
+# again and again for a video the results page does not list the same way.
+VIDEO_UNSURE_KEEP_S = 10 * 60
+# The row (continue_videos) waits longer each time the same video comes back unsure: twice as long
+# as the time before, up to a day. A video the results page never lists the same way, or a home
+# whose every fetch meets a consent page, is then asked about a few times a day, not every ten
+# minutes for the 30 days it stays in the row. An OK press keeps the short wait above.
+VIDEO_UNSURE_MAX_S = 24 * 3600
+# YouTube's own thumbnail for a video, public, 320x180 and 16:9 with no black bars (hqdefault.jpg
+# is 4:3 with bars, and maxresdefault.jpg is not there for every video). The TV fetches it straight
+# from YouTube's image host, as it already fetches JustWatch's posters from theirs.
+VIDEO_THUMBNAIL = "https://i.ytimg.com/vi/{id}/mqdefault.jpg"
+_video_tasks = {}    # (title, channel, length) -> the lookup task while it runs
+_video_unsure = {}   # (title, channel, length) -> (when the lookup last said unsure, how many times in a row)
+
+
+def _video_key(title, channel, duration_ms=None):
+    """A video the way the lookup tells them apart: its title, its channel and its length in whole
+    seconds (None without one), since a channel can put out two videos of one title."""
+    return (move._norm(title), move._norm(channel), store._length_s(duration_ms))
+
+
+def video_thumbnail(video_id):
+    """The picture a video card shows, YouTube's own thumbnail for the id (VIDEO_THUMBNAIL), or None
+    for anything not shaped like an id, so nothing else ever reaches the link."""
+    if not move.YOUTUBE_ID.fullmatch(str(video_id or "")):
+        return None
+    return VIDEO_THUMBNAIL.format(id=video_id)
+
+
+def _video_unsure_hold(tries):
+    """How long the row leaves a video alone after `tries` unsure answers in a row: VIDEO_UNSURE_KEEP_S,
+    doubled for each one after the first, up to VIDEO_UNSURE_MAX_S."""
+    return min(VIDEO_UNSURE_KEEP_S * 2 ** min(max(tries, 1) - 1, 20), VIDEO_UNSURE_MAX_S)
+
+
+def _video_unsure_lately(title, channel, duration_ms=None, backoff=False):
+    """True while the lookup's last unsure answer for this video is younger than VIDEO_UNSURE_KEEP_S,
+    or with `backoff` (the row) younger than _video_unsure_hold of the unsure answers in a row."""
+    mark = _video_unsure.get(_video_key(title, channel, duration_ms))
+    if not mark:
+        return False
+    when, tries = mark if isinstance(mark, tuple) else (mark, 1)
+    hold = _video_unsure_hold(tries) if backoff else VIDEO_UNSURE_KEEP_S
+    return time.time() - when < hold
+
+
+def _video_lookup(title, channel, duration_ms):
+    """The task that finds the video's id (move.youtube_video_id), one per title and channel at a
+    time: log_seen starts it as soon as the line is written, continue_videos starts it for a card
+    without a picture, and an OK press that comes while it runs waits on the same task instead of
+    starting a second lookup. The loop keeps only weak references to tasks, so _video_tasks holds
+    it until it is done. The task gives the id, or None when the lookup was unsure or failed (no
+    network, a consent page: logged at debug level only), and an unsure answer is remembered in
+    _video_unsure with how many came in a row (_video_unsure_lately). A found id is kept on disk
+    with the length (store.remember_video_id), and an id already there for that length is given
+    back at once as a done future: no task, no network."""
+    key = _video_key(title, channel, duration_ms)
+    task = _video_tasks.get(key)
+    if task is not None and not task.done():
+        return task
+    known = store.video_id(title, channel, duration_ms)
+    if known:
+        done = asyncio.get_running_loop().create_future()
+        done.set_result(known)
+        return done
+
+    async def look():
+        try:
+            video = await move.youtube_video_id(title, channel, duration_ms)
+        except Exception as e:
+            log.debug("video lookup for %s failed: %s", title, e)
+            video = None
+        if video:
+            _video_unsure.pop(key, None)
+            try:
+                store.remember_video_id(title, channel, video, duration_ms)
+            except Exception as e:
+                log.warning("could not keep the video id for %s: %s", title, e)
+        else:
+            prior = _video_unsure.get(key)
+            _video_unsure[key] = (time.time(), 1 + (prior[1] if isinstance(prior, tuple) else 0))
+        log.debug("video lookup for %s: %s", title, video or "unsure")
+        return video
+
+    def forget(t):
+        if _video_tasks.get(key) is t:
+            del _video_tasks[key]
+
+    task = asyncio.ensure_future(look())
+    _video_tasks[key] = task
+    task.add_done_callback(forget)
+    return task
+
+
+async def _find_video(title, channel, duration_ms, timeout):
+    """The video's id for an OK press, or None: at once from disk when an earlier lookup found it
+    (store.video_id), at once None when the lookup said unsure in the last VIDEO_UNSURE_KEEP_S (not
+    the row's longer wait: a press asks again after that), else from the lookup (the warm up still
+    running, or a fresh one) within `timeout`. Past that the lookup runs on by itself, for the next
+    press, and this one goes without."""
+    known = store.video_id(title, channel, duration_ms)
+    if known:
+        return known
+    if _video_unsure_lately(title, channel, duration_ms):
+        return None
+    try:
+        return await asyncio.wait_for(asyncio.shield(_video_lookup(title, channel, duration_ms)), timeout=timeout)
+    except Exception as e:
+        log.info("video lookup for %s gave nothing: %s: %s", title, type(e).__name__, e)
+        return None
+
+
 async def open_video(h):
-    """A video card opens YouTube's installed build on a search for the video's name: never through
-    play() and the show finder (a video's name matched to a film would open the film, issue #23), and
-    with no stored link (the media session gives the title, not the video's id). Amazon's YouTube on
-    a Fire TV Cube lists https://www.youtube.com links in its intent filter (read with dumpsys package:
-    VIEW, BROWSABLE, www.youtube.com); opening the search link there has not been tried on a real Fire
-    TV yet. Where the link does not take, the app itself opens."""
+    """A video card opens the exact video when it can, else YouTube's search for its name, else the
+    app. Never through play() and the show finder (a video's name matched to a film would open the
+    film, issue #23). The media session gives the title, the channel and the length, not the video's
+    id, so the id comes from YouTube's public results page (move.youtube_video_id, the move feature's
+    lookup, no key and no sign in): a sure match on the title and the channel or the length, or
+    "unsure", because a wrong video is worse than none. A sure id goes to the installed build as its
+    watch link, and YouTube resumes it from the account's own history (seen on a Fire TV Cube, Amazon's
+    build: the link played that very video from where it was left, 420 s in). Unsure, or a link that
+    does not take: the search link this build takes (search_link: Amazon's YouTube wants
+    youtube://search?query=, the web results link only opens its home), then the app itself. A line
+    with neither channel nor length (written before they were kept, or from a session that gave
+    neither) goes straight to the search: a title alone cannot be sure of the video."""
     from urllib.parse import quote
     app = apps.BY_ID["youtube"]
     pkg = pkg_of(app)
     title = h["title"]
-    method = None
+    method = video_id = None
     if tv.kind == "android":
-        try:
-            await tv.start_intent(SEARCH_LINKS["youtube"].format(q=quote(title)), pkg)
-            if await tv.wait_for_app({pkg}, timeout=8):
-                method = "search"
-        except Exception as e:
-            log.warning("YouTube search link failed: %s", e)
-    if method == "search":
+        if h.get("channel") or h.get("duration_ms"):
+            video_id = await _find_video(title, h.get("channel"), h.get("duration_ms"), OPEN_VIDEO_LOOKUP_S)
+        if video_id:
+            try:
+                await tv.start_intent(move.youtube_link(video_id), pkg)
+                if await tv.wait_for_app({pkg}, timeout=8):
+                    method = "deeplink"
+            except Exception as e:
+                log.warning("YouTube watch link failed: %s", e)
+        if method is None:
+            try:
+                await tv.start_intent(search_link(app, pkg).format(q=quote(title)), pkg)
+                if await tv.wait_for_app({pkg}, timeout=8):
+                    method = "search"
+            except Exception as e:
+                log.warning("YouTube search link failed: %s", e)
+    if method == "deeplink":
+        note = f"Opened {title} in {app['name']}."
+    elif method == "search":
         note = f"Opened {app['name']} search for {title}."
     else:
         await launch_app(app)
         method, note = "app", f"Opened {app['name']}. Search for {title} on the TV."
     note_key, note_vars = _search_note_fields(method, app, title)
     return {"title": title, "service": "youtube", "app": apps.describe_package(pkg), "method": method,
+            "video_id": video_id if method == "deeplink" else None,
             "note": note, **messages.note_fields(note_key, note_vars)}
 
 
@@ -3491,6 +4494,9 @@ def _sessions(out):
                 cur[key] = int(m.group(1)) if m else None
             m = re.search(r"speed=([-\d.]+)", line)
             cur["speed"] = float(m.group(1)) if m else 0.0
+            m = re.search(r"actions=(\d+)", line)
+            if m:
+                cur["actions"] = int(m.group(1))
             pos = cur.get("position")
             if pos is not None and pos >= 0:
                 if uptime_ms and cur.get("updated") and cur.get("state") == "PLAYING" and cur.get("speed", 0.0) > 0:
@@ -3626,13 +4632,22 @@ async def media_read(pkg, app):
     if pos is not None and pos < 0:
         pos = None
     title, episode_title, source_title = s.get("title"), s.get("subtitle"), "app"
+    # the subtitle as the app sent it, before resolve_episode may swap an episode name in: for a
+    # YouTube video it is the channel (seen on a Fire TV Cube: description=<title>, <channel>, null)
+    s["app_subtitle"] = s.get("subtitle")
     if generic_title(title, pkg, app):   # "PrimeVideo" while a film plays: try the queue's title
         title = s.get("queue_title") if not generic_title(s.get("queue_title"), pkg, app) else None
         if not title:
             episode_title = None
     s["title"] = title
     ep = {}
-    if title:
+    if title and (app or {}).get("id") == "youtube":
+        # a video never goes to the show finder (issue #23): a channel named like a show and a video
+        # named like one of its episodes would come back as that episode, with the show's name swapped
+        # into the title, and the video line, its id lookup and a move would all carry the wrong title.
+        # The session's title and subtitle (the channel) stay as they are.
+        pass
+    elif title:
         ep = await resolve_episode(title, episode_title, (app or {}).get("id") in YEAR_SUBTITLE_APPS)
         # Some apps (Paramount+) send the episode name first and the show second: "A Different
         # Corner, Mobland". Use the field that matched the show, or the poster comes from the wrong one.
@@ -3724,7 +4739,8 @@ async def media_watch_loop():
                     said = (_wn_num(media_now.get("season")), _wn_num(media_now.get("episode")))
                     moved = ours and all(said) and said != (_wn_num(item.get("season")), _wn_num(item.get("episode")))
                     if not ours or moved:
-                        await log_seen(s["title"], s.get("subtitle"), app, dict(media_now))
+                        await log_seen(s["title"], s.get("subtitle"), app, dict(media_now),
+                                       channel=s.get("app_subtitle"), duration_ms=s.get("duration"))
                         if moved:
                             item["season"], item["episode"] = said
                 untitled_step(pkg, app, bool(s and s.get("state") == "PLAYING" and not s.get("title")), pos,
@@ -3910,20 +4926,31 @@ async def h_watch_next_get(request):
               rows=rows)
 
 
-async def log_seen(title, subtitle, app, now=None, who=None, method="seen", poster=None):
+async def log_seen(title, subtitle, app, now=None, who=None, method="seen", poster=None,
+                   channel=None, duration_ms=None):
     """Log a show seen playing, with the season and episode media_read worked out (`now`, a copy of
     media_now), on this TV for the person on the couch here (or `who`, the person picked when it
     played). Only a show of the same name gets the finder's title and picture; a near miss keeps the
     app's own title and no picture. Music and streams are never logged (NOT_KEPT); a YouTube video
-    is written as a video line, by its own name and with no lookup (see NOT_KEPT)."""
+    is written as a video line, by its own name with no show finder (see NOT_KEPT), with the channel
+    (`channel`, the session's own subtitle) and the session's length (`duration_ms`, None for a live
+    stream) that open_video needs to find the exact video. A session with a channel and no length
+    is a live stream, and its line says so ("live": true) for the card. The lookup is warmed in a
+    task of its own (_video_lookup) so the card's open finds it remembered; the watch loop never
+    waits on it. With neither channel nor length there is nothing to be sure by, so no lookup: the
+    card searches."""
     if app.get("id") == "youtube":
         if method != "seen":
             return
         store.add_history({"title": title, "year": None, "type": "video", "poster": None, "backdrop": None,
                            "service": "youtube", "who": who if who is not None else cur_who(),
                            "tv": _current.get(), "season": None, "episode": None, "episode_title": None,
+                           "channel": channel or None, "duration_ms": duration_ms or None,
+                           **({"live": True} if channel and not duration_ms else {}),
                            "when": now_iso(), "method": method})
         log.info("logged video %s on %s (%s)", title, app["name"], method)
+        if channel or duration_ms:
+            _video_lookup(title, channel or None, duration_ms or None)
         return
     if app.get("id") in NOT_KEPT:
         return
@@ -4454,6 +5481,73 @@ async def move_open(app, now, session, who, again=False, asked=None):
     return {"method": method, "started": False}
 
 
+async def move_sibling_title(app, pkg, title, wrong):
+    """TV B came up on another title (`wrong`) than TV A's (`title`). In the apps of
+    move.SIBLING_TITLE_APPS the right one may be a tile on that other title's own page: open the
+    page, press the one tile that is exactly `title`, then the page's Play button.
+    Returns None when Play was not pressed. When it was: (playing, since), whether the app says it
+    is playing yet and the moment (time.monotonic) TV B was first read as playing after the press,
+    None when it has not been yet. The caller reads what TV B says it plays either way.
+    Every step that cannot be sure stops: the show finder does not have exactly this title, the page
+    is not the one for `wrong`, no tile or two tiles carry the title, the next page does not name
+    `title`, or a button to pay or sign in is on screen. Only labels the screen reader gives are
+    pressed, never a blind OK."""
+    if app["id"] not in move.SIBLING_TITLE_APPS:
+        return None
+    pressed, seen = False, {}
+
+    async def screen(named):
+        # A title page takes a moment to draw (longer on a slow TV): look again once if the title
+        # that should be on it is not there yet.
+        items = []
+        for wait in (3, 2):
+            await asyncio.sleep(wait)
+            items = await agentic.ui_items()
+            if move.page_names(items, named):
+                break
+        return items
+    try:
+        best, _ = await finder.find(title)
+        # only the very title, as `play` asked for it: the finder's best guess is another show
+        if not best or not (finder.same_title(best["title"], title) or move.same_name(best["title"], title)):
+            return None
+        page = next((p.get("web") for p in best.get("providers") or [] if p["service"] == app["id"]), None)
+        if not move.page_host_ok(app["id"], page):
+            return None
+        await tv.start_intent(page, pkg, cold=False)
+        if not await tv.wait_for_app({pkg}, timeout=8):
+            return None
+        items = await screen(wrong)
+        if not move.page_names(items, wrong):
+            log.info("move: the page %s opened in %s is not the one for %s", title, app["name"], wrong)
+            return None
+        if agentic.stop_labels(items) or move.page_stops(items):
+            log.info("move: a button to pay or sign in is on the page of %s in %s: nothing pressed", wrong, app["name"])
+            return None
+        tile = move.sibling_item(items, title)
+        if not tile:
+            log.info("move: no one tile for %s on the page of %s in %s", title, wrong, app["name"])
+            return None
+        # the screen reader reads whatever is in front: press only while that is still this app
+        if await tv.front_package() != pkg:
+            return None
+        await tv.adb("shell", f"input tap {int(tile['x'])} {int(tile['y'])}", timeout=8)
+        items = await screen(title)
+        button = move.page_play_button(items, agentic._button)
+        if (not button or not move.page_names(items, title) or agentic.stop_labels(items)
+                or move.page_stops(items) or await tv.front_package() != pkg):
+            log.info("move: the tile for %s in %s did not lead to a page that can play it", title, app["name"])
+            return None
+        pressed = True
+        await tv.adb("shell", f"input tap {int(button['x'])} {int(button['y'])}", timeout=8)
+        log.info("move: found %s on the page of %s in %s and pressed %s", title, wrong, app["name"], button["label"])
+        playing = await wait_until_playing(pkg, timeout=15, seen=seen)
+        return playing, seen.get("at")
+    except Exception as e:   # the finder, the screen reader or ADB did not answer
+        log.info("move: could not look for %s on the page of %s: %s", title, wrong, e)
+        return (False, seen.get("at")) if pressed else None
+
+
 async def _move_state(pkg):
     """The app's playback state on this TV ("PLAYING", "PAUSED", ...), its active session first. None
     when it has no session. "UNKNOWN" when the TV did not answer: that is not a pause, and not a
@@ -4720,6 +5814,35 @@ async def move_playing(src, dst, power_off=False, force=False, request=None, pin
                     started = False
                     await tv.key("pause")
                     log.info("move: %s played %s on %s, not %s: paused it", app["name"], wrong_title, dst, title)
+                    # The right title may be a tile on that title's own page (Disney+ and its
+                    # Sing-Along titles). Once Play has been pressed there, B's own word decides
+                    # again: the right title counts, any other is paused like the first one.
+                    pressed = await move_sibling_title(known, pkg_b, title, there) if there else None
+                    if pressed is not None:
+                        b_plays, since = pressed
+                        before, there, same = there, None, False
+                        for look in range(4):
+                            # The app may say it plays a moment before it names the new title, and
+                            # still give the name it was on (or none) till then: that is looked at
+                            # again. The right name, or a third one, ends the look.
+                            if look:
+                                await asyncio.sleep(2)
+                            await media_read(pkg_b, app)
+                            if since is None and media_now.get("state") == "playing":
+                                since = time.monotonic()   # it started after the wait: playing from here
+                            there = media_now.get("title") if media_now.get("title_from") == "app" else None
+                            same = finder.same_title(there, title) or move.same_name(there, title)
+                            if same or (there and not (finder.same_title(there, before)
+                                                       or move.same_name(there, before))):
+                                break
+                        if same:
+                            wrong_title = None
+                            started = b_plays or media_now.get("state") == "playing"
+                            if since is not None:
+                                opened_at = since   # B has played this title since it was first read to
+                        else:
+                            wrong_title = there or wrong_title
+                            await tv.key("pause")
             # 7. the backup: only when B is playing and is not near A's spot
             if started:
                 at = media_now.get("position_ms")
@@ -4837,9 +5960,11 @@ def make_app():
     r.add_get("/api/say", h_say)
     r.add_post("/api/say/message", h_say_message)
     r.add_post("/api/say/design", h_say_design)
+    r.add_post("/api/say/scene", h_say_scene)
     r.add_get("/api/tizen/next", h_tizen_next)
     r.add_post("/api/tizen/answer", h_tizen_answer)
     r.add_get("/api/webos/apps", h_webos_apps)
+    r.add_get("/api/webos/icon/{id}", h_webos_icon)
     r.add_get("/api/roku/apps", h_roku_apps)
     r.add_get("/api/roku/icon/{id}", h_roku_icon)
     r.add_get("/api/vega/keys", h_vega_keys)
@@ -4891,15 +6016,39 @@ def make_app():
     r.add_post("/api/ha/check", h_ha_check)
     r.add_post("/api/ha/save", h_ha_save)
     r.add_post("/api/ha/forget", h_ha_forget)
+    r.add_post("/api/ha/phone", h_ha_phone)
+    HA_PHONE.routes(r)
     r.add_post("/api/ha/direct", h_direct)
+    r.add_get("/api/matter/devices", h_matter_devices)
+    r.add_get("/api/matter/events", h_matter_events)
+    r.add_post("/api/matter/commission", h_matter_commission)
+    r.add_post("/api/matter/command", h_matter_command)
+    r.add_post("/api/matter/remove", h_matter_remove)
+    r.add_post("/api/matter/rename", h_matter_rename)
     r.add_get("/api/settings", h_settings_get)
     r.add_post("/api/settings", h_settings_set)
+    # the phone's Home settings page (phonepage.py) and the TV home's side of it
+    r.add_post("/api/pair/start", h_pair_start)
+    r.add_get("/api/phone-link", h_phone_link)
+    r.add_get("/api/athome", h_athome_get)
+    r.add_post("/api/athome", h_athome_set)
+    r.add_get("/api/phone/inbox", h_phone_inbox)
+    r.add_post("/api/phone/view", h_phone_view)
+    r.add_post("/api/phone/done", h_phone_done)
+    r.add_post("/api/photos", h_photos_add)
+    r.add_post("/api/photos/remove", h_photos_remove)
+    r.add_get("/api/photo/{name}", h_photo_get)
+    r.add_get("/setup", h_setup_page)
+    r.add_get("/setup/", h_setup_page)
+    r.add_get(r"/ontv/{script:(?:shim|connect-check)\.js}", h_setup_script)
     r.add_get("/api/continue", h_continue)
     r.add_get("/api/music", h_music)
     r.add_get("/api/music/queue", h_music_queue)
     r.add_get("/api/spotify/login", h_spotify_login)
     r.add_get("/api/spotify/callback", h_spotify_callback)
     r.add_get("/api/spotify/status", h_spotify_status)
+    r.add_get("/api/spotify/now_playing", h_spotify_now)
+    r.add_post("/api/spotify/control", h_spotify_control)
     r.add_post("/api/continue/open", h_continue_open)
     r.add_post("/api/continue/hide", h_continue_hide)
     r.add_get("/api/plex/art", h_plex_art)
@@ -4937,6 +6086,8 @@ def make_app():
                         "Keep watching from Plex is off")
         elif config.PLEX_ERROR:
             log.warning("plex: %s; Keep watching from Plex is off", config.PLEX_ERROR)
+        if config.HOME.get("look") == "loop" and not config.HOME["loop"]["variants"]:
+            log.warning("the Loop look has no files yet: run scripts/make-loop.sh on this computer (docs/LOOP.md)")
         for tv_id, t in TVS.items():
             t.on_change(lambda tv_id=tv_id: with_tv(tv_id, push_now))
             t.on_change(lambda tv_id=tv_id: with_tv(tv_id, _maybe_refresh_installed))
@@ -4948,8 +6099,10 @@ def make_app():
             if t.paired:
                 app["loops"] += [for_tv(tv_id, keep_disabled_loop), for_tv(tv_id, media_watch_loop)]
         app["bonjour"] = await advertise_for_appletv()
+        await MATTER.start()
 
     async def on_cleanup(_):
+        await MATTER.stop()
         if finder._session and not finder._session.closed:
             await finder._session.close()
         if app.get("bonjour"):

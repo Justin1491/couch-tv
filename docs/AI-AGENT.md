@@ -7,8 +7,8 @@ Your own AI app (Claude Desktop, Claude Code, Cursor, or any program that speaks
   home, or Ask AI set up on that TV. A home with neither asks the computer nothing;
 - **change the TV home**: design one with couch-tv Studio's own MCP tools and send it as a code; the TV
   fetches it and asks **Use this design?** first, so nothing changes until someone presses OK. This works
-  only on a TV where couch-tv Studio is turned on (Home settings, couch-tv Studio): an agent never turns it
-  on, and a TV switched back to its classic home stays classic;
+  only on a TV where designs are turned on (Home settings, Designs): an agent never turns them
+  on, and a TV with **Your design** turned off keeps the standard home;
 - **drive the TV**: play a show, open an app, press keys, change the volume (the tools that were already there);
 - **read what the TV shows** from Ask AI.
 
@@ -65,6 +65,11 @@ and this server's `set_home_design` hands the code to the TV.
 | `show_message(text, sender, seconds)` | Up to 280 characters, plain words, shown 5 to 600 seconds |
 | `set_home_design(code)` | A couch-tv Studio code (`ABCDE-FGHJK` or `CTV1-...`); the TV asks first |
 | `tv_says()` | The last question and answer, message and design code |
+| `list_widgets()` | The widgets on the home's design, each with its settings and their values now |
+| `set_widget_setting(widget, setting, value)` | Changes one setting of one widget, as the phone's Home settings page does. Only settings a phone may change; the TV checks the value |
+
+For example, ask: "Set the weather widget's place to Byron Bay." The agent finds the widget with `list_widgets`
+and changes its `town`. The Couch TV home has to be open on the TV; if it is not, the answer says to open it.
 
 ## Plain HTTP (any program)
 
@@ -72,9 +77,19 @@ Every call carries `Authorization: Bearer <pairing key>` when the TV app or brid
 
 ```
 POST /api/say/message   {"text": "Dinner is ready", "from": "Claude", "seconds": 30}
-POST /api/say/design    {"code": "ABCDE-FGHJK"}
-GET  /api/say           {"ask": {...}, "message": {...}, "design": {...}}
+POST /api/say/design    {"code": "ABCDE-FGHJK", "from"?: "phone"}   -> {"design": {...}, "asks_first": true, "listening": true}
+POST /api/say/scene     {"pick": "next" | "prev"}                     -> {"scene": {...}, "listening": true}
+GET  /api/say           {"ask": {...}, "message": {...}, "design": {...}, "scene": {...}}
 ```
+
+`/api/say/scene` is what the phone remote's Next scene and Previous scene buttons send (in its TV sheet):
+the home shows the next or the previous scene (Night) or photo (Classic) within a few seconds, if it was
+pressed in the last minute. Only `next` and `prev` are taken.
+
+`from` is optional: `"phone"` is what the phone remote's Send a design sends, and the TV then says the
+design came from your phone. Anything else, or nothing, is an AI agent ("from your AI"). Only those two
+words reach the TV. `listening` is false when the TV home has not asked in the last 30 seconds (it is not
+open): it shows the design when it next opens, within 10 minutes.
 
 A message is plain text: no link is made clickable and nothing in it is run. A design code is only a code:
 the TV fetches the design from couch-tv Studio's store itself and puts it through the same gate as a typed

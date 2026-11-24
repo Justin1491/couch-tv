@@ -237,7 +237,8 @@ ares tools) does anything, and Wake-on-LAN.
 |---|---|
 | couch-tv home as an app, apps in your order, the remote's arrows, OK and Back | Yes (seen on real LGs, see Test status above) |
 | Opens by itself when the TV is switched on | Yes, with the bridge running |
-| LG's own Home button | Still opens LG's menu. Press Back or open couch-tv from the app row. On a rooted LG it can open couch-tv (see "On a rooted LG") |
+| LG's own Home button | Still opens LG's menu, unless you install the opt-in Home button Helper (see "The Home button Helper"), which makes the Magic Remote's Home open couch-tv without root. On a rooted LG it can also open couch-tv (see "On a rooted LG") |
+| LG's store | The App Store tile in More apps opens it |
 | Phone remote: keys, volume, mute, open an app | Yes (the TV asks to accept the remote once) |
 | More than one TV on one phone remote | Yes: one bridge runs Google TVs, Samsungs and LGs together (several entries in `config.json`) |
 | "Put on Bluey" (find and play) | Netflix opens the title, YouTube opens the video. Other apps open on their home page and the reply says to pick the show there. Nothing presses Play for you yet |
@@ -360,7 +361,11 @@ remote (step 6). `--apps tv` uses it.
 
 **Icons for apps with no bundled logo.** Some TVs give icon addresses like
 `https://<tv>:3001/resources/<hash>/Plex_80x80.png`. That is the TV's self-signed secure port, so the
-page cannot load them and the tile shows a letter instead. A workaround that worked on an LG OLED77GX
+page cannot load them and the tile shows a letter instead. With the bridge, the page asks the bridge
+for them instead (`/api/webos/icon/<app id>`): the bridge fetches the address the TV listed for that
+app, only on the TV's own address and under `/resources/`, with certificate checks off. The TV sends
+these icons with no `Content-Type` (an OLED B5 on webOS 11.2), so the bridge goes by the file's first
+bytes. With no bridge, a workaround that worked on an LG OLED77GX
 (ChrisFWCB, #56): from the computer, with certificate checks off, ask the TV for its launch points
 over `listLaunchPoints`, fetch each one's `largeIcon`, and save it as
 `remote/src/app-logos/<package>.png` before running `lg/build.py`. `lg/build.py --apps` now does
@@ -436,6 +441,40 @@ press, so turning the TV on from the phone also lands on couch-tv. `"open_on_pow
 Netflix titles open with the title in the launch (`contentId`), YouTube videos with the video's
 address (`contentTarget`), as LG's own integrations do. Other apps just open.
 
+## The Home button Helper (opt-in)
+
+`lg/helper/` is a second Developer Mode app, `app.couchtv.helper`, that makes the Magic Remote's
+Home button open couch-tv. It needs no root. The trick comes from
+[Clean Your TV](https://github.com/Razdva122/clean-your-tv-lg-webos) (MIT, `lg/helper/LICENSE.cytv`):
+a small program takes the Magic Remote's input device (`LGE M-RCU - Builtin [0]`) for itself and
+writes every button on to its sibling device, except Home, which opens couch-tv instead. A Developer
+Mode app may do this because the input devices belong to the `compositor` group it runs in.
+
+Tried on one TV so far: an OLED77B5PUA (2025) on webOS 11.2.0, firmware 43.22.72, with the bridge in
+Docker. Clean Your TV reports the same trick on many LGs from webOS 4 to 26.
+
+Build and install it (needs [Zig](https://ziglang.org) 0.14 and LG's ares tools), then set
+`"home_helper": true` on the TV in `config.json` so the bridge starts it each time the TV comes on:
+
+```sh
+ZIG=/path/to/zig lg/helper/build.sh
+ares-install --device lounge build/lg/app.couchtv.helper_0.1.0_arm.ipk
+ares-launch --device lounge app.couchtv.helper     # or switch the TV off and on
+```
+
+- **Press Home three times within 2 seconds** to switch it off: it hands the remote back to webOS and
+  only watches for the next triple Home, which switches it on again. The TV shows which mode it is in.
+- **Hold Back for about a second** to reach LG's home once while it is on.
+- If the program that runs the relay stops, the relay gives the remote back within 2 seconds.
+- The plain IR remote ("LGE RCU") is not watched: its Home still opens LG's home.
+- If the TV's remote devices have other names, or the TV refuses access, the Helper stops before it
+  takes the remote, and Home opens LG's home as before.
+- **The risk:** while it is on, it holds the only remote. A bug can leave the arrows dead; Clean Your
+  TV has one report of that on a 2025 C5 after standby, for 2 to 3 minutes. The ways out are a triple
+  Home, the phone remote (it reaches the TV another way), and unplugging the TV.
+- Its log is `helper.log` in the app's folder on the TV.
+- Undo: `ares-install --device lounge --remove app.couchtv.helper` and take `home_helper` out.
+
 ## Keeping Developer Mode alive
 
 A Developer Mode session runs out (reports differ: about 50 hours in a
@@ -502,6 +541,47 @@ only a Wake-on-LAN packet can reach it, and only if the TV allows it: "Mobile TV
 Wi-Fi" on 2017 and later models, "IP control settings, Wake on LAN" on 2025 models (both under
 the TV's network or general settings). A cable is more reliable than Wi-Fi. If it does not wake,
 the phone says so and you use the TV's remote.
+
+## If LG says no
+
+Three things people hit on an LG, in plain words.
+
+**"Developer Mode won't start" or "it says it is not Android."** An LG is not Android. The Android
+steps you may have seen for couch-tv (Settings, About, press Build seven times, USB debugging,
+Wireless debugging) are for Google TV and Android TV, and an LG has none of them. On an LG,
+Developer Mode is **an app from LG**: open the LG Content Store (or Apps), search for **Developer
+Mode**, install it, open it and sign in with a free LG developer account made on
+[LG's developer site](https://webostv.developer.lge.com/). Then switch **Dev Mode Status** on (the
+TV restarts) and, for the install, **Key Server** on. Step 1 above has the details.
+
+**The TV refuses the `.ipk`.** An LG only takes couch-tv through Developer Mode, from a computer on
+the same network. Check these, in this order:
+
+1. **Opening the file on the TV does nothing.** An `.ipk` copied to a USB stick, or opened in the
+   TV's browser, is always refused: LG installs apps only from its store or through Developer Mode.
+   Install it from the computer (step 4, `ares-install`, or webOS Dev Manager).
+2. **Developer Mode is off or ran out.** Open the Developer Mode app on the TV. Dev Mode Status must
+   be on and the time left must be more than zero. If it ran out, switch it on again (the TV
+   restarts), then install again.
+3. **Key Server is off, or the passphrase is old.** Switch Key Server on in the Developer Mode app,
+   then run step 2 again with the passphrase it shows now. The passphrase changes when Developer
+   Mode is switched on again.
+4. **The TV has a new address.** If the router gave the TV a new address, `ares-install` talks to
+   nobody. Run step 2 again with the address in the Developer Mode app, and give the TV a fixed
+   address in the router.
+5. **An AI helper got it wrong.** If an AI agent set it up, ask it to run
+   `ares-install --device <name> <file>.ipk` and read you the whole error, and to follow this page
+   (docs/LG.md) rather than the Android steps. Still refused: open an issue on GitHub with the TV
+   model, the webOS version (Settings, General, About this TV) and that error.
+
+**Opening couch-tv when the TV switches on.** webOS has no setting that lets a Developer Mode app
+start itself when the TV comes on, and its Home button always opens LG's own menu. So what opens
+couch-tv at power on is the **bridge on a computer at home that stays on**: it sees the TV come on and
+opens couch-tv within a few seconds (see "How the hook works"). The same computer presses Developer
+Mode's Extend once a day, so couch-tv stays installed. With no computer, couch-tv still works as an
+app: open it from the app row, or pin it to a number key with Quick Access (see "Limits to know").
+If you want everything with no computer, a Google TV box (such as the Google TV Streamer) plugged
+into the LG runs the full couch-tv home.
 
 ## Limits to know
 
