@@ -2,9 +2,28 @@
 
 Everything that changed in couch-tv, newest first.
 
-The newest release is **0.13.13**. The TV apps come from [the Releases page](https://github.com/Seagey/couch-tv/releases). The bridge, and with option B the home's own screen, run from your copy of this repo, so `git pull` brings their changes.
+The newest release is **0.13.15**. The TV apps come from [the Releases page](https://github.com/Seagey/couch-tv/releases). The bridge, and with option B the home's own screen, run from your copy of this repo, so `git pull` brings their changes.
 
 ## November 2026
+
+### 25 November 2026: release 0.13.15, a redesigned Couch TV Setup that links your TV to your account, Tidy up your TV, and Make it yours
+
+0.13.15 is on [the Releases page](https://github.com/Seagey/couch-tv/releases). Option C: Home settings, Updates, Update to; it carries the same key as 0.13.14, so a TV on 0.13.14, 0.13.13 or 0.13.12 updates as normal. Other Android TVs: Home settings, Updates, check now.
+
+- **Couch TV Setup, new look and name:** it finds more TVs, shows the TVs set up in the session, and keeps working with a Helper that is older than 0.13.15.
+- **Links the TV to your account, after asking whose account it is:** nothing is used until you press Yes, and the TV is called linked only when it said it took the link.
+- **Tidy up your TV (optional):** fewer ads, shorter menu animations, a smoothness check, undo, and Stop idle screen adverts that reads back what the TV says and covers Android TV's Backdrop screen.
+- **Make it yours:** a new TV opens on a card that fetches your design; Get my new design is the first row of Home settings on a linked TV.
+
+### 24 November 2026: release 0.13.14, Couch TV Helper, apps on your TV in Studio, and a fix for Home settings
+
+0.13.14 is on [the Releases page](https://github.com/Seagey/couch-tv/releases). Option C: Home settings, Updates, Update to; it carries the same key as 0.13.13, so a TV on 0.13.13, 0.13.12 or 0.13.11 updates as normal. Other Android TVs: Home settings, Updates. Option B: `git pull` and restart the bridge. Full notes: [RELEASE-NOTES-0.13.14.md](../RELEASE-NOTES-0.13.14.md).
+
+- **Couch TV Helper:** the last screen of Couch TV Setup asks Done, or Add extra features. The helper stays in your menu bar or tray and adds turning the TV on from your phone, Ask AI at home, picks, and the phone remote for a Samsung, LG or Roku TV. Start with this computer is off until you pick it, and Turn off extra features removes it. The link `couchtv://helper/on` opens Setup on that screen.
+- **It updates itself, only when you say so:** a new version must carry Couch TV's signature and checksum, and is used only when you press Update ready, restart.
+- **It sleeps when it can:** it keeps the computer awake only for a Samsung, LG or Roku TV on power, and Let this computer sleep overrides that. Remove everything from this computer deletes what Setup keeps.
+- **Apps on your TV, in Couch TV Studio:** Setup and the Couch TV app send the package names of the apps on a linked TV, at most 300, for Studio to show first. Nothing about what is signed in inside them.
+- **Fix:** the settings save in Home settings no longer fails when nothing has been kept yet.
 
 ### 24 November 2026: release 0.13.13, your home from your Couch TV account, Setup finds the TV for you, and Glass text
 
@@ -24,7 +43,7 @@ The newest release is **0.13.13**. The TV apps come from [the Releases page](htt
 
 - **The TV tells Couch TV Studio it has Couch TV:** getting a design by code on an Android TV also sends the Couch TV version and the TV's memory, nothing else, for Studio's "Will it play on your TV?".
 - **Fixes from a beginner run:** the on-TV app's "Allow USB debugging?" box no longer comes back in a loop and its words match the TV's, the home's Settings menu has Phone remote, and the Hold OK menu on a design is solid and fits the screen.
-- **couch-tv Setup on every release:** `scripts/release.sh publish` now checks the Setup zips are on the release.
+- **Couch TV Setup on every release:** `scripts/release.sh publish` now checks the Setup zips are on the release.
 - **Credits:** the forecast, air quality and surf a widget opens say "Weather data by Open-Meteo.com", and Home settings, Location says "Location data based on GeoNames".
 - **Now playing reaches every music app:** since 0.13.11 the wider Night card, the progress bar and scrolling long titles show for every music app, not only Spotify, and App name, Long titles and Card alignment sit under Now playing on every home.
 - **Spotify's card:** follows a song change at once, never loads a cover from Spotify, shows its Home settings rows only where it works, shows the adb line only with no computer at home, and takes a skip step of 5, 10, 15 or 30 seconds everywhere.

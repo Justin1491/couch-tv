@@ -1,5 +1,6 @@
 """A pretend TV for the step tests: it keeps packages, switched off packages, the chosen home, the
 accessibility list and the files under /data/local/tmp, and records every shell command it gets."""
+import hashlib
 import itertools
 import re
 
@@ -40,7 +41,17 @@ class FakeTv:
         self.other_homes = []        # other launchers installed (Projectivy...), with their own watch
         self.other_bound = []        # labels of other bound accessibility services
         self.fail_on = None
+        self.app = "0.13.15"         # Couch TV's version once it is on the TV
+        self.held = None             # the account link Couch TV keeps
+        self.deaf = False            # True: Couch TV's SetupLink answers that it did not keep the link
         self.keys = []
+        self.settings = {}           # Settings.Global values; a missing name is "null" (unset)
+        self.refuse_settings = set() # names the TV ignores writes to (and deletes of)
+        self.refuse_disable = set()  # packages the TV will not switch off (Fire OS protects some)
+        self.gfxinfo = ""
+        self.secure = {}             # Settings.Secure values for the screen saver; a missing name is "null"
+        self.refuse_secure = set()   # names the TV ignores writes to
+        self.dreams = ""             # what `dumpsys dreams` prints
 
     # what the steps call
     def prop(self, name):
@@ -94,6 +105,10 @@ class FakeTv:
             if self.chosen and self.chosen.split("/")[0] in self.packages:
                 return "priority=0\n" + self.chosen
             return "priority=0\n" + self.home
+        if c.startswith("pm query-activities") and "LAUNCHER" in c:
+            if "LEANBACK" in c:
+                return "priority=0 preferredOrder=0\ncom.netflix.ninja/.MainActivity\ncom.google.android.youtube.tv/.Main"
+            return "priority=0\ncom.spotify.tv.android/.Main\ncom.netflix.ninja/.MainActivity"
         if c.startswith("pm query-activities"):
             homes = [self.home] + [p + "/.Home" for p in self.other_homes]
             if self.ontv_alias and "dev.couchtv.ontv" in self.packages:
@@ -117,6 +132,8 @@ class FakeTv:
             return ""
         if c.startswith("pm disable-user"):
             p = c.split()[-1]
+            if p in self.refuse_disable:
+                return f"Exception occurred while executing 'disable-user':\njava.lang.SecurityException: Shell cannot change state of {p}"
             self.disabled.add(p)
             return f"Package {p} new state: disabled-user"
         if c.startswith("pm enable"):
@@ -136,7 +153,9 @@ class FakeTv:
             if p not in self.packages:
                 return ""
             flags = "flags=[ SYSTEM PERSISTENT ]" if p == "com.android.phone" else "flags=[ SYSTEM ]"
-            return f"Package [{p}]\n    versionName=0.12\n    {flags}" if "grep" not in c else "    versionName=0.12"
+            return f"Package [{p}]\n    versionName={self.app}\n    {flags}" if "grep" not in c else f"    versionName={self.app}"
+        if c.startswith(("am start", "am broadcast")):
+            return self._am(c)
         if c.startswith("settings get secure enabled_accessibility_services"):
             return self.a11y
         if c.startswith("settings put secure enabled_accessibility_services"):
@@ -145,6 +164,33 @@ class FakeTv:
         if c.startswith("settings delete secure enabled_accessibility_services"):
             self.a11y = "null"
             return ""
+        m = re.match(r"settings (get|put|delete) secure (screensaver_\w+)(?: (\S+))?$", c)
+        if m:
+            if m.group(1) == "get":
+                return self.secure.get(m.group(2), "null")
+            if m.group(2) not in self.refuse_secure:
+                if m.group(1) == "put":
+                    self.secure[m.group(2)] = m.group(3)
+                else:
+                    self.secure.pop(m.group(2), None)
+            return ""
+        if c == "dumpsys dreams":
+            return self.dreams
+        m = re.match(r"settings get global (\S+)$", c)
+        if m:
+            return self.settings.get(m.group(1), "null")
+        m = re.match(r"settings put global (\S+) (\S+)$", c)
+        if m:
+            if m.group(1) not in self.refuse_settings:
+                self.settings[m.group(1)] = m.group(2)
+            return ""
+        m = re.match(r"settings delete global (\S+)$", c)
+        if m:
+            if m.group(1) not in self.refuse_settings:
+                self.settings.pop(m.group(1), None)
+            return ""
+        if c.startswith("dumpsys gfxinfo") and not c.endswith("reset"):
+            return self.gfxinfo
         if c.startswith("appops get"):
             return "SYSTEM_ALERT_WINDOW: default"
         if c == "dumpsys accessibility":
@@ -176,6 +222,26 @@ class FakeTv:
             self.files = {k: v for k, v in self.files.items() if not k.startswith("/data/local/tmp/couchtv-setup")}
             return ""
         return ""
+
+
+    def _am(self, c):
+        """What the real am answers, and what Couch TV does with the account link (0.13.13 on; SetupLink from 0.13.15)."""
+        new = tuple(int(x) for x in self.app.split(".")) >= (0, 13, 15)
+        link = re.search(r"--es account_link (\S+)", c)
+        if c.startswith("am broadcast"):
+            if not new or "app.couchtv.launcher" not in self.packages:
+                return "Broadcasting: Intent { cmp=app.couchtv.launcher/.SetupLink }\nBroadcast completed: result=0"
+            if self.deaf:
+                return 'Broadcast completed: result=2, data="couchtv-link no"'
+            self.held = link.group(1)
+            return f'Broadcast completed: result=1, data="couchtv-link ok {hashlib.sha256(self.held.encode()).hexdigest()[:16]}"'
+        if ".FromComputer" in c and not new:
+            return "Starting: Intent { cmp=app.couchtv.launcher/.FromComputer (has extras) }\nError type 3\nError: Activity class {app.couchtv.launcher/app.couchtv.launcher.FromComputer} does not exist."
+        if link and getattr(self, "no_start", False):
+            return "Starting: Intent { cmp=x }\njava.lang.SecurityException: Permission Denial: starting Intent"
+        if link:
+            self.held = link.group(1)
+        return "Starting: Intent { cmp=" + c.split("-n ")[1].split()[0] + " }"
 
 
 def never_allows():

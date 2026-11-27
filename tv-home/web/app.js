@@ -133,7 +133,13 @@
   var WX_AMBIENT = true, WX_SUN_GRADE = true;
   // Now playing (#31), on unless switched off; the navigation sound: system, soft or off (#32)
   var NP_ON = true, KW_ON = true, SOUND_STYLE = "system", START_FOCUS = "people",
-    SPOTIFY = { enabled: false, show_card: true, controls: true, seek_seconds: 10, hide_idle: false, title_mode: "pingpong", show_app: true, align: "classic" };
+    SPOTIFY = {
+      enabled: false, show_card: true, controls: true, seek_seconds: 10, hide_idle: false,
+      title_mode: "pingpong", show_app: true, align: "classic", mini_align: "classic", mini_art: "wide",
+      scrub_bar: true, show_shuffle_repeat: true, adaptive_tint: true, waveform: true,
+      card_style: "compact", show_up_next: true, show_jump_app: true,
+      show_sleep_timer: true, show_audio_output: true, separate_row: true, sync_theme_colors: false
+    };
   var KW_POSTER = false;   // Night: Keep watching as Classic poster tiles, not wide cards (home.keep_watching_style, #192)
   // Keep watching follows the app the remote is on (home.shelf_follows_app), off unless switched on
   var SHELF_FOLLOW = false;
@@ -466,6 +472,9 @@
     pause: '<svg viewBox="0 0 24 24" class="solid"><path d="M6.5 5h4v14h-4zM13.5 5h4v14h-4z"/></svg>',
     rewind: '<svg viewBox="0 0 24 24" class="solid"><path d="M11 6v12l-9-6zM21 6v12l-9-6z"/></svg>',
     ff: '<svg viewBox="0 0 24 24" class="solid"><path d="M3 6v12l9-6zM13 6v12l9-6z"/></svg>',
+    shuffle: '<svg viewBox="0 0 24 24"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>',
+    repeat: '<svg viewBox="0 0 24 24"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',
+    repeatOne: '<svg viewBox="0 0 24 24"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/><path d="M12 9v6M10.5 10.5L12 9"/></svg>',
     spotify: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M7 9.5c3.5-1 7.5-.7 10.5 1M7.5 12.5c3-.8 6.5-.5 9 1M8 15.5c2.3-.6 5-.4 7 .8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     note: '<svg viewBox="0 0 24 24"><path d="M9 18V6l11-2v12"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>',
     updown: '<svg viewBox="0 0 24 24"><path d="M8 9.5l4-4 4 4M8 14.5l4 4 4-4"/></svg>',
@@ -741,7 +750,20 @@
       hide_idle: typeof spRaw.hide_idle === "boolean" ? spRaw.hide_idle : false,
       title_mode: ["dots", "pingpong", "continuous"].indexOf(spRaw.title_mode) >= 0 ? spRaw.title_mode : "pingpong",
       show_app: typeof spRaw.show_app === "boolean" ? spRaw.show_app : true,
-      align: ["classic", "center"].indexOf(spRaw.align) >= 0 ? spRaw.align : "classic"
+      align: ["classic", "center", "dock_center"].indexOf(spRaw.align) >= 0 ? spRaw.align : "classic",
+      mini_align: ["classic", "right"].indexOf(spRaw.mini_align) >= 0 ? spRaw.mini_align : "classic",
+      mini_art: ["square", "wide"].indexOf(spRaw.mini_art) >= 0 ? spRaw.mini_art : "wide",
+      scrub_bar: typeof spRaw.scrub_bar === "boolean" ? spRaw.scrub_bar : true,
+      show_shuffle_repeat: typeof spRaw.show_shuffle_repeat === "boolean" ? spRaw.show_shuffle_repeat : true,
+      adaptive_tint: typeof spRaw.adaptive_tint === "boolean" ? spRaw.adaptive_tint : true,
+      waveform: typeof spRaw.waveform === "boolean" ? spRaw.waveform : true,
+      card_style: ["compact", "mini"].indexOf(spRaw.card_style) >= 0 ? spRaw.card_style : "compact",
+      show_up_next: typeof spRaw.show_up_next === "boolean" ? spRaw.show_up_next : true,
+      show_jump_app: typeof spRaw.show_jump_app === "boolean" ? spRaw.show_jump_app : true,
+      show_sleep_timer: typeof spRaw.show_sleep_timer === "boolean" ? spRaw.show_sleep_timer : true,
+      show_audio_output: typeof spRaw.show_audio_output === "boolean" ? spRaw.show_audio_output : true,
+      separate_row: (spRaw.separate_row === false || spRaw.separate_row === "kw") ? "kw" : (spRaw.separate_row === "none" ? "none" : "np"),
+      sync_theme_colors: typeof spRaw.sync_theme_colors === "boolean" ? spRaw.sync_theme_colors : false
     };
     applySpotifyAlign();
     // the Keep watching row: Home settings win over home.keep_watching; off hides it and stops fetching it
@@ -847,8 +869,14 @@
     if (document.documentElement.classList.contains("no-clock") !== off) document.documentElement.classList.toggle("no-clock", off);
   }
   function applySpotifyAlign() {
-    var isCenter = (SPOTIFY.align || "classic") === "center";
+    var isMini = (SPOTIFY.card_style || "compact") === "mini";
+    var al = SPOTIFY.align || "classic";
+    var isCenter = !isMini && al === "center";
+    var isDockCenter = !isMini && al === "dock_center";
+    var isMiniRight = isMini && (SPOTIFY.mini_align || "classic") === "right";
     document.documentElement.classList.toggle("spotify-align-center", isCenter);
+    document.documentElement.classList.toggle("spotify-align-dock-center", isDockCenter);
+    document.documentElement.classList.toggle("np-mini-right", isMiniRight);
     if (NIGHT) {
       var sEl = $("shelf-section");
       if (sEl) {
@@ -2590,8 +2618,109 @@
   }
 
   // ---------------- Now playing (#31) + Spotify local integration ----------------
-  var music = null, npI = 2, npSrc = "", currentNpBtns = [], npProgressTimer = null;
+  var music = null, npI = 2, npPrimaryCount = 0, npSub = "btns", npScrubPos = 0, npSrc = "", currentNpBtns = [], npProgressTimer = null;
+  var localShuffle = "off", localRepeat = "off";
+  var musicSleepEnd = 0, musicSleepMin = 0, musicSleepTimer = null, musicFadeTimer = null;
+  var audioOutput = { type: "speaker", name: "" }, audioOutAt = 0;
+  var npTintCache = {};
   var LOCAL_SPOTIFY = false, SPOTIFY_TV = "com.spotify.tv.android";
+
+  function extractArtworkTint(dataUrl, cb) {
+    if (!dataUrl || dataUrl.indexOf("data:image/") !== 0) { cb(null); return; }
+    if (npTintCache[dataUrl]) { cb(npTintCache[dataUrl]); return; }
+    var img = new Image();
+    img.onload = function () {
+      try {
+        var c = document.createElement("canvas");
+        c.width = 16; c.height = 16;
+        var ctx = c.getContext("2d");
+        ctx.drawImage(img, 0, 0, 16, 16);
+        var d = ctx.getImageData(0, 0, 16, 16).data;
+        var bestR = 0, bestG = 0, bestB = 0, bestScore = -1;
+        var sumR = 0, sumG = 0, sumB = 0, cnt = 0;
+        for (var i = 0; i < d.length; i += 4) {
+          var r = d[i], g = d[i + 1], b = d[i + 2];
+          var max = Math.max(r, g, b), min = Math.min(r, g, b);
+          var lum = (max + min) / 2;
+          if (lum < 25 || lum > 235) continue;
+          sumR += r; sumG += g; sumB += b; cnt++;
+          var sat = max === 0 ? 0 : (max - min) / max;
+          var score = sat * (1 - Math.abs(lum - 128) / 140);
+          if (score > bestScore) { bestScore = score; bestR = r; bestG = g; bestB = b; }
+        }
+        var res = bestScore > 0.15 ? [bestR, bestG, bestB]
+          : (cnt > 0 ? [Math.round(sumR / cnt), Math.round(sumG / cnt), Math.round(sumB / cnt)] : null);
+        npTintCache[dataUrl] = res;
+        cb(res);
+      } catch (e) { cb(null); }
+    };
+    img.onerror = function () { cb(null); };
+    img.src = dataUrl;
+  }
+
+  function refreshAudioOutput(force) {
+    if (!TV || !TV.audioOutputInfo) return;
+    if (!force && Date.now() - audioOutAt < 5000) return;
+    audioOutAt = Date.now();
+    try {
+      var info = JSON.parse(TV.audioOutputInfo());
+      if (info && info.type) audioOutput = info;
+    } catch (e) {}
+  }
+
+  function cancelMusicSleep() {
+    clearTimeout(musicSleepTimer); musicSleepTimer = null;
+    clearInterval(musicFadeTimer); musicFadeTimer = null;
+    musicSleepEnd = 0; musicSleepMin = 0;
+    try { if (TV && TV.musicFadeRestore) TV.musicFadeRestore(); } catch (e) {}
+  }
+
+  function toggleMusicSleep() {
+    var steps = [0, 15, 30, 45, 60];
+    var idx = steps.indexOf(musicSleepMin);
+    var nextMin = steps[(idx + 1) % steps.length];
+    cancelMusicSleep();
+    if (!nextMin) {
+      toast(t("music_sleep_off"));
+      renderNp();
+      return;
+    }
+    musicSleepMin = nextMin;
+    musicSleepEnd = Date.now() + nextMin * 60000;
+    var fadeMs = 30000;
+    var fadeStartAt = Math.max(0, nextMin * 60000 - fadeMs);
+    toast(t("music_sleep_set", { m: nextMin }));
+    renderNp();
+    musicSleepTimer = setTimeout(function () {
+      try { if (TV && TV.musicFadeStart) TV.musicFadeStart(); } catch (e) {}
+      var t0 = Date.now();
+      musicFadeTimer = setInterval(function () {
+        var frac = Math.max(0, 1 - (Date.now() - t0) / fadeMs);
+        try { if (TV && TV.musicFadeStep) TV.musicFadeStep(frac); } catch (e) {}
+        if (frac <= 0) {
+          clearInterval(musicFadeTimer); musicFadeTimer = null;
+          try {
+            if (TV && TV.spotifyControl) TV.spotifyControl("pause", 0);
+            else if (!OFFLINE) api("POST", "/api/spotify/control", { action: "pause", interval: 0 });
+          } catch (e) {}
+          setTimeout(function () {
+            try { if (TV && TV.musicFadeRestore) TV.musicFadeRestore(); } catch (e) {}
+          }, 800);
+          musicSleepMin = 0; musicSleepEnd = 0;
+          renderNp();
+        }
+      }, 1000);
+    }, fadeStartAt);
+  }
+
+  function jumpIntoMusicApp() {
+    if (!music) return;
+    try {
+      if (TV && TV.spotifyOpenApp && TV.spotifyOpenApp()) return;
+    } catch (e) {}
+    var pkg = (music.app && (music.app.package || music.app.id)) || SPOTIFY_TV;
+    if (pkg) launch(pkg);
+  }
   var FOOTBALL_LEAGUES = [
     { id: "47", name: "Premier League" }, { id: "55", name: "Serie A" },
     { id: "42", name: "Champions League" }, { id: "73", name: "Europa League" },
@@ -2884,6 +3013,7 @@
 
   function updateNpProgress() {
     if (!music || !music.duration || music.duration <= 0) return;
+    if (zone === "np" && npSub === "bar") return;
     var pos = getPlaybackPosition();
     var curEl = $("np-pos");
     var fillEl = $("np-fill");
@@ -2908,6 +3038,7 @@
     else if (NIGHT) {
       var anyone = rowHasCards();
       $("shelf-section").classList.toggle("empty", !anyone && !on);
+      $("shelf-section").classList.toggle("kw-empty", !anyone);
       $("np-slot").classList.toggle("on", on);
       if (KW_ON && !data.shows.length && !CARDS.length) {   // renderShelf's empty line, never over custom cards
         var track = $("shelf");
@@ -2916,21 +3047,90 @@
           track.innerHTML = on ? "" : ('<p class="shelf-none">' + esc(peopleCount() < 2 ? t("nothing_yet") : t("nothing_for", { name: name })) + "</p>");
         }
       }
+      var stEl = $("shelf-title");
+      if (stEl) {
+        var headMode = SPOTIFY.separate_row === false || SPOTIFY.separate_row === "kw" ? "kw" : (SPOTIFY.separate_row === "none" ? "none" : "np");
+        if (on && headMode === "none") {
+          stEl.textContent = anyone ? t("keep_watching") : "";
+        } else if (on && headMode === "np") {
+          stEl.textContent = anyone ? (t("np_head") + " · " + t("keep_watching")) : t("np_head");
+        } else {
+          stEl.textContent = t("keep_watching");
+        }
+      }
     }
+    var playing = !!(on && music && music.state === "playing");
+    var isMiniOn = !!(NIGHT && on && SPOTIFY.card_style === "mini");
+    var isMiniSquare = isMiniOn && (SPOTIFY.mini_art || "wide") === "square";
+    document.documentElement.classList.toggle("waveform-on", !!(on && playing && SPOTIFY.waveform !== false));
+    document.documentElement.classList.toggle("np-mini-mode", isMiniOn);
+    document.documentElement.classList.toggle("np-mini-square", isMiniSquare);
     if (!on) {
       clearInterval(npProgressTimer);
       el.innerHTML = "";
+      el.classList.remove("adaptive-tint", "np-mini", "np-art-square");
+      el.style.removeProperty("--np-tint");
+      el.style.removeProperty("--np-glow");
+      el.style.removeProperty("--np-border");
+      document.documentElement.classList.remove("np-sync-colors");
+      document.documentElement.style.removeProperty("--np-glow");
+      document.documentElement.style.removeProperty("--np-sync-bg");
+      document.documentElement.style.removeProperty("--np-sync-border");
+      document.documentElement.style.removeProperty("--np-sync-clock");
+      document.documentElement.style.removeProperty("--np-sync-shadow");
       currentNpBtns = [];
+      npSub = "btns";
       npFit("");
       return;
     }
 
-    var playing = music.state === "playing";
     var cover = music.art || (music.source === "spotify-tv" ? iconUrl(SPOTIFY_TV) : "");
     var art = cover ? '<img class="np-art" src="' + esc(cover) + '" alt="" decoding="async" data-err="np">' :
       '<span class="np-art">' + ICONS.note + "</span>";
 
-    var btns = [];
+    if ((SPOTIFY.adaptive_tint !== false || SPOTIFY.sync_theme_colors) && cover && cover.indexOf("data:image/") === 0) {
+      extractArtworkTint(cover, function (rgb) {
+        var card = $("np");
+        if (!card) return;
+        if (rgb && SPOTIFY.adaptive_tint !== false) {
+          card.classList.add("adaptive-tint");
+          card.style.setProperty("--np-tint", "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ",0.32)");
+          card.style.setProperty("--np-glow", "rgb(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ")");
+          card.style.setProperty("--np-border", "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ",0.45)");
+          document.documentElement.style.setProperty("--np-glow", "rgb(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ")");
+        } else {
+          card.classList.remove("adaptive-tint");
+          if (rgb) document.documentElement.style.setProperty("--np-glow", "rgb(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ")");
+        }
+        if (rgb && SPOTIFY.sync_theme_colors) {
+          document.documentElement.classList.add("np-sync-colors");
+          document.documentElement.style.setProperty("--np-sync-bg", "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ",0.22)");
+          document.documentElement.style.setProperty("--np-sync-border", "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ",0.38)");
+          var lr = Math.min(255, rgb[0] + 125), lg = Math.min(255, rgb[1] + 125), lb = Math.min(255, rgb[2] + 125);
+          document.documentElement.style.setProperty("--np-sync-clock", "rgba(" + lr + "," + lg + "," + lb + ",0.38)");
+          document.documentElement.style.setProperty("--np-sync-shadow", "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ",0.35)");
+        } else {
+          document.documentElement.classList.remove("np-sync-colors");
+          document.documentElement.style.removeProperty("--np-sync-bg");
+          document.documentElement.style.removeProperty("--np-sync-border");
+          document.documentElement.style.removeProperty("--np-sync-clock");
+          document.documentElement.style.removeProperty("--np-sync-shadow");
+        }
+      });
+    } else {
+      el.classList.remove("adaptive-tint");
+      el.style.removeProperty("--np-tint");
+      el.style.removeProperty("--np-glow");
+      el.style.removeProperty("--np-border");
+      document.documentElement.classList.remove("np-sync-colors");
+      document.documentElement.style.removeProperty("--np-glow");
+      document.documentElement.style.removeProperty("--np-sync-bg");
+      document.documentElement.style.removeProperty("--np-sync-border");
+      document.documentElement.style.removeProperty("--np-sync-clock");
+      document.documentElement.style.removeProperty("--np-sync-shadow");
+    }
+
+    var primaryBtns = [];
     if (music.isSpotify && SPOTIFY.controls) {
       var actions = music.actions || 0;
       var canPrev = !actions || (actions & 16) !== 0;
@@ -2939,39 +3139,86 @@
       var canFF = !actions || (actions & 256) !== 0 || (actions & 64) !== 0;
       var canNext = !actions || (actions & 32) !== 0;
 
-      if (canPrev) btns.push({ act: "previous", label: t("np_prev"), icon: ICONS.prev });
-      if (canRewind) btns.push({ act: "rewind", label: t("np_rewind", { s: SPOTIFY.seek_seconds }), icon: ICONS.rewind });
-      if (canPlay) btns.push({ act: "play_pause", label: playing ? t("np_pause") : t("np_play"), icon: playing ? ICONS.pause : ICONS.play });
-      if (canFF) btns.push({ act: "fast_forward", label: t("np_ff", { s: SPOTIFY.seek_seconds }), icon: ICONS.ff });
-      if (canNext) btns.push({ act: "next", label: t("np_next"), icon: ICONS.next });
+      if (canPrev) primaryBtns.push({ act: "previous", label: t("np_prev"), icon: ICONS.prev });
+      if (canRewind) primaryBtns.push({ act: "rewind", label: t("np_rewind", { s: SPOTIFY.seek_seconds }), icon: ICONS.rewind });
+      if (canPlay) primaryBtns.push({ act: "play_pause", label: playing ? t("np_pause") : t("np_play"), icon: playing ? ICONS.pause : ICONS.play });
+      if (canFF) primaryBtns.push({ act: "fast_forward", label: t("np_ff", { s: SPOTIFY.seek_seconds }), icon: ICONS.ff });
+      if (canNext) primaryBtns.push({ act: "next", label: t("np_next"), icon: ICONS.next });
     } else if (music.isSpotify) {
-      btns = [
+      primaryBtns = [
         { act: "previous", label: t("np_prev"), icon: ICONS.prev },
         { act: "play_pause", label: playing ? t("np_pause") : t("np_play"), icon: playing ? ICONS.pause : ICONS.play },
         { act: "next", label: t("np_next"), icon: ICONS.next }
       ];
     } else {
-      // any other song: npButtons() as before (media keys, Open Spotify, Play on TV, the full screen view),
-      // the same list npPress acts on
-      btns = npButtons().map(function (b) { return { act: b[0], label: b[1], icon: ICONS[b[0]] }; });
+      primaryBtns = npButtons().map(function (b) { return { act: b[0], label: b[1], icon: ICONS[b[0]] }; });
     }
+
+    var extraBtns = [];
+    if (music.isSpotify) {
+      if (SPOTIFY.show_shuffle_repeat !== false) {
+        if (music.can_shuffle) {
+          var shufMode = music.shuffle || null;
+          extraBtns.push({
+            act: "shuffle", label: t("np_shuffle"), icon: ICONS.shuffle,
+            text: shufMode === "smart" ? t("np_shuffle_smart_short") : "",
+            active: shufMode === "normal" || shufMode === "smart", smart: shufMode === "smart", sm: true
+          });
+        }
+        if (music.can_repeat) {
+          var repMode = music.repeat || "off";
+          extraBtns.push({
+            act: "repeat", label: t("np_repeat"),
+            icon: repMode === "one" ? ICONS.repeatOne : ICONS.repeat,
+            active: repMode !== "off", sm: true
+          });
+        }
+      }
+      if (SPOTIFY.show_sleep_timer !== false) {
+        var sleepRem = musicSleepEnd > Date.now() ? Math.max(1, Math.ceil((musicSleepEnd - Date.now()) / 60000)) : musicSleepMin;
+        extraBtns.push({
+          act: "music_sleep", label: t("music_sleep"), icon: ICONS.moon,
+          text: sleepRem > 0 ? (sleepRem + "m") : "", active: sleepRem > 0, sm: true
+        });
+      }
+      if (SPOTIFY.show_audio_output !== false && TV && TV.audioOutputInfo) {
+        var outIcon = audioOutput.type === "bluetooth" ? ICONS.bluetooth : (audioOutput.type === "hdmi" ? ICONS.hdmi : ICONS.soundscape);
+        var rawOut = (audioOutput.name || "").replace(/^[-\s]+/, "").trim();
+        var outName = (audioOutput.type === "bluetooth" && rawOut) ? rawOut : t("audio_out_" + (audioOutput.type || "speaker"));
+        extraBtns.push({ act: "audio_output", label: t("audio_output"), icon: outIcon, text: outName, sm: true });
+      }
+      if (SPOTIFY.show_jump_app !== false) {
+        extraBtns.push({ act: "open_app", label: t("np_open_app"), icon: ICONS.launch, sm: true });
+      }
+    }
+
+    var btns = primaryBtns.concat(extraBtns);
+    npPrimaryCount = primaryBtns.length;
     currentNpBtns = music.isSpotify ? btns : [];
     if (npI >= btns.length) npI = Math.max(0, btns.length - 1);
 
     var curPos = getPlaybackPosition();
     var hasDuration = music.duration && music.duration > 0;
+    var dispPos = (zone === "np" && npSub === "bar") ? npScrubPos : curPos;
+    var pct = hasDuration ? Math.min(100, Math.max(0, (dispPos / music.duration) * 100)) : 0;
     var progHtml = hasDuration ? (
-      '<div class="np-prog-wrap">' +
-        '<span class="np-time" id="np-pos">' + fmtTime(curPos) + '</span>' +
-        '<div class="np-bar"><div class="np-fill" id="np-fill" style="width:' + Math.min(100, Math.max(0, (curPos / music.duration) * 100)) + '%"></div></div>' +
+      '<div class="np-prog-wrap' + (zone === "np" && npSub === "bar" ? " focus" : "") + '" id="np-prog-wrap">' +
+        '<span class="np-time" id="np-pos">' + fmtTime(dispPos) + '</span>' +
+        '<div class="np-bar" id="np-bar">' +
+          '<div class="np-fill" id="np-fill" style="width:' + pct + '%"></div>' +
+          '<div class="np-scrub-tip" id="np-scrub-tip" style="left:' + pct + '%">' + fmtTime(dispPos) + '</div>' +
+        '</div>' +
         '<span class="np-time">' + fmtTime(music.duration) + '</span>' +
       '</div>'
     ) : '';
 
     var showApp = SPOTIFY.show_app !== false;
     el.classList.toggle("no-app", !showApp);
+    el.classList.toggle("np-mini", NIGHT && SPOTIFY.card_style === "mini");
+    el.classList.toggle("np-art-square", !!(NIGHT && SPOTIFY.card_style === "mini" && (SPOTIFY.mini_art || "wide") === "square"));
     var appLabel = (music.app && music.app.name) || (music.isSpotify ? "Spotify" : t("np_head"));
     var appHtml = showApp ? ('<span class="np-app">' + esc(appLabel) + "</span>") : '';
+
     var titleMode = SPOTIFY.title_mode || "pingpong";
     var titleContent = "";
     if (titleMode === "continuous") {
@@ -2995,12 +3242,31 @@
       '</div>';
     }
 
-    el.innerHTML = art + '<div class="np-t">' + appHtml +
+    var primaryHtml = primaryBtns.map(function (b, i) {
+      return '<span class="nb' + (zone === "np" && npSub === "btns" && i === npI ? " focus" : "") + '" role="button" aria-label="' + esc(b.label) + '">' + b.icon + "</span>";
+    }).join("");
+
+    var upNextHtml = (SPOTIFY.show_up_next !== false && music.up_next_title) ? (
+      '<div class="np-up-next">' + esc(t("np_up_next")) + ' <b>' + esc(music.up_next_title) + '</b>' +
+      (music.up_next_artist ? (' · ' + esc(music.up_next_artist)) : '') + '</div>'
+    ) : '';
+
+    var extraHtml = (upNextHtml || extraBtns.length) ? (
+      '<div class="np-extra">' + upNextHtml +
+        (extraBtns.length ? ('<div class="np-sub-ctl">' + extraBtns.map(function (b, j) {
+          var idx = primaryBtns.length + j;
+          return '<span class="nb nb-sm' + (b.active ? " active" : "") + (b.smart ? " np-smart" : "") + (zone === "np" && npSub === "btns" && idx === npI ? " focus" : "") +
+            '" role="button" aria-label="' + esc(b.label) + '">' + b.icon +
+            (b.text ? ('<span class="nb-label">' + esc(b.text) + '</span>') : '') + "</span>";
+        }).join("") + '</div>') : '') +
+      '</div>'
+    ) : '';
+
+    el.innerHTML = '<div class="np-main-row">' + art + '<div class="np-t">' + appHtml +
       titleContent + "<small>" + esc(music.artist || music.album || "") + "</small>" +
       progHtml + "</div>" +
-      '<div class="np-ctl">' + btns.map(function (b, i) {
-        return '<span class="nb' + (zone === "np" && i === npI ? " focus" : "") + '" role="button" aria-label="' + esc(b.label) + '">' + b.icon + "</span>";
-      }).join("") + "</div>";
+      '<div class="np-ctl">' + primaryHtml + "</div></div>" + extraHtml;
+
     updateTitleMarquee();
     startProgressTimer();
     npFit([music.title, music.artist || music.album || "", btns.length].join("\n"));
@@ -3016,8 +3282,16 @@
       return;
     }
     var wrapWidth = wrap.clientWidth;
+    if (wrapWidth === 0) {
+      if (!wrap.dataset.mqRetry) {
+        wrap.dataset.mqRetry = "1";
+        requestAnimationFrame(updateTitleMarquee);
+      }
+      wrap.classList.remove("overflowing");
+      return;
+    }
     var titleWidth = titleEl.scrollWidth;
-    if (wrapWidth > 0 && titleWidth > wrapWidth + 4) {
+    if (titleWidth > wrapWidth + 4) {
       wrap.classList.add("overflowing");
       var overflow = titleWidth - wrapWidth;
       wrap.style.setProperty("--marquee-overflow", overflow + "px");
@@ -3065,8 +3339,15 @@
       speed: s.speed || 0.0,
       actions: s.actions || 0,
       art: s.art || null,
-      app: { name: "Spotify", package: s.package || "com.spotify.tv.android" }
+      up_next_title: s.up_next_title || null,
+      up_next_artist: s.up_next_artist || null,
+      shuffle: s.shuffle || null,
+      repeat: s.repeat || null,
+      can_shuffle: !!s.can_shuffle,
+      can_repeat: !!s.can_repeat,
+      app: { name: s.app_name || (s.package && s.package.indexOf("spotify") >= 0 ? "Spotify" : t("np_head")), package: s.package || "com.spotify.tv.android" }
     };
+    refreshAudioOutput(false);
     renderNp();
     if (had !== !!music && zone === "np" && !music) paintFocus();
   }
@@ -3161,12 +3442,37 @@
     });
   }
 
+  function npCommitSeek(targetMs) {
+    if (!music) return;
+    music.position = targetMs;
+    music.lastUpdateLocal = Date.now();
+    npSub = "btns";
+    renderNp();
+    if (TV && TV.spotifyControl) {
+      TV.spotifyControl("seek", targetMs);
+      setTimeout(refreshSpotify, 600);
+    } else if (!OFFLINE) {
+      api("POST", "/api/spotify/control", { action: "seek", position: targetMs }).catch(function (e) { note(e.message); });
+      setTimeout(refreshSpotify, 600);
+    }
+  }
+
   function npPress() {
     if (!music) return;
+    if (music.isSpotify && npSub === "bar") {
+      npCommitSeek(npScrubPos);
+      return;
+    }
     if (music.isSpotify && currentNpBtns.length) {
       var btn = currentNpBtns[npI];
       if (!btn) return;
       var act = btn.act;
+      if (act === "music_sleep") { toggleMusicSleep(); return; }
+      if (act === "open_app") { jumpIntoMusicApp(); return; }
+      if (act === "audio_output") {
+        if (TV && TV.openAudioOutput) TV.openAudioOutput();
+        return;
+      }
       if (TV && TV.spotifyControl) {
         if (act === "play_pause") {
           music.state = music.state === "playing" ? "paused" : "playing";
@@ -3177,6 +3483,21 @@
           TV.spotifyControl("rewind", SPOTIFY.seek_seconds * 1000);
         } else if (act === "fast_forward") {
           TV.spotifyControl("fast_forward", SPOTIFY.seek_seconds * 1000);
+        } else if (act === "shuffle") {
+          var curS = music.shuffle;
+          var isSpApp = !!(music.app && music.app.package && music.app.package.indexOf("com.spotify") === 0);
+          var nextS = !curS ? null : (curS === "off" ? "normal" : (curS === "normal" && isSpApp ? "smart" : "off"));
+          TV.spotifyControl("shuffle", nextS === "off" ? 0 : (nextS === "smart" ? 2 : 1));
+          toast(nextS ? t("np_shuffle_" + nextS) : t("np_shuffle_toggled"));
+          setTimeout(refreshSpotify, 350);
+          return;
+        } else if (act === "repeat") {
+          var curR = music.repeat || "off";
+          var nextR = curR === "off" ? "all" : (curR === "all" ? "one" : "off");
+          TV.spotifyControl("repeat", nextR === "all" ? 2 : (nextR === "one" ? 1 : 0));
+          toast(t("np_repeat_" + nextR));
+          setTimeout(refreshSpotify, 350);
+          return;
         } else {
           TV.spotifyControl(act, 0);
         }
@@ -3535,6 +3856,7 @@
   function toggleScreenOff(on) {
     var overlay = $("screen-off-overlay");
     screenOffActive = !!on;
+    if (screenOffActive && zone === "makeit") makeitClose();
     if (screenOffActive) {
       if (overlay) {
         var hint = $("screen-off-hint");
@@ -3589,6 +3911,7 @@
   function setIdleAmbient(on) {
     var ov = $("idle-ambient-overlay");
     idleAmbientActive = !!on;
+    if (idleAmbientActive && zone === "makeit") makeitClose();
     if (idleAmbientActive) {
       clock();
       updateOledShift();
@@ -3933,6 +4256,8 @@
   // A kids profile's home is kids.js's shelf, drawn over everything here. app.js keeps who is
   // watching; kids.js shows or hides itself from that, and hands back here once the parent PIN is right.
   function kidsOn() { return !!(window.KidsMode && window.KidsMode.active()); }
+  // the person watching is marked a guest (docs/CONFIG.md, "guest": true)
+  function guestOn() { return !NOBODY && PEOPLE.some(function (p) { return p && p.id === who && p.guest === true; }); }
   function kidSync() {
     if (!window.KidsMode) return;
     var p = NOBODY ? null : PEOPLE.filter(function (x) { return x.id === who; })[0] || null;
@@ -4088,7 +4413,15 @@
     // custom cards keep the row (and its heading) even with Keep watching switched off
     document.documentElement.classList.toggle("kw-off", !KW_ON && !CARDS.length);
     var following = followName();
-    $("shelf-title").textContent = following ? t("recently_on", { app: following }) : t(data.shows.length || !CARDS.length ? "keep_watching" : "custom_cards");
+    var kwText = following ? t("recently_on", { app: following }) : t(data.shows.length || !CARDS.length ? "keep_watching" : "custom_cards");
+    var headMode = SPOTIFY.separate_row === false || SPOTIFY.separate_row === "kw" ? "kw" : (SPOTIFY.separate_row === "none" ? "none" : "np");
+    if (NIGHT && npVisible() && headMode === "none") {
+      $("shelf-title").textContent = rowHasCards() ? kwText : "";
+    } else if (NIGHT && npVisible() && headMode === "np") {
+      $("shelf-title").textContent = rowHasCards() ? (t("np_head") + " · " + kwText) : t("np_head");
+    } else {
+      $("shelf-title").textContent = kwText;
+    }
     shelfShown = shelfKey();
     renderPeople();
     if (!KW_ON) { track.innerHTML = ""; shelfEls = []; addCards(track); return; }   // row switched off: only the custom cards, if any
@@ -4880,7 +5213,7 @@
       if (NIGHT) {
         var gEl = $("grid"), sEl = $("shelf-section");
         if (gEl && sEl) {
-          if ((SPOTIFY.align || "classic") === "center") {
+          if ((SPOTIFY.card_style || "compact") !== "mini" && (SPOTIFY.align || "classic") === "center") {
             var gw = gEl.offsetWidth;
             if (gw > 0) sEl.style.width = gw + "px";
           } else {
@@ -5012,6 +5345,7 @@
     saveFocusSoon();
     followSync();   // the row follows the app tile the remote is on (home.shelf_follows_app)
     if (zone === "welcome") { renderWelcome(); return; }
+    if (zone === "makeit") return;
     if (zone === "settings") { renderSettings(); return; }
     if (zone === "smart") { window.smartHome.paint(); return; }
     if (zone === "remind") { window.Reminders.paint(); return; }
@@ -5144,7 +5478,52 @@
       return;
     }
     if (zone === "np") {
+      var isMini = NIGHT && SPOTIFY.card_style === "mini";
+      var hasBar = !!(music && music.isSpotify && music.duration > 0 && SPOTIFY.scrub_bar !== false && $("np-prog-wrap"));
       var maxNp = Math.max(0, (currentNpBtns.length || npButtons().length) - 1);
+      var pCount = music && music.isSpotify ? Math.min(npPrimaryCount || (maxNp + 1), maxNp + 1) : (maxNp + 1);
+      var hasExtra = music && music.isSpotify && (maxNp + 1 > pCount);
+      var inExtra = npSub === "btns" && hasExtra && npI >= pCount;
+
+      if (music && music.isSpotify && npSub === "bar") {
+        if (dx) {
+          var stepMs = (SPOTIFY.seek_seconds || 10) * 1000;
+          npScrubPos = Math.max(0, Math.min(music.duration || 0, npScrubPos + dx * stepMs));
+          var pct = music.duration ? Math.min(100, Math.max(0, (npScrubPos / music.duration) * 100)) : 0;
+          var posEl = $("np-pos"), fillEl = $("np-fill"), tipEl = $("np-scrub-tip");
+          if (posEl) posEl.textContent = fmtTime(npScrubPos);
+          if (fillEl) fillEl.style.width = pct + "%";
+          if (tipEl) { tipEl.style.left = pct + "%"; tipEl.textContent = fmtTime(npScrubPos); }
+          return;
+        }
+        if (dy < 0) {
+          npSub = "btns";
+          if (isMini) {
+            if (peopleOn()) toPeople(); else if (hasQuick()) { zone = "quick"; qi = 0; }
+          } else {
+            npI = hasExtra ? pCount : 0;
+          }
+          paintFocus();
+          return;
+        }
+        if (dy > 0) {
+          npSub = "btns";
+          if (isMini) {
+            npI = Math.min(npI, pCount - 1);
+            paintFocus();
+            return;
+          }
+          // Compact: Down from bar exits to grid
+          if (gridEls.length) {
+            var npBox = $("np").getBoundingClientRect();
+            g = nearestInRow(0, npBox.left + npBox.width / 2);
+            zone = "grid";
+          }
+          paintFocus();
+          return;
+        }
+      }
+
       if (LOOP) {
         if (dx > 0 && npI === maxNp) { if (hasQuick()) { zone = "quick"; qi = 0; } }
         else if (dx) npI = Math.max(0, Math.min(maxNp, npI + dx));
@@ -5158,15 +5537,38 @@
           }
         }
       } else if (NIGHT) {
-        if (dx > 0 && npI === maxNp) { if (footballEnabled && !LOOP) zone = "football"; else if (cards.length) { zone = "shelf"; s = 0; } }
-        else if (dx) npI = Math.max(0, Math.min(maxNp, npI + dx));
-        else if (dy < 0) { if (peopleOn()) toPeople(); else if (hasQuick()) { zone = "quick"; qi = 0; } }
-        else if (dy > 0 && gridEls.length) {
-          var btns = $("np") ? $("np").querySelectorAll(".nb") : [];
-          var bEl = btns[npI];
-          var midX = bEl ? (bEl.getBoundingClientRect().left + bEl.getBoundingClientRect().width / 2) : ($("np").getBoundingClientRect().left + $("np").getBoundingClientRect().width / 2);
-          g = nearestInRow(0, midX);
-          zone = "grid";
+        if (dx) {
+          var rowMin = inExtra ? pCount : 0;
+          var rowMax = inExtra ? maxNp : (pCount - 1);
+          if (dx > 0 && npI === rowMax) {
+            if (footballEnabled && !LOOP) zone = "football";
+            else if (cards.length) { zone = "shelf"; s = 0; }
+          } else {
+            npI = Math.max(rowMin, Math.min(rowMax, npI + dx));
+          }
+        } else if (dy < 0) {
+          if (inExtra) {
+            npI = Math.min(pCount - 1, Math.max(0, npI - pCount));
+          } else if (isMini && hasBar) {
+            npSub = "bar";
+            npScrubPos = getPlaybackPosition();
+          } else {
+            if (peopleOn()) toPeople();
+            else if (hasQuick()) { zone = "quick"; qi = 0; }
+          }
+        } else if (dy > 0) {
+          if (!inExtra && hasExtra) {
+            npI = Math.min(maxNp, pCount + Math.min(npI, maxNp - pCount));
+          } else if (!isMini && hasBar) {
+            npSub = "bar";
+            npScrubPos = getPlaybackPosition();
+          } else if (gridEls.length) {
+            var btns = $("np") ? $("np").querySelectorAll(".nb") : [];
+            var bEl = btns[npI];
+            var midX = bEl ? (bEl.getBoundingClientRect().left + bEl.getBoundingClientRect().width / 2) : ($("np").getBoundingClientRect().left + $("np").getBoundingClientRect().width / 2);
+            g = nearestInRow(0, midX);
+            zone = "grid";
+          }
         }
       } else {
         // Classic: top right, under the quick buttons
@@ -5429,6 +5831,7 @@
 
   function goHome() {
     if (zone === "welcome") { welcomeChoose(1); return; }   // Back on the first-run welcome: Couch Original
+    if (zone === "makeit") { makeitClose(); return; }       // Back on Make it yours: closed for good
     if (screenOffActive) {
       toggleScreenOff(false);
       return;
@@ -5453,6 +5856,7 @@
     if (zone === "pmenu") { if (plift) dropPeople(); else closePop(); paintFocus(); return; }
     if (zone === "menu") { closeMenu(); paintFocus(); return; }   // BACK just closes the sleep choices
     if (zone === "inputs") { closeInputMenu(); paintFocus(); return; }
+    if (zone === "np" && npSub === "bar") { npSub = "btns"; paintFocus(); return; }
     if (expanded) {
       expanded = false; renderGrid();
       if (dockBack) {   // opened from the More apps tile: Back lands on that tile in the dock again
@@ -5481,6 +5885,7 @@
       return true;
     }
     if (zone === "shelf") return openShelfMenu();
+    if (zone === "np") { jumpIntoMusicApp(); return true; }
     if (zone === "grid" && NIGHT) return holdApp();
     return false;
   }
@@ -5659,7 +6064,7 @@
   // Saved on this TV (page storage and the launcher's own store, TVOS.keep) and, with a bridge,
   // also on the computer (/api/settings), so the phone and the TV agree.
   var ST_KEY = "tvhome.settings";
-  var SECS = [["language", "globe"], ["location", "pin"], ["weather", "cloud"], ["look", "look"],
+  var SECS = [["language", "globe"], ["location", "pin"], ["weather", "cloud"], ["look", "look"], ["music", "note"],
     ["apps", "apps"], ["people", "person"], ["quick", "bolt"], ["designer", "designer"], ["about", "info"]];
   var SET = { col: "secs", sec: 0, ri: 0, keyFocus: null, sub: null, lift: null, confirm: null, dirty: false, typing: null,
     msg: "", geo: { q: "", list: null, busy: false, err: false } };
@@ -5681,6 +6086,7 @@
   // taking this TV's older copy whole; the copy it keeps comes back here.
   var SEEN = null;
   function pushSettings(rec) {
+    if (!rec) rec = keepSettings(true);   // a fresh frame has nothing kept yet
     var body = { settings: rec.s };
     if (SEEN !== null) body.seen = SEEN || "none";   // "none": it had no copy when this TV last looked
     return api("POST", "/api/settings", body)
@@ -5967,6 +6373,7 @@
     if (id === "location") return locationRows();
     if (id === "weather") return weatherRows();
     if (id === "look") return lookRows();
+    if (id === "music") return musicRows();
     if (id === "spotify") return spotifyRows();
     if (id === "designer") return designerRows();
     if (id === "apps") return appsRows();
@@ -5996,6 +6403,7 @@
         if (CLOCK24 !== clock24()) { CLOCK24 = !CLOCK24; glassShown = ""; clock(); }
       } };
     }) : [];
+    if (inboxCan()) rows.unshift(inboxRow("top-inbox-now"));   // a linked TV: Get my new design, at the top
     rows.push(info("lang-note", t("lang_note")));
     return rows;
   }
@@ -6147,6 +6555,9 @@
     // Right under Get a design, so the rows above stay where Couch TV Studio's pictured steps show them.
     if (CouchDesignCode.openInbox && window.TVQR) rows.push({ kind: "nav", key: "design-phone", label: "Get a design from your phone",
       sub: "Scan a code with your phone and choose a design there. No typing on the TV", act: openPhoneInbox });
+    // the first-run Make it yours card, again
+    if (window.TVQR) rows.push({ kind: "action", key: "design-makeit", label: "Make it yours", sub: "Show the address and code to design your own screen on your phone",
+      act: function () { closeSettings(); setTimeout(function () { makeitOpen(true); }, 0); } });
   }
   // A design got by code is kept on this TV until it is deleted here, whether designs are on or off
   // (it used to be hidden while they were off, so deleting it meant turning it back on first).
@@ -6336,7 +6747,8 @@
     if (!next) { next = now + CouchDesignCode.INBOX_WEEK * 1000; inboxTime("next", next); }
     inboxLater(Math.max(1, (next - now) / 1000));
   }
-  // why: "open" (the page started), "front" (tv.resume), "now" (the person pressed Check), "week" (the timer).
+  // why: "open" (the page started), "front" (tv.resume), "now" (the person pressed Get my new design), "week" (the timer),
+  // "card" (the Make it yours card is open on a linked TV: makeitCheck).
   // Answers whether the app was asked (or a kept send is being fetched).
   function inboxAsk(why) {
     var now = Date.now();
@@ -6346,7 +6758,7 @@
     var away = !seen || seen > now || now - seen >= CouchDesignCode.INBOX_AWAY * 1000;
     var due = !!inboxTime("next") && now >= inboxTime("next");
     inboxTime("seen", now);
-    var go = why === "now" || why === "week" || due || ((why === "open" || why === "front") && away);
+    var go = why === "now" || why === "card" || why === "week" || due || ((why === "open" || why === "front") && away);
     if (!go || now < inboxTime("wait")) { inboxArm(); return false; }
     inboxTime("last", now);
     inboxTime("next", now + CouchDesignCode.INBOX_WEEK * 1000);   // until the answer says otherwise
@@ -6365,18 +6777,20 @@
   // Home settings, Designs, Check for new designs now
   function inboxCheckNow() {
     var now = Date.now();
+    if (!inboxCan()) { SET.msg = INBOX_SAID.unlinked; return; }
     if (now < inboxTime("wait")) { SET.msg = "Couch TV Studio asked this TV to wait. Try again in a few minutes."; return; }
-    if (now - inboxTime("last") < INBOX_PRESS_MS) { SET.msg = "Looked a moment ago. Try again in a minute."; return; }
+    // one press is one look, and the next one waits 30 s (INBOX_PRESS_MS) from the last look of any kind
+    if (now - inboxTime("last") < INBOX_PRESS_MS) { SET.msg = "Looked a moment ago. Try again in 30 seconds."; return; }
     ACCT_INBOX.manual = true;
-    if (inboxAsk("now")) SET.msg = "Looking for new designs from your account.";
-    else { ACCT_INBOX.manual = false; SET.msg = "Could not look just now. Try again in a minute."; }
+    if (inboxAsk("now")) SET.msg = "Looking for your new design.";
+    else { ACCT_INBOX.manual = false; SET.msg = INBOX_SAID.fail; }
   }
   var INBOX_SAID = {
-    none: "No new designs from your account.",
-    item: "Getting the design...",
+    none: "Nothing new yet.",
+    item: "A new design arrived. Getting it...",
     wait: "Couch TV Studio asked this TV to wait. Try again in a few minutes.",
-    fail: "Could not reach your Couch TV account. Check the TV is online, then try again.",   // "fail", not "error": a TV word, not an error sent to the phone
-    unlinked: "This TV is no longer linked to your account. A typed code still works."
+    fail: "No internet. Check the TV is online, then try again.",   // "fail", not "error": a TV word, not an error sent to the phone
+    unlinked: "This TV is not linked to your account."
   };
   function accountInbox(raw) {
     if (typeof CouchDesignCode === "undefined" || !CouchDesignCode.readInboxAnswer) return;
@@ -6389,6 +6803,7 @@
       ACCT_INBOX.shown = a.state === "item";   // the fetch that follows says how it went
       if (zone === "settings") renderSettings();
     }
+    makeitAnswered(a);
     if (a.state === "unlinked") { inboxStop(); return; }   // the app forgot the link; a typed code still works
     if (a.state === "item") takeAccountDesign(a);
     if (!PAGE_PAUSED && !ACCT_INBOX.stopped) inboxArm();
@@ -6445,14 +6860,19 @@
   // press asks, a second press unlinks: the TV stops getting what the account sends; the design and the
   // names already here stay (Home settings, People takes the account's names off).
   var UNLINK_ASK = 0;
+  // Get my new design: one press is one look at the account's inbox (30 s between looks), with a plain answer.
+  // Also the first row of Home settings (languageRows) on a linked TV, so it is Settings, Right, OK.
+  function inboxRow(key) {
+    return { kind: "action", key: key, label: "Get my new design",
+      sub: "Sent a design from your account? This looks for it now. It also comes by itself when the TV wakes, or once a week", act: inboxCheckNow };
+  }
   function accountRows(rows) {
     if (typeof CouchDesignCode === "undefined" || !CouchDesignCode.linked) return;
     var u = CouchDesignCode.undoHeld && CouchDesignCode.undoHeld();
     if (u) rows.push({ kind: "action", key: "dz-undo", label: "Undo the new design", sub: "Puts back what this TV had before " +
       (u.title ? "“" + u.title + "”" : "the design") + " came from your account", act: undoAccountDesign });
     if (!CouchDesignCode.linked()) return;
-    if (inboxCan()) rows.push({ kind: "action", key: "dz-inbox-now", label: "Check for new designs now",
-      sub: "Designs you send from your account come by themselves when the TV wakes, or once a week. This looks now", act: inboxCheckNow });
+    if (inboxCan()) rows.push(inboxRow("dz-inbox-now"));
     var asking = UNLINK_ASK && Date.now() - UNLINK_ASK < 15000;
     rows.push({ kind: "action", key: "dz-unlink", label: asking ? "Press OK again to unlink" : "Unlink this TV from your account",
       sub: asking ? "This TV stops getting designs your Couch TV Studio account sends. What is on it now stays." :
@@ -6837,19 +7257,6 @@
       VIDEO_ON = !!VIDEO_URL && (typeof ST.video === "boolean" ? ST.video : true) && !LOOP;
       startVideo(); sceneVideos(true);
     } });
-    // Now playing (#31): the card with the song and its buttons; it needs the computer or the on-TV app
-    rows.push(head(t("np_head")));
-    rows.push({ kind: "toggle", key: "now-playing", label: t("np_show"), value: NP_ON ? t("on") : t("off"), act: function () {
-      NP_ON = !NP_ON; ST.now_playing = NP_ON; saveSettings(); refreshMusic();
-    } });
-    rows.push({ kind: "toggle", key: "ambient-music", label: t("ambient_music"), value: AMBIENT_MUSIC ? t("on") : t("off"), act: function () {
-      AMBIENT_MUSIC = !AMBIENT_MUSIC; ST.ambient_music = AMBIENT_MUSIC; saveSettings(); renderAmbientMusic();
-    } });
-    rows = rows.concat(npLookRows());
-    rows.push(info("np-note", t(OFFLINE ? "np_note_offline" : "np_note")));
-    // the local Spotify card (#321) sits under Now playing here, not in a section of its own: one more
-    // section pushed the last one off a 1080 screen
-    rows = rows.concat(spotifyRows());
     rows.push(head(t("photos_head")));
     rows.push(info("photos-count", photoCountText()));
     if (canPick()) rows.push({ kind: "action", key: "photo-pick", label: t("photos_pick"), sub: t("photos_pick_sub"), act: pickPhotos });
@@ -6997,9 +7404,57 @@
   // App name, Long titles and Card alignment shape every music app's Now playing card (and align the Night
   // look's Keep watching row), so they sit under Now playing on every home, not only where Spotify's card
   // works. They are still kept in ST.spotify, where 0.13.11 saved them.
+  function musicRows() {
+    var rows = [];
+    rows.push(head(t("np_head")));
+    rows.push({ kind: "toggle", key: "now-playing", label: t("np_show"), value: NP_ON ? t("on") : t("off"), act: function () {
+      NP_ON = !NP_ON; ST.now_playing = NP_ON; saveSettings(); refreshMusic();
+    } });
+    rows.push({ kind: "toggle", key: "ambient-music", label: t("ambient_music"), value: AMBIENT_MUSIC ? t("on") : t("off"), act: function () {
+      AMBIENT_MUSIC = !AMBIENT_MUSIC; ST.ambient_music = AMBIENT_MUSIC; saveSettings(); renderAmbientMusic();
+    } });
+    rows = rows.concat(npLookRows());
+    rows.push(info("np-note", t(OFFLINE ? "np_note_offline" : "np_note")));
+    rows = rows.concat(spotifyRows());
+    return rows;
+  }
+
   function npLookRows() {
     function keep(k, v) { ST.spotify = ST.spotify || {}; ST.spotify[k] = v; saveSettings(); }
-    return [
+    var isMini = (SPOTIFY.card_style || "compact") === "mini";
+    var headMode = SPOTIFY.separate_row === false || SPOTIFY.separate_row === "kw" ? "kw" : (SPOTIFY.separate_row === "none" ? "none" : "np");
+    var rows = [
+      { kind: "cycle", key: "spotify-separate-row", label: t("spotify_separate_row"), value: t("spotify_heading_" + headMode), act: function () {
+        var cur = SPOTIFY.separate_row === false || SPOTIFY.separate_row === "kw" ? "kw" : (SPOTIFY.separate_row === "none" ? "none" : "np");
+        var choices = ["np", "kw", "none"];
+        SPOTIFY.separate_row = choices[(choices.indexOf(cur) + 1) % choices.length];
+        keep("separate_row", SPOTIFY.separate_row); renderNp(); renderShelf(); renderSettings();
+      } },
+      { kind: "cycle", key: "spotify-card-style", label: t("spotify_card_style"), value: t("spotify_style_" + (SPOTIFY.card_style || "compact")), act: function () {
+        var choices = ["compact", "mini"];
+        SPOTIFY.card_style = choices[(choices.indexOf(SPOTIFY.card_style || "compact") + 1) % choices.length];
+        keep("card_style", SPOTIFY.card_style); applySpotifyAlign(); renderNp(); renderGrid(); renderShelf(); renderSettings();
+      } }
+    ];
+    if (isMini) {
+      rows.push({ kind: "cycle", key: "spotify-mini-align", label: t("spotify_mini_align"), value: t("spotify_mini_align_" + (SPOTIFY.mini_align || "classic")), act: function () {
+        var choices = ["classic", "right"];
+        SPOTIFY.mini_align = choices[(choices.indexOf(SPOTIFY.mini_align || "classic") + 1) % choices.length];
+        keep("mini_align", SPOTIFY.mini_align); applySpotifyAlign(); renderNp(); renderShelf();
+      } });
+      rows.push({ kind: "cycle", key: "spotify-mini-art", label: t("spotify_mini_art"), value: t("spotify_mini_art_" + (SPOTIFY.mini_art || "wide")), act: function () {
+        var choices = ["wide", "square"];
+        SPOTIFY.mini_art = choices[(choices.indexOf(SPOTIFY.mini_art || "wide") + 1) % choices.length];
+        keep("mini_art", SPOTIFY.mini_art); renderNp();
+      } });
+    } else {
+      rows.push({ kind: "cycle", key: "spotify-align", label: t("spotify_align"), value: t("spotify_align_" + (SPOTIFY.align || "classic")), act: function () {
+        var choices = ["classic", "center", "dock_center"];
+        SPOTIFY.align = choices[(choices.indexOf(SPOTIFY.align || "classic") + 1) % choices.length];
+        keep("align", SPOTIFY.align); applySpotifyAlign(); renderGrid(); renderShelf();
+      } });
+    }
+    return rows.concat([
       { kind: "toggle", key: "spotify-show-app", label: t("spotify_show_app"), value: SPOTIFY.show_app !== false ? t("on") : t("off"), act: function () {
         SPOTIFY.show_app = SPOTIFY.show_app === false; keep("show_app", SPOTIFY.show_app); renderNp();
       } },
@@ -7008,12 +7463,16 @@
         SPOTIFY.title_mode = choices[(choices.indexOf(SPOTIFY.title_mode || "pingpong") + 1) % choices.length];
         keep("title_mode", SPOTIFY.title_mode); renderNp();
       } },
-      { kind: "cycle", key: "spotify-align", label: t("spotify_align"), value: t("spotify_align_" + (SPOTIFY.align || "classic")), act: function () {
-        var choices = ["classic", "center"];
-        SPOTIFY.align = choices[(choices.indexOf(SPOTIFY.align || "classic") + 1) % choices.length];
-        keep("align", SPOTIFY.align); applySpotifyAlign(); renderGrid(); renderShelf();
+      { kind: "toggle", key: "spotify-adaptive-tint", label: t("spotify_adaptive_tint"), value: SPOTIFY.adaptive_tint !== false ? t("on") : t("off"), act: function () {
+        SPOTIFY.adaptive_tint = SPOTIFY.adaptive_tint === false; keep("adaptive_tint", SPOTIFY.adaptive_tint); renderNp();
+      } },
+      { kind: "toggle", key: "spotify-sync-colors", label: t("spotify_sync_colors"), value: SPOTIFY.sync_theme_colors ? t("on") : t("off"), act: function () {
+        SPOTIFY.sync_theme_colors = !SPOTIFY.sync_theme_colors; keep("sync_theme_colors", SPOTIFY.sync_theme_colors); renderNp();
+      } },
+      { kind: "toggle", key: "spotify-waveform", label: t("spotify_waveform"), value: SPOTIFY.waveform !== false ? t("on") : t("off"), act: function () {
+        SPOTIFY.waveform = SPOTIFY.waveform === false; keep("waveform", SPOTIFY.waveform); renderNp();
       } }
-    ];
+    ]);
   }
 
   function spotifyRows() {
@@ -7073,6 +7532,84 @@
           SPOTIFY.controls = !SPOTIFY.controls;
           ST.spotify = ST.spotify || {};
           ST.spotify.controls = SPOTIFY.controls;
+          saveSettings();
+          renderNp();
+        }
+      });
+      rows.push({
+        kind: "toggle",
+        key: "spotify-scrub-bar",
+        label: t("spotify_scrub_bar"),
+        value: SPOTIFY.scrub_bar !== false ? t("on") : t("off"),
+        act: function () {
+          SPOTIFY.scrub_bar = SPOTIFY.scrub_bar === false;
+          ST.spotify = ST.spotify || {};
+          ST.spotify.scrub_bar = SPOTIFY.scrub_bar;
+          saveSettings();
+          renderNp();
+        }
+      });
+      rows.push({
+        kind: "toggle",
+        key: "spotify-shuffle-repeat",
+        label: t("spotify_shuffle_repeat"),
+        value: SPOTIFY.show_shuffle_repeat !== false ? t("on") : t("off"),
+        act: function () {
+          SPOTIFY.show_shuffle_repeat = SPOTIFY.show_shuffle_repeat === false;
+          ST.spotify = ST.spotify || {};
+          ST.spotify.show_shuffle_repeat = SPOTIFY.show_shuffle_repeat;
+          saveSettings();
+          renderNp();
+        }
+      });
+      rows.push({
+        kind: "toggle",
+        key: "spotify-up-next",
+        label: t("spotify_up_next"),
+        value: SPOTIFY.show_up_next !== false ? t("on") : t("off"),
+        act: function () {
+          SPOTIFY.show_up_next = SPOTIFY.show_up_next === false;
+          ST.spotify = ST.spotify || {};
+          ST.spotify.show_up_next = SPOTIFY.show_up_next;
+          saveSettings();
+          renderNp();
+        }
+      });
+      rows.push({
+        kind: "toggle",
+        key: "spotify-jump-app",
+        label: t("spotify_jump_app"),
+        value: SPOTIFY.show_jump_app !== false ? t("on") : t("off"),
+        act: function () {
+          SPOTIFY.show_jump_app = SPOTIFY.show_jump_app === false;
+          ST.spotify = ST.spotify || {};
+          ST.spotify.show_jump_app = SPOTIFY.show_jump_app;
+          saveSettings();
+          renderNp();
+        }
+      });
+      rows.push({
+        kind: "toggle",
+        key: "spotify-sleep-timer",
+        label: t("spotify_sleep_timer"),
+        value: SPOTIFY.show_sleep_timer !== false ? t("on") : t("off"),
+        act: function () {
+          SPOTIFY.show_sleep_timer = SPOTIFY.show_sleep_timer === false;
+          ST.spotify = ST.spotify || {};
+          ST.spotify.show_sleep_timer = SPOTIFY.show_sleep_timer;
+          saveSettings();
+          renderNp();
+        }
+      });
+      rows.push({
+        kind: "toggle",
+        key: "spotify-audio-output",
+        label: t("spotify_audio_output"),
+        value: SPOTIFY.show_audio_output !== false ? t("on") : t("off"),
+        act: function () {
+          SPOTIFY.show_audio_output = SPOTIFY.show_audio_output === false;
+          ST.spotify = ST.spotify || {};
+          ST.spotify.show_audio_output = SPOTIFY.show_audio_output;
           saveSettings();
           renderNp();
         }
@@ -7397,6 +7934,7 @@
       if (typeof CouchShare !== "undefined" && CouchShare.isOpen && CouchShare.isOpen()) return true;
       if (window.CouchAsk && window.CouchAsk.isOpen && window.CouchAsk.isOpen()) return true;
     } catch (e) { return true; }
+    if (zone === "makeit") return true;
     var s = $("settings"), w = $("welcome"), g = $("gear-pop");
     return !!((s && s.classList.contains("on")) || (w && w.classList.contains("on")) || (g && g.classList.contains("on")));
   }
@@ -7551,6 +8089,8 @@
     return fresh && !kidsOn();
   }
   function welcomeStart(fresh) {
+    var wk = kept(WELCOME_KEY);
+    if (makeitLinked() && !kidsOn() && ((wk == null && fresh) || wk === "ask")) { welcomeLinked(); return; }   // linked: the card, not the welcome
     if (!welcomeDue(fresh)) return;
     zone = "welcome"; wi = 0; welcomeSeen = true;
     clearFocus();
@@ -7622,8 +8162,170 @@
     welcomeClose("original");
     startFocus();
     paintFocus();
+    if (makeitLinked()) makeitDue();   // linked and staying on Couch Original: the Make it yours card (an unlinked TV has the welcome's QR)
     // the one other first-run question (make Couch TV the home), now the welcome is answered
     setTimeout(homeAsk, 800);
+  }
+  // ---- the first-run "Make it yours" card (owner approved, 25 Nov 2026) ----
+  // A new TV that Couch TV Setup linked to an account, and that is still on Couch Original, is shown one
+  // card, once, on a calm moment (about 3 s after the home is clear): it takes the place of the welcome, so nobody
+  // sees two similar cards. A TV that is not linked keeps the welcome (with its own QR) and no card; linked later
+  // while still on Couch Original with no design, it gets the card then, once. The welcome on screen when the link
+  // arrives is replaced by it. The card is: a QR code and an address to design its own screen on a phone. Never on an
+  // update (only the welcome's answer in this version makes it due), never once a design or home pack is here,
+  // in a guest's or kids profile, in setup or while a question or sheet is up, over an app or the screensaver.
+  // Back (or OK) closes it for good; Home settings, Designs, Make it yours shows the same card again.
+  // The card is built only when it is shown and taken out of the page when it closes, so a TV that never
+  // shows it pays for none of it. No blur, no animation. The QR is drawn here (qr.js): it carries the address
+  // below and nothing else, no code, token, device id or any personal data.
+  // The address is this one constant. Its /go page must send someone signed in with a linked TV to
+  // the editor (/design/) and everyone else to /get/ before a release that shows this card (coord notes).
+  var MAKEIT_URL = "https://couchtv.joshuaseage.com/go";
+  var MAKEIT_KEY = "tvhome.makeit";   // "due" until it is shown, then "done"
+  var MAKEIT_CALM = (MOCK || PREVIEW) && /[?&]makeitcalm=(\d+)/.test(Q) ? +RegExp.$1 : 3000;   // the wait for a calm home
+  var MAKEIT_AWAY = 180000;   // nobody pressed anything: it goes by itself, so the remote is never held
+  var makeitWait = 0, makeitAway = 0, makeitPrev = null;
+  function makeitDue() {
+    keep(MAKEIT_KEY, "due");
+    makeitSchedule(MAKEIT_CALM);
+  }
+  // this TV is linked to an account by Couch TV Setup (a ?mock preview says so with ?linked=1 or mock:linked)
+  function makeitLinked() {
+    if (MOCK || PREVIEW) { try { return /[?&]linked=1\b/.test(Q) || localStorage.getItem("mock:linked") === "1"; } catch (e) { return false; } }
+    return typeof CouchDesignCode !== "undefined" && !!CouchDesignCode.linked && CouchDesignCode.linked();
+  }
+  // a fresh linked TV: the welcome question is skipped and the card comes in its place. The update question waits
+  // for a calm moment after it, as it does after the welcome.
+  function welcomeLinked() {
+    keep(WELCOME_KEY, "linked");
+    keep(WELCOME_AT_KEY, Date.now());
+    welcomeSeen = true;
+    if (kept(MAKEIT_KEY) == null && !makeitDesigned()) makeitDue();   // never again once it has been shown
+  }
+  // Setup's link (or its design code) arrived while the home was open
+  function makeitLinkArrived() {
+    if (!makeitLinked()) return;
+    var designed = makeitDesigned();
+    if (zone === "welcome") {   // the welcome is on screen: the card replaces it (or, with a design code on its way, nothing does)
+      welcomeClose(designed ? "code" : "linked");
+      startFocus(); paintFocus();
+      if (!designed) makeitDue();
+      return;
+    }
+    if (kept(WELCOME_KEY) === "original" && kept(MAKEIT_KEY) == null && !designed && !kidsOn()) makeitDue();
+  }
+  function makeitSchedule(ms) {
+    if (makeitWait) clearTimeout(makeitWait);
+    makeitWait = kept(MAKEIT_KEY) === "due" ? setTimeout(makeitTry, ms) : 0;
+  }
+  // a design or home pack arrived: the TV is no longer on Couch Original
+  function makeitDesigned() {
+    var cfg = window.COUCH_CONFIG || {};
+    if (cfg.design && typeof cfg.design === "object") return true;
+    try { if (localStorage.getItem("couchtv.design.ok") || localStorage.getItem("couchtv.design.no")) return true; } catch (e) {}
+    if (typeof CouchDesigner !== "undefined" && kept(CouchDesigner.KEY)) return true;
+    // a design code Setup brought is waiting to be got: the design is on its way
+    try { if (MOCK || PREVIEW ? /[?&]setupcode=1\b/.test(Q) : TV && TV.setupDesignCode && TV.setupDesignCode()) return true; } catch (e) {}
+    if (typeof CouchDesignCode !== "undefined") {
+      try { if (CouchDesignCode.kept() || (CouchDesignCode.takeHome && CouchDesignCode.takeHome(true))) return true; } catch (e) {}
+    }
+    return !!(ACCOUNT || keptAccount());
+  }
+  function makeitTry() {
+    makeitWait = 0;
+    if (kept(MAKEIT_KEY) !== "due") return;
+    if (makeitDesigned()) { keep(MAKEIT_KEY, "done"); return; }
+    if (kidsOn() || guestOn()) return;   // asked again if the profile changes and the home comes to the front
+    if (document.hidden || PAGE_PAUSED || screenOffActive || idleAmbientActive) return;   // the front again: makeitSchedule
+    // not on the home yet (a question, a sheet, Home settings, setup): look again soon
+    if ((zone !== "grid" && zone !== "shelf" && zone !== "people" && zone !== "quick") || updSheetUp() ||
+      (homeState() === "ask" && !kept("tvhome.home.asked"))) { makeitSchedule(10000); return; }
+    makeitOpen(false);
+  }
+  function makeitUp() { return zone === "makeit"; }
+  function makeitOpen(manual) {
+    if (zone === "makeit" || !window.TVQR) return;
+    makeitPrev = { zone: zone, s: s, g: g };
+    if (!manual) keep(MAKEIT_KEY, "done");   // shown once
+    zone = "makeit";
+    clearFocus();
+    var el = document.createElement("div");
+    el.id = "makeit"; el.className = "makeit";
+    el.setAttribute("role", "dialog"); el.setAttribute("aria-modal", "true"); el.setAttribute("aria-labelledby", "makeit-title");
+    var shown = MAKEIT_URL.replace(/^https:\/\//, "");
+    el.innerHTML = '<div class="mk-card"><div class="mk-text"><div class="mk-brand" aria-hidden="true"><img src="couchtv-logo.svg" alt="" width="66" height="66"><span>Couch TV</span></div>' +
+      '<h1 class="mk-title" id="makeit-title">' + esc(t("makeit_title")) + '</h1><p class="mk-sub">' + esc(t("makeit_sub")) + '</p>' +
+      '<p class="mk-url" id="makeit-url">' + esc(shown) + '</p><p class="mk-hint">' + esc(t("makeit_back")) + '</p></div>' +
+      '<div class="mk-scan"><span class="mk-qr" id="makeit-qr"></span><p>' + esc(t("makeit_scan")) + '</p></div></div>';
+    try { el.querySelector("#makeit-qr").appendChild(window.TVQR.svg(MAKEIT_URL, 440)); } catch (e) { el.querySelector(".mk-scan").style.display = "none"; }
+    el.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); makeitClose(); });
+    document.body.appendChild(el);
+    if (makeitAway) clearTimeout(makeitAway);
+    makeitAway = setTimeout(makeitClose, MAKEIT_AWAY);
+    makeitWindowStart();
+  }
+  function makeitClose() {
+    if (zone !== "makeit") return;
+    if (makeitAway) { clearTimeout(makeitAway); makeitAway = 0; }
+    makeitWindowStop();
+    var el = $("makeit");
+    if (el && el.parentNode) el.parentNode.removeChild(el);   // out of the page, nothing left behind
+    var p = makeitPrev; makeitPrev = null;
+    if (p && (p.zone === "grid" || p.zone === "shelf" || p.zone === "people" || p.zone === "quick")) { zone = p.zone; s = p.s; g = p.g; paintFocus(); }
+    else { zone = "grid"; startFocus(); paintFocus(); }
+  }
+  // ---- the look for a design while the Make it yours card is open (owner, 25 Nov 2026) ----
+  // The TV asks the account's inbox only when someone expects a design. While the card is open and in front, on a
+  // linked TV, it looks every 20 s, at most 45 looks (15 minutes) in the whole life of the TV: the count is kept, so a
+  // restart, or the card shown again from Home settings, goes on from what is left and never starts over. It stops the
+  // moment a design arrives, the card closes (Back, OK, Home, Settings, a pointer click, an app, the screensaver, screen
+  // off, sleep), the page is hidden, or the TV goes offline; it comes on again only while the card is still open and
+  // in front. A TV that is not linked asks nothing. If Setup links the TV while the card is open (the app's start
+  // from Setup with the link calls tv.setupDesign), it starts then. A look that fails (no internet, a busy server) waits twice as long
+  // each time, up to 160 s, and still counts. A 429 (the app answers "wait") ends the window for good.
+  // Nothing else in the home starts a look: the Home key, opening the home and the weekly look are as they were.
+  var MAKEIT_CHK = "tvhome.makeit.looks", MAKEIT_MAX = 45;
+  var MAKEIT_EVERY = (MOCK || PREVIEW) && /[?&]makeitevery=(\d+)/.test(Q) ? +RegExp.$1 : 20000;
+  var makeitTick = 0, makeitBack = 0;
+  function makeitLooks() { var n = +kept(MAKEIT_CHK); return n > 0 ? Math.min(n, MAKEIT_MAX) : 0; }
+  function makeitWindowOk() {
+    return zone === "makeit" && !document.hidden && !PAGE_PAUSED && !screenOffActive && !idleAmbientActive &&
+      navigator.onLine !== false && makeitLooks() < MAKEIT_MAX && inboxCan() && Date.now() >= inboxTime("wait");
+  }
+  function makeitWindowStop() { if (makeitTick) clearTimeout(makeitTick); makeitTick = 0; makeitBack = 0; }
+  function makeitWindowStart() {
+    if (makeitTick || !makeitWindowOk()) return;
+    makeitBack = 0;
+    makeitTick = setTimeout(makeitCheck, MAKEIT_EVERY);
+    // a linked TV keeps the card up for the whole window (the same 3 minutes as before when it is not linked)
+    if (makeitAway) { clearTimeout(makeitAway); makeitAway = setTimeout(makeitClose, (MAKEIT_MAX - makeitLooks()) * MAKEIT_EVERY + 60000); }
+  }
+  function makeitCheck() {
+    makeitTick = 0;
+    if (!makeitWindowOk()) return;
+    keep(MAKEIT_CHK, makeitLooks() + 1);   // counted before the look, so a crash cannot give extra looks
+    var asked = inboxAsk("card");
+    if (!asked) makeitBack = Math.min(makeitBack + 1, 3);
+    if (makeitLooks() < MAKEIT_MAX) makeitTick = setTimeout(makeitCheck, MAKEIT_EVERY * Math.pow(2, makeitBack));
+  }
+  // the app's answer to a look: a design closes the card; a failure backs off; a wait or an unlinked TV ends it
+  function makeitAnswered(a) {
+    if (zone !== "makeit" || !a) return;
+    if (a.state === "item") { makeitWindowStop(); makeitClose(); return; }
+    if (a.state === "wait") { keep(MAKEIT_CHK, MAKEIT_MAX); makeitWindowStop(); return; }
+    if (a.state === "unlinked") { makeitWindowStop(); return; }
+    if (a.state === "error") { makeitBack = Math.min(makeitBack + 1, 3); if (makeitTick) { clearTimeout(makeitTick); makeitTick = makeitLooks() < MAKEIT_MAX ? setTimeout(makeitCheck, MAKEIT_EVERY * Math.pow(2, makeitBack)) : 0; } }
+    else makeitBack = 0;
+  }
+  document.addEventListener("visibilitychange", function () { if (document.hidden) makeitWindowStop(); else makeitWindowStart(); });
+  window.addEventListener("offline", makeitWindowStop);
+  window.addEventListener("online", makeitWindowStart);
+  function makeitKey(e) {
+    if (isSettings(e)) { e.preventDefault(); if (!e.repeat) settingsKey(); return; }
+    if (isBack(e) || isOk(e) || arrowOf(e)) {
+      e.preventDefault();
+      if (!e.repeat && !arrowOf(e)) makeitClose();   // Back and OK close it; the arrows do nothing and never hold anything
+    }
   }
   function updWhen(u) {
     if (!u.checked) return t("upd_never");
@@ -7964,6 +8666,8 @@
       var cls = "ssec" + (i === SET.sec ? (SET.col === "secs" ? " focus" : " on") : "");
       return '<div class="' + cls + '"><i>' + ICONS[sc[1]] + "</i><span>" + esc(secName(sc[0])) + "</span></div>";
     }).join("");
+    var curSecEl = $("set-secs").querySelector(".ssec.focus, .ssec.on");
+    if (curSecEl && curSecEl.scrollIntoView) curSecEl.scrollIntoView({ block: "nearest" });
     $("set-crumb").textContent = SET.sub ? SET.sub.crumb : "";
     $("set-head").textContent = SET.sub ? SET.sub.title() : secName(secsNow()[SET.sec][0]);
     var box = $("set-rows");
@@ -8126,6 +8830,7 @@
   function settingsKey() {
     // the first-run welcome: Home settings stays one press away (the welcome counts as answered)
     if (zone === "welcome") { welcomeClose("settings"); startFocus(); paintFocus(); }
+    if (zone === "makeit") makeitClose();
     if (kidsOn()) { window.KidsMode.askPin(); return; }
     if (idlePhotoInput(null)) return;
     if (zone === "gear" || zone === "settings" || zone === "smart" || zone === "remind" || zone === "appmenu" || zone === "shelfmenu" || zone === "updask" || zone === "inputs") { goHome(); return; }
@@ -8310,6 +9015,7 @@
       return;
     }
     if (zone === "welcome") { welcomeKey(e); return; }   // the first-run welcome has the remote
+    if (zone === "makeit") { makeitKey(e); return; }     // the first-run Make it yours card
     if (kidsOn()) { okReset(); if (window.KidsMode.key(e)) e.preventDefault(); return; }
     if (idlePhotoInput(e)) return;
     if (typingKey(e)) return;   // typing a place or a name: the keys belong to the text box
@@ -9348,6 +10054,7 @@
   // Home on the remote also re-reads the lists, so an order arranged on the phone shows straight away
   window.tv = { back: function () { if (window.CouchAsk && window.CouchAsk.back && window.CouchAsk.back()) return; if (typeof CouchShare !== "undefined" && CouchShare.close()) return; if (typeof CouchDesign !== "undefined" && CouchDesign.back && CouchDesign.back()) return; if (idleAmbientActive) { setIdleAmbient(false); resetSmartIdle(); return; } if (idlePhotoInput(null)) return; goHome(); resetIdlePhoto(); resetSmartIdle(); },
     home: function () { forgetFocus(); updFront(); if (zone === "welcome") return;   // the first-run welcome stays until it is answered
+      if (zone === "makeit") { makeitClose(); return; }
       clipWake(); if (idleAmbientActive) { setIdleAmbient(false); resetSmartIdle(); return; } if (idlePhotoInput(null)) return; if (zone === "settings") closeSettings(); else goHome(); refresh(); resetIdlePhoto(); resetSmartIdle(); },
     screenOff: function () { toggleScreenOff(true); },
     // the TV home app's Spotify listener says the moment the song, play or pause changes (MainActivity), so
@@ -9362,10 +10069,10 @@
     phoneLink: function () { PHONE_QR.url = ""; phoneQr(); if (typeof CouchDesign !== "undefined" && CouchDesign.nav && CouchDesign.nav.phoneAgain) CouchDesign.nav.phoneAgain(); },
     // also the on-TV app's HomeActivity.refresh() after a phone or setup save, with the home already in front
     // and never paused: that redraws, but only a resume after tv.pause() is the home coming to the front
-    resume: function () { var front = PAGE_PAUSED; PAGE_PAUSED = false; clock(); designVideo("away", false); toggleScreenOff(false); setIdleAmbient(false); resetSmartIdle(); okReset(); refresh(); if (!OFFLINE) refreshQuick(); refreshWeather(); startVideo(); clipWake(); sceneVideos(true); refreshMusic(); refreshCards(true); if (window.AmbientWeather) window.AmbientWeather.resume(); resetIdlePhoto(); kwArtAgain(); if (front) updFront(); setupDesign(); if (front) inboxAsk("front"); },
+    resume: function () { var front = PAGE_PAUSED; PAGE_PAUSED = false; clock(); designVideo("away", false); toggleScreenOff(false); setIdleAmbient(false); resetSmartIdle(); okReset(); refresh(); if (!OFFLINE) refreshQuick(); refreshWeather(); startVideo(); clipWake(); sceneVideos(true); refreshMusic(); refreshCards(true); if (window.AmbientWeather) window.AmbientWeather.resume(); resetIdlePhoto(); kwArtAgain(); if (front) { updFront(); makeitSchedule(MAKEIT_CALM); } setupDesign(); if (front) inboxAsk("front"); },
     // an app is in front: the video background stops until the home is back
     // (and a design's video background lets go of the TV's decoder, which the app may need)
-    pause: function () { saveFocusNow(); PAGE_PAUSED = true; pauseVideo(); designVideo("away", true); inboxAway(); },
+    pause: function () { if (zone === "makeit") makeitClose(); saveFocusNow(); PAGE_PAUSED = true; pauseVideo(); designVideo("away", true); inboxAway(); },
     scene: function (pick) { return phoneScene(pick); },
     // the launcher's file picker has copied the chosen photos into its own storage (Home settings)
     photosAdded: function (names) { photosAdded(names); },
@@ -9379,7 +10086,7 @@
     homeAnswered: function (held) { homeAnswered(held); },
     // a calendar the launcher read for the Agenda widget (MainActivity.calendar)
     calendarText: function (id, ok, text) { calendarText(id, ok, text); },
-    setupDesign: function () { setupDesign(); ACCT_INBOX.stopped = false; inboxArm(); },   // Setup brings its own design; the inbox keeps its times
+    setupDesign: function () { setupDesign(); ACCT_INBOX.stopped = false; inboxArm(); makeitLinkArrived(); makeitWindowStart(); },   // Setup brings its own design; the inbox keeps its times
     accountInbox: function (raw) { accountInbox(raw); },
     // words typed on the phone remote (Type on the TV) when the TV app cannot press keys (the on-TV app
     // with no ADB): they go into the typing box Home settings has open, at the cursor. False: no box open.
@@ -9704,7 +10411,7 @@
     ST.widgets_design = mark;
     ST.widgets_base = base;
     keepSettings(true);
-    if (!OFFLINE && data.bridge !== false) { clearTimeout(pushTimer); pushTimer = setTimeout(function () { pushSettings(kept(ST_KEY)); }, 400); }
+    if (!OFFLINE && data.bridge !== false) { clearTimeout(pushTimer); pushTimer = setTimeout(function () { pushSettings(kept(ST_KEY) || keepSettings(true)); }, 400); }
     if (changed && CouchDesign.dataChanged) CouchDesign.dataChanged("wset", JSON.stringify(all));
   }
   // one setting saved, and what follows from it: a "sets" setting writes its own count; a new bin night
@@ -10271,6 +10978,7 @@
     initSettings();
     remindersInit();
     welcomeStart(freshTv);   // a TV never set up: the first-run welcome, over everything else
+    makeitSchedule(MAKEIT_CALM);   // the Make it yours card, if it was due and never showed
     setupDesign();           // Couch TV Setup's design code, if it brought one: no typing
     accountNewNotice();      // a design the account just sent: say so once, with where Undo is
     inboxAsk("open");        // the account's TV inbox, when this TV is linked (after 30 minutes away, or due)

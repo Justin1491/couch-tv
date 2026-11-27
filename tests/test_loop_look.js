@@ -96,6 +96,7 @@ const context = {
   renderPeople() {}, addCards() {}, kids: false, kidsOn: () => context.kids, idleAmbientActive: false, npVisible: () => false, gridKey: (a) => 'app:' + a.package,
   whoIndex: () => 0, peopleCount: () => 1, scrollShelf() {},
   API: '', HOME: {}, ST: {}, TV: null, MOCK: false, LIGHTER: false, SUN_SYNC: false, LOOP: false, NIGHT: true, KW_POSTER: false, LOCAL_SPOTIFY: false, OLED: false, THEME: 'night',
+  SPOTIFY: { separate_row: 'np' },
   KEEP_MAX: 10, KW_ON: true, CARDS: [], SHELF_FOLLOW: false, lift: null, touched: true,
   PEOPLE: [{ id: 'p1', name: 'Person 1' }], who: 'p1',
   data: { shows: [], showsBy: { p1: [] }, videosBy: { p1: [] }, apps: [], weather: null },
@@ -831,6 +832,7 @@ console.log('Loop look version tests passed.');
   const ctx = {
     document: { documentElement: { dir: 'ltr' } }, touched: false,
     LOOP: true, NIGHT: true, footballEnabled: false, LOCAL_SPOTIFY: false, expanded: false, AMBIENT_MUSIC: false, music: { state: 'playing' }, lift: null,
+    SPOTIFY: { card_style: 'compact' }, npSub: 'btns',
     zone: 'shelf', s: 0, g: 0, qi: 0, pi: 0, npI: 1, currentNpBtns: [], GRID_COLS: 12, people: 1, quick: 2, reach: true,
     shelfEls: [1, 2, 3, 4, 5], gridItems: [], PEOPLE: [{ id: 'a' }, { id: 'b' }],
     gridEls: Array.from({ length: 6 }, (_, i) => ({ getBoundingClientRect: () => rect(564 + i * 136, 912, 112, 112) })),

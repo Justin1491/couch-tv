@@ -10,8 +10,8 @@ android {
         applicationId = "dev.couchtv.ontv"
         minSdk = 23          // Android 6.0. Wireless debugging pairing needs Android 11+ on the TV.
         targetSdk = 34
-        versionCode = 26
-        versionName = "0.13.13"
+        versionCode = 28
+        versionName = "0.13.15"
     }
     buildFeatures { buildConfig = true }
     // Test builds: when COUCHTV_KEYSTORE names a keystore (a debug-style key, alias androiddebugkey,
@@ -85,6 +85,14 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.14.1")
 }
 
+// On a computer, Robolectric starts Conscrypt from its own desktop build (conscrypt-openjdk-uber, native code for Linux, macOS
+// and Windows inside). The app's conscrypt-android has the same classes but looks for libconscrypt_jni on the Java library
+// path, which only exists on a phone or TV: with both on the test classpath, every Robolectric test (SetupShotsTest, VoiceKeysTest)
+// failed on the Linux CI runner with "no conscrypt_jni in java.library.path". Leave the Android one out of the unit-test run only.
+configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configureEach {
+    exclude(group = "org.conscrypt", module = "conscrypt-android")
+}
+
 // The phone remote and the TV home are built elsewhere in the repo. Copy them in before every build.
 // Order: -PremoteDist=..., then the repo layout (on-tv/ next to remote/), then a staging copy in ../repo.
 val repoRoot = listOf(file("../../.."), file("../../../repo")).firstOrNull { File(it, "remote/dist/index.html").isFile } ?: file("../../..")
@@ -115,7 +123,10 @@ android.sourceSets.getByName("main").java.srcDir(File(repoRoot, "tv-home/android
 android.sourceSets.getByName("test").java.srcDir(File(repoRoot, "tv-home/android/shared/test"))
 
 // -PsetupShots=<folder>: SetupShotsTest saves PNGs of the setup screens there (skipped without it).
-tasks.withType<Test>().configureEach { systemProperty("setupShots", (project.findProperty("setupShots") as String?) ?: "") }
+tasks.withType<Test>().configureEach {
+    systemProperty("setupShots", (project.findProperty("setupShots") as String?) ?: "")
+    testLogging { exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
+}
 
 // ------------------------------------------------------------------------------------------- Google Play
 // Product flavours, dimension "store" (coord/GOOGLE-PLAY-PLAN.md section 4, coord/GOOGLE-PLAY-BUILD.md):
@@ -127,7 +138,7 @@ tasks.withType<Test>().configureEach { systemProperty("setupShots", (project.fin
 // signing key, and a GitHub APK can never replace a Play install. PlayRules.versionCode is the same formula.
 // targetSdk 34 for both: Google Play's floor for Android TV apps (since 31 Aug 2025); the Play build is TV only.
 val PLAY_REBUILD = 0
-val PLAY_VERSION_NAME = "0.13.13"   // the GitHub versionName of the same source
+val PLAY_VERSION_NAME = "0.13.15"   // the GitHub versionName of the same source
 android.flavorDimensions += "store"
 android.productFlavors.create("github") { dimension = "store"; isDefault = true }
 android.productFlavors.create("play") {

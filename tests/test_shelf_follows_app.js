@@ -42,6 +42,7 @@ const context = {
   whoIndex: () => 0, peopleCount: () => 1,
   scrollCalls: 0, scrollShelf() { context.scrollCalls++; },
   KEEP_MAX: 10, KW_ON: true, NIGHT: false, CARDS: [], SHELF_FOLLOW: true, lift: null, touched: true,
+  SPOTIFY: { separate_row: 'np' },
   PEOPLE: [{ id: 'p1', name: 'Person 1' }], who: 'p1',
   data: { shows: [], showsBy: { p1: [] }, videosBy: { p1: [] }, apps: [] },
   zone: 'grid', s: 0, g: 0, shelfEls: [], gridItems: [],

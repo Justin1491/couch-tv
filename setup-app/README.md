@@ -1,4 +1,4 @@
-# couch-tv Setup
+# Couch TV Setup
 
 The free, official way to put couch-tv on your TV **without a command line and without an AI
 agent**. You open one app on your computer, it opens a page in your browser, and it walks you
@@ -44,10 +44,12 @@ for your computer and unzip it:
 
 | Computer | Download | Open |
 |---|---|---|
-| Mac with Apple silicon (M1 and newer) | `couch-tv-Setup-mac-apple-silicon.zip` | **couch-tv Setup** |
-| Mac with an Intel chip | `couch-tv-Setup-mac-intel.zip` | **couch-tv Setup** |
-| Windows 10 or 11 | `couch-tv-Setup-windows.zip` | **couch-tv Setup.exe**, inside the unzipped folder |
-| Linux, 64 bit Intel or AMD (Ubuntu 22.04 or newer, Debian 12, Fedora, Arch and Omarchy) | `couch-tv-Setup-linux.tar.gz` (from 0.13.13) | **couch-tv Setup**, inside the unpacked folder |
+| Mac with Apple silicon (M1 and newer) | `couch-tv-Setup-mac-apple-silicon.zip` | **Couch TV Setup** |
+| Mac with an Intel chip | `couch-tv-Setup-mac-intel.zip` | **Couch TV Setup** |
+| Windows 10 or 11 | `couch-tv-Setup-windows.zip` | **Couch TV Setup.exe**, inside the unzipped folder |
+| Linux, 64 bit Intel or AMD (Ubuntu 22.04 or newer, Debian 12, Fedora, Arch and Omarchy) | `couch-tv-Setup-linux.tar.gz` (from 0.13.13) | **Couch TV Setup**, inside the unpacked folder |
+
+From 0.13.15 the app, its folder and the program are called **Couch TV Setup** (they were "couch-tv Setup"). The zip and tar.gz file names are unchanged. An installed Helper that updates itself moves its start with the computer entry (and the Windows link) to the new name.
 
 Not sure which Mac? Apple menu, **About This Mac**: "Chip: Apple M..." is Apple silicon,
 "Processor: ... Intel" is Intel. `SHA256SUMS-setup.txt` in the same release lists each file's
@@ -59,19 +61,19 @@ The app is free and not signed with a paid Apple or Microsoft developer account,
 asks once whether you trust it.
 
 **Mac:**
-1. Double-click **couch-tv Setup**. macOS says it cannot check it for malicious software. Press **Done** (or OK).
-2. Open **System Settings, Privacy and Security**. Scroll down to the message about couch-tv Setup and press **Open Anyway**. Type your Mac password if it asks.
+1. Double-click **Couch TV Setup**. macOS says it cannot check it for malicious software. Press **Done** (or OK).
+2. Open **System Settings, Privacy and Security**. Scroll down to the message about Couch TV Setup and press **Open Anyway**. Type your Mac password if it asks.
 3. Double-click the app again and press **Open**.
-4. When it asks to **find devices on your local network**, press **Allow**. That is how it reaches the TV. If you missed it, the app says "Your Mac blocked this app from finding the TV": open **System Settings, Privacy and Security, Local Network**, switch on **couch-tv Setup**, then press **Look again**.
+4. When it asks to **find devices on your local network**, press **Allow**. That is how it reaches the TV. If you missed it, the app says "Your Mac blocked this app from finding the TV": open **System Settings, Privacy and Security, Local Network**, switch on **Couch TV Setup**, then press **Look again**.
 
 **Windows:**
-1. Double-click **couch-tv Setup.exe**. If "Windows protected your PC" (SmartScreen) shows, press **More info**, then **Run anyway**.
-2. If Windows asks whether couch-tv Setup may use networks, allow **Private networks**.
-3. Keep `couch-tv Setup.exe` in its folder: it needs the `_internal` folder next to it.
+1. Double-click **Couch TV Setup.exe**. If "Windows protected your PC" (SmartScreen) shows, press **More info**, then **Run anyway**.
+2. If Windows asks whether Couch TV Setup may use networks, allow **Private networks**.
+3. Keep `Couch TV Setup.exe` in its folder: it needs the `_internal` folder next to it.
 
 **Linux:**
 1. Unpack it: `tar -xzf couch-tv-Setup-linux.tar.gz` (or open it in your file manager).
-2. Run `"couch-tv Setup/couch-tv Setup"` from a terminal, or double-click it in the folder. Keep it in its folder: it needs the `_internal` folder next to it.
+2. Run `"Couch TV Setup/Couch TV Setup"` from a terminal, or double-click it in the folder. Keep it in its folder: it needs the `_internal` folder next to it.
 3. It opens the setup page in your browser. Nothing else to install: it talks to the TV over your Wi-Fi with its own ADB, so it needs no `adb` program, no USB cable and no udev rule. The website's Set up my TV button cannot open it on Linux: sign in with the code it shows instead.
 4. If a firewall is on (ufw, firewalld), allow it on your home network, or it cannot hear the TV: the app says "This computer blocked this app from finding the TV". With ufw: `sudo ufw allow 5353/udp` for the TV's name announcements.
 
@@ -94,11 +96,23 @@ same as the repo's `tv-home/tools/apply.sh`:
 off, puts the TV's own home back, then removes the couch-tv apps. Or by hand, with the remote:
 [docs/UNINSTALL.md](../docs/UNINSTALL.md).
 
+## Extra features (Couch TV Helper)
+
+The last screen asks: **Done**, or **Add extra features**. The TV works on its own either way. The helper
+is a small part of this same app that stays in your menu bar (Mac) or tray (Windows, Linux) and adds:
+turn the TV on from your phone, Ask AI on your home computer, picks. A Samsung, LG or Roku TV needs it to
+open Couch TV and run the phone remote. It has no AI of its own and needs no coding. **Start with this
+computer** is a tick box, off until you pick it. **Turn off extra features** in its menu stops it and
+removes the start-up item. Reopen Setup any time to turn it on again.
+
+It checks for a newer version of itself (the new version must carry Couch TV's signature, and is only used when you press **Update ready, restart**), keeps the computer awake on power only when a Samsung, LG or Roku TV needs it (**Let this computer sleep** overrides that), and **Remove everything from this computer** deletes what Setup keeps here.
+
 ## What stays on your computer
 
 Its own folder: `~/Library/Application Support/couch-tv Setup/` on a Mac, `%APPDATA%\couch-tv Setup\`
 on Windows, `~/.local/share/couch-tv-setup/` on Linux: the key the TV allowed (`adbkey`, `adbkey.pub` and a certificate made from it), and
-`changed.json` (what it changed on which TV). The downloaded apps are cached in
+`changed.json` (what it changed on which TV), and, once a TV was linked to an account, `linked-tvs.json` (which row of My
+TVs it is, under a hash of the TV and the account). The downloaded apps are cached in
 `~/Library/Caches/couch-tv Setup/`, `%LOCALAPPDATA%\couch-tv Setup\Cache\` or `~/.cache/couch-tv-setup/`. Delete the folders to
 forget everything. The TV lists the key as **couch-tv-setup** under Wireless debugging, Paired
 devices, where you can Forget it.
@@ -107,12 +121,22 @@ devices, where you can Forget it.
 name to Open-Meteo for the weather. No tracking, no AI.
 
 **If you link your Couch TV account** (the website's **Set up my TV** button, or its code typed on the
-first page): Setup tells your account what kind of TV it set up (its system, Android version, memory,
-screen size and how smoothly it drew Couch TV, so Couch TV Studio shows designs that work on it),
-gets your design and Your home details for that TV, and writes the TV's own account link into Couch TV
-on the TV. A health report (Couch TV's versions, free space, memory, its last crash and its own log
+first page): Setup first shows whose account it is (the name, and the email with most of it covered) and waits for
+your **Yes, link it**. Before that Yes it sends only the code, and nothing about any TV. After it, Setup sends your account:
+
+- the room name you typed, and the TV's make, model, system, Android version, memory, screen size, whether it lets
+  Couch TV be its home, and its Couch TV version;
+- the package names of the apps with an icon on that TV (such as `com.netflix.ninja`, at most 300). Never what is
+  in them, who is signed in, or what is watched. Couch TV Studio uses them to put the apps you have first;
+- after an install, how smoothly the TV drew Couch TV for 8 seconds, with its chip and graphics names.
+
+Setup gets your design and Your home details for that TV (people, their colours, which are kids, and the town, which
+Setup looks up with Open-Meteo to set the weather; photos and guest Wi-Fi only when the website's button opened
+Setup), and writes the TV's own account link into Couch TV on the TV. Studio keeps the TV's details, its app names and when it last
+checked in until you remove the TV in My TVs (last checked in: until you unlink it). Setup's sign in ends after 2 hours, with **Sign out** in Setup, or with
+**Sign out Couch TV Setup** on the website's account page. A health report (Couch TV's versions, free space, memory, its last crash and its own log
 lines, addresses and e-mails blanked out) is only sent if you press **Send a health report** after
-seeing all of it. The account link is kept in memory only, never on this computer's disk.
+seeing all of it, and is kept 30 days. The account link is kept in memory only, never on this computer's disk.
 
 ## Finding the TV
 
@@ -141,7 +165,7 @@ COUCHTV_SETUP_ADBKEY=~/.android/adbkey .venv/bin/python tests/emulator_check.py 
 | `COUCHTV_SETUP_NO_BROWSER=1` | Do not open the browser |
 | `COUCHTV_SETUP_HOME` | Keep the setup's own files somewhere else |
 | `COUCHTV_SETUP_ADBKEY` | Use another ADB key file |
-| `COUCHTV_SETUP_STUDIO=live` | Talk to the Couch TV Studio account API (off until that API exists) |
+| `COUCHTV_SETUP_STUDIO=off` | Do not talk to the Couch TV Studio account API (linking is on by default) |
 | `COUCHTV_SETUP_STUDIO_URL` | Another Studio address (https, or http on 127.0.0.1 for development) |
 | `COUCHTV_SETUP_STUDIO_STUB=<file.json>` | Answer the account calls from a file instead (development) |
 | `COUCHTV_SETUP_FAKE_SCAN=<file.json>` | Use recorded discovery answers instead of the network (screenshots) |

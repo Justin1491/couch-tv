@@ -77,8 +77,9 @@ ALLOW='users\.noreply\.github\.com|@example\.(com|org)|your-computer\.local|home
 echo "== 2. generic checks (private addresses, emails, phones, paths)"
 for rule in "${RULES[@]}"; do
   name="${rule%%|*}"; re="${rule#*|}"
-  # package-lock.json is machine written: only check it for the rules that cannot match a hash.
-  hits=$(grep -rInE "${EXCL[@]}" --exclude=privacy-scan.sh "$re" . 2> /dev/null | grep -vE "$ALLOW" | grep -vE '^\./remote/package-lock\.json:[0-9]+:.*(integrity|resolved)' | cut -d: -f1,2)
+  # package-lock.json is machine written: only check it for the rules that cannot match a hash. The same for the
+  # pip hash lines in setup-app/requirements*.txt (a line that is only "--hash=sha256:" and 64 hex digits).
+  hits=$(grep -rInE "${EXCL[@]}" --exclude=privacy-scan.sh "$re" . 2> /dev/null | grep -vE "$ALLOW" | grep -vE '^\./remote/package-lock\.json:[0-9]+:.*(integrity|resolved)' | grep -vE '^\./setup-app/requirements[a-z-]*\.txt:[0-9]+:[[:space:]]+--hash=sha256:[0-9a-f]{64}( \\)?$' | cut -d: -f1,2)
   if [ -n "$hits" ]; then
     while IFS= read -r h; do note "$name  $h"; done <<< "$hits"
   fi
@@ -90,7 +91,8 @@ if [ "$HAS_GIT" = 1 ]; then
     awk '/^@@commit /{c=$2; next} /^\+\+\+ b\//{f=substr($0,7); next} /^[+-]/ && !/^(\+\+\+|---) /{print c " " f ": " substr($0,2)}' > "$TMP/history.txt"
   for rule in "${RULES[@]}"; do
     name="${rule%%|*}"; re="${rule#*|}"
-    hits=$(grep -aE "$re" "$TMP/history.txt" | grep -vE "$ALLOW" | cut -d: -f1 | sort -u)
+    # the same hash-line skip as the working tree pass: a pip "--hash=sha256:" line in setup-app/requirements*.txt
+    hits=$(grep -aE "$re" "$TMP/history.txt" | grep -vE "$ALLOW" | grep -vE '^[0-9a-f]+ setup-app/requirements[a-z-]*\.txt: +--hash=sha256:[0-9a-f]{64}( \\)?$' | cut -d: -f1 | sort -u)
     if [ -n "$hits" ]; then
       while IFS= read -r h; do note "$name  git history, commit $h"; done <<< "$hits"
     fi

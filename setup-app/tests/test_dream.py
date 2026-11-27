@@ -25,7 +25,10 @@ from couchtv_setup import finder, guide, health, linkin, mdns, release, steps, s
 from couchtv_setup.tv import TvError  # noqa: E402
 from faketv import FakeTv  # noqa: E402
 
-steps.time.sleep = lambda s: None
+# Only while this file's tests run: this is the one time.sleep every module shares, and left patched it made the
+# other files' fakes answer at once (test_ui's "partial first look" failed in a full run and passed alone).
+_SLEEP = mock.patch.object(steps.time, "sleep", lambda s: None)
+setUpModule, tearDownModule = _SLEEP.start, _SLEEP.stop
 
 REMOTE, CAST = finder.ANDROID_REMOTE.rstrip("."), finder.GOOGLECAST.rstrip(".")
 CONNECT, PAIRING, PLAIN = finder.ADB_CONNECT.rstrip("."), finder.ADB_PAIRING.rstrip("."), finder.ADB_PLAIN.rstrip(".")
@@ -320,7 +323,7 @@ class Account(unittest.TestCase):
         return mock.patch.dict(os.environ, {"COUCHTV_SETUP_STUDIO_STUB": f.name, "COUCHTV_SETUP_STUDIO": ""})
 
     def test_off_sends_nothing(self):
-        with mock.patch.dict(os.environ, {"COUCHTV_SETUP_STUDIO": "", "COUCHTV_SETUP_STUDIO_STUB": ""}), \
+        with mock.patch.dict(os.environ, {"COUCHTV_SETUP_STUDIO": "off", "COUCHTV_SETUP_STUDIO_STUB": ""}), \
                 mock.patch.object(studio.urllib.request, "build_opener", side_effect=AssertionError("network")):
             self.assertEqual(studio.mode(), "off")
             with self.assertRaises(TvError) as e:
@@ -455,11 +458,40 @@ class LinkOnTheTv(unittest.TestCase):
         steps.make_home(tv, "/x/couch-tv-home.apk", people=[{"id": "p_3k9x2m", "name": "Ruby"}, "Alex"],
                         account={"link": LINK, "code": CODE})
         start = next(c for c in tv.log if c.startswith("am force-stop app.couchtv.launcher"))
-        self.assertIn("--es account_link " + LINK, start)
-        self.assertIn("--es design_code " + CODE, start)
+        self.assertIn("am start -n app.couchtv.launcher/.FromComputer ", start)      # only a computer can send settings
+        self.assertNotIn("account_link", start)
+        told = next(c for c in tv.log if c.startswith("am broadcast"))
+        self.assertEqual(told, f"am broadcast --include-stopped-packages -n app.couchtv.launcher/.SetupLink --es account_link {LINK} --es design_code {CODE}")
+        self.assertEqual(tv.held, LINK)
         import base64
         cfg = json.loads(base64.b64decode(re.search(r"--es config_b64 (\S+)", start).group(1)))
         self.assertEqual(cfg["people"], [{"id": "p_3k9x2m", "name": "Ruby"}, {"id": "person2", "name": "Alex"}])
+
+
+    def test_an_older_couch_tv_gets_its_settings_the_old_way(self):
+        tv = FakeTv("google")
+        tv.app = "0.13.14"
+        r = steps.make_home(tv, "/x/couch-tv-home.apk", account={"link": LINK, "code": CODE})
+        starts = [c for c in tv.log if "config_b64" in c]
+        self.assertEqual([c.split("-n ")[1].split()[0] for c in starts],
+                         ["app.couchtv.launcher/.FromComputer", "app.couchtv.launcher/.MainActivity"])
+        self.assertEqual((r["link"], tv.held), ("sent", LINK))
+
+    def test_versions(self):
+        for v, ok in (("0.13.13", True), ("0.13.12", False), ("v0.14", True), ("1.0.0-beta.1", True), ("0.9", False), (None, False), ("x", False)):
+            self.assertEqual(steps.version_at_least(v, steps.LINK_SINCE), ok, v)
+
+    def test_what_am_start_says_is_read(self):
+        for out in ("", "Starting: Intent { }\nError type 3\nError: Activity class {x} does not exist.",
+                    "Starting: Intent { }\njava.lang.SecurityException: Permission Denial: starting Intent",
+                    "Security exception: Permission Denial", "Error: unknown command"):
+            tv = FakeTv("google")
+            tv.shell = lambda c, o=out: o
+            with self.assertRaises(TvError, msg=out) as e:
+                steps.start_activity(tv, steps.HOME_ACT)
+            self.assertEqual(e.exception.code, "not_started")
+        tv.shell = lambda c: "Starting: Intent { }\nWarning: Activity not started, intent has been delivered to currently running top-most instance."
+        steps.start_activity(tv, steps.HOME_ACT)
 
 
 class Profile(unittest.TestCase):
@@ -482,8 +514,23 @@ class Profile(unittest.TestCase):
         self.assertEqual(p["platform"], "Android TV")
         self.assertFalse(p["homeRole"])                 # Android 9 has no Home role
         for c in tv.log:
-            self.assertRegex(c, r"^(cat /proc/meminfo|wm size|cmd role help|pm list|cmd package resolve|"
+            self.assertRegex(c, r"^(cat /proc/meminfo|wm size|cmd role help|pm list|pm query-activities --brief|cmd package resolve|"
                                 r"dumpsys package|getprop|cat /data/local/tmp)", c)
+
+    def test_apps_are_package_names_only(self):
+        tv = FakeTv("android", sdk=34)
+        p = tvprofile.read(tv, steps.facts(tv))
+        self.assertEqual(p["apps"], ["com.netflix.ninja", "com.google.android.youtube.tv", "com.spotify.tv.android"])
+        self.assertEqual(tvprofile.clean(p)["apps"], p["apps"])
+
+    def test_parse_apps(self):
+        out = "priority=0 x\ncom.a.b/.Main\n  com.a.b/.Other\nDROP TABLE/x\nbad name/.M\ndev.couchtv.ontv/.Home\n<x>.y/z"
+        self.assertEqual(tvprofile.parse_apps(out, "org.c.d/.M"), ["com.a.b", "org.c.d"])
+        many = "\n".join(f"com.x.p{i}/.M" for i in range(400))
+        self.assertEqual(len(tvprofile.parse_apps(many)), 300)
+        self.assertEqual(tvprofile.clean({"apps": ["com.ok.app", 5, "no", "a b.c"]})["apps"], ["com.ok.app"])
+        self.assertEqual(tvprofile.clean({"apps": "x"})["apps"], [])
+        self.assertEqual(tvprofile.guess({})["apps"], [])
 
     def test_fire_never_offers_the_home_role(self):
         p = tvprofile.from_facts({"fire": True, "sdk": 30, "maker": "Amazon"}, "", "", "")

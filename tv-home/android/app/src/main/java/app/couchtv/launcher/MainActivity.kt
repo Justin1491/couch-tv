@@ -88,6 +88,7 @@ class MainActivity : Activity() {
     private val bingDailyPhoto by lazy { BingDailyPhoto(File(filesDir, "bing-daily-photo"), io) }
     private val spotifyPlayer by lazy { SpotifyPlayer(applicationContext) }
     private var spotifyPush: ((org.json.JSONObject) -> Unit)? = null   // this activity's SpotifyMediaListener callback
+    private var savedMusicVolume: Int? = null
     private val fotMobScores by lazy { FotMobScores(io) }
 
     /**
@@ -118,7 +119,8 @@ class MainActivity : Activity() {
         CrashGuard.install(this)
         restoreTimeout()   // a press left the screen timeout short: put it back
         // apply.sh starting the home on purpose (new settings) is always a fresh try.
-        if (intent?.hasExtra("bridge") == true || intent?.hasExtra("config_b64") == true) CrashGuard.reset(this)
+        val start = startOf(intent, savedInstanceState != null)
+        if (start != null && start.second == StartRules.Do.TAKE && StartRules.hasSettings(start.first)) CrashGuard.reset(this)
         // Crashed twice in the last few minutes: stand aside for the TV's own home rather than
         // crash again, so the TV is never stuck going round (CrashGuard.kt). It tries again later.
         if (CrashGuard.standingAside(this) && CrashGuard.openStockHome(this)) {
@@ -147,7 +149,8 @@ class MainActivity : Activity() {
         // in or saved (HaPhone.kt) makes the page read what is set up again, at once
         HomeAssistant.changed = { c -> Doorbell.start(c) }
         HaPhone.onChange = { main.post { js("window.smartHome && smartHome.reload && smartHome.reload(); window.smartHome && smartHome.phoneChanged && smartHome.phoneChanged()") } }
-        intent?.let { readExtras(it) }
+        if (start?.second == StartRules.Do.TAKE) take(start.first, starting = true)
+        else if (start?.second == StartRules.Do.ASK) main.post { ask(start.first) }
         startPhonePage()   // option A only: the phone's Home settings page, from this TV (PhoneServer.kt)
         io.execute { warmApps() }
         // An app installed, removed or renamed (or the TV's language changed): the list is read again,
@@ -207,17 +210,8 @@ class MainActivity : Activity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (intent.hasExtra("bridge") || intent.hasExtra("config_b64")) {
-            readExtras(intent)
-            startPhonePage()   // a computer added: its own page from now on, this one stops (none: it starts)
-            pageReady = false
-            offline = false
-            connect()
-            return
-        }
-        // Couch TV Setup with only the account's link and design code: kept, and the page gets the design now
-        if (AccountLink.readExtras(this, intent)) {
-            js("window.tv && tv.setupDesign && tv.setupDesign()")
+        startOf(intent, null)?.let { (i, act) ->
+            if (act == StartRules.Do.TAKE) take(i, starting = false) else if (act == StartRules.Do.ASK) ask(i)
             return
         }
         // tv-home/tools/app-icons.sh after it copies your own app icons: the page afresh, so they
@@ -416,6 +410,62 @@ class MainActivity : Activity() {
             return true
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    // ---- settings and the account link from outside (FromComputer.kt says who may send them) ----
+
+    /**
+     * What a start carries and what to do with it; null when it carries nothing. [again]: what onCreate knows about
+     * being started again (null in onNewIntent, which is never repeated).
+     */
+    private fun startOf(i: Intent?, again: Boolean?): Pair<Intent, StartRules.Do>? {
+        if (i == null) return null
+        if (i.hasExtra(FromComputer.EXTRA)) return Handed.take(i.getStringExtra(FromComputer.EXTRA))?.let { it to StartRules.Do.TAKE }
+        if (!StartRules.has(i)) return null
+        val replay = again != null && (again || i.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0 ||
+            StartRules.seen(AccountLink.kv(this), StartRules.startId((StartRules.SETTINGS + StartRules.LINK).associateWith { i.getStringExtra(it) }, taskId,
+                if (Build.VERSION.SDK_INT >= 24) Settings.Global.getInt(contentResolver, Settings.Global.BOOT_COUNT, 0) else 0)))
+        val installed = runCatching { packageManager.getPackageInfo(packageName, 0).firstInstallTime }.getOrDefault(0L)
+        val setUp = StartRules.setUp(prefs.contains("config") || prefs.contains("bridge") || prefs.contains("pairing_key"),
+            AccountLink.linked(AccountLink.kv(this)), System.currentTimeMillis() - installed)
+        return i to StartRules.decide(StartRules.who(Build.VERSION.SDK_INT, startedBy()), replay, StartRules.hasLink(i), setUp)
+    }
+
+    /** The package Android says started this, never what the intent says about itself (EXTRA_REFERRER). */
+    private fun startedBy(): String? {
+        val mine = intent
+        return try { setIntent(Intent()); referrer?.takeIf { it.scheme == "android-app" }?.host } catch (e: Exception) { null } finally { setIntent(mine) }
+    }
+
+    private fun take(i: Intent, starting: Boolean) {
+        val settings = StartRules.hasSettings(i)
+        // only a start with settings changes settings
+        if (settings) readExtras(i) else AccountLink.readExtras(this, i)
+        if (starting) return
+        if (settings) {
+            startPhonePage()   // a computer added: its own page from now on, this one stops (none: it starts)
+            pageReady = false
+            offline = false
+            connect()
+        } else if (StartRules.hasLink(i)) setupDesign()
+    }
+
+    /** Nobody can say who sent it, and it would change what this TV has: the person at the TV decides. Not now is No. */
+    private var asking = false
+    private fun ask(i: Intent) {
+        if (asking || isFinishing || isDestroyed) return
+        asking = true
+        runCatching {
+            val d = android.app.AlertDialog.Builder(this)
+                .setTitle(if (StartRules.hasLink(i)) "Link this TV to a Couch TV account?" else "Change this TV's Couch TV settings?")
+                .setMessage("Only press Yes if you are doing this from your computer now.")
+                .setPositiveButton("Yes") { _, _ -> take(i, starting = false) }
+                .setNegativeButton("No", null)
+                .setOnDismissListener { asking = false }
+                .create()
+            d.show()
+            d.getButton(android.app.AlertDialog.BUTTON_NEGATIVE)?.requestFocus()
+        }.onFailure { asking = false }
     }
 
     /**
@@ -1066,7 +1116,13 @@ class MainActivity : Activity() {
         fun setupDesignDone() = AccountLink.codeDone(AccountLink.kv(this@MainActivity))
 
         @JavascriptInterface
-        fun unlinkAccount(): Boolean { AccountLink.unlink(AccountLink.kv(this@MainActivity)); return true }
+        fun unlinkAccount(): Boolean {
+            val kv = AccountLink.kv(this@MainActivity)
+            val had = AccountLink.token(kv)
+            AccountLink.unlink(kv)
+            had?.let { AccountLink.letGo(it) }
+            return true
+        }
 
         // The account's TV inbox, asked from here so the link never reaches the page: the answer (a checked
         // code and title, or a state) comes back through tv.accountInbox. False: no link, or a look is running.
@@ -1294,6 +1350,97 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun spotifyHasPermission(): Boolean {
             return SpotifyMediaListener.hasNotificationAccess(this@MainActivity)
+        }
+
+        @JavascriptInterface
+        fun spotifyOpenApp(): Boolean {
+            return SpotifyMediaListener.instance?.openSessionApp(this@MainActivity) ?: false
+        }
+
+        @JavascriptInterface
+        fun audioOutputInfo(): String {
+            return try {
+                val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+                val devs = am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)
+                // Priority: Bluetooth -> HDMI/ARC -> USB/Wired -> Built-in speaker
+                val bt = devs.firstOrNull {
+                    it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                    it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                    (Build.VERSION.SDK_INT >= 31 && (it.type == 26 || it.type == 27)) // BLE_HEADSET / BLE_SPEAKER
+                }
+                val hdmi = devs.firstOrNull {
+                    it.type == android.media.AudioDeviceInfo.TYPE_HDMI ||
+                    it.type == android.media.AudioDeviceInfo.TYPE_HDMI_ARC ||
+                    (Build.VERSION.SDK_INT >= 31 && it.type == 29) // TYPE_HDMI_EARC
+                }
+                val wired = devs.firstOrNull {
+                    it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                    it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                    it.type == android.media.AudioDeviceInfo.TYPE_USB_DEVICE ||
+                    it.type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET ||
+                    it.type == android.media.AudioDeviceInfo.TYPE_LINE_DIGITAL
+                }
+                val chosen = bt ?: hdmi ?: wired ?: devs.firstOrNull {
+                    it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                }
+                val type = when {
+                    bt != null -> "bluetooth"
+                    hdmi != null -> "hdmi"
+                    wired != null -> "wired"
+                    else -> "speaker"
+                }
+                val name = chosen?.productName?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: ""
+                JSONObject().apply {
+                    put("type", type)
+                    put("name", name)
+                }.toString()
+            } catch (e: Exception) {
+                """{"type":"speaker","name":""}"""
+            }
+        }
+
+        @JavascriptInterface
+        fun openAudioOutput(): Boolean {
+            return openSettingsScreen("bluetooth") || startSettings(Intent(Settings.ACTION_SOUND_SETTINGS))
+        }
+
+        @JavascriptInterface
+        fun musicFadeStart(): Boolean {
+            return try {
+                val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+                savedMusicVolume = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        @JavascriptInterface
+        fun musicFadeStep(fraction: Float): Boolean {
+            return try {
+                val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+                val base = savedMusicVolume ?: am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).also {
+                    savedMusicVolume = it
+                }
+                val target = (base * fraction.coerceIn(0f, 1f)).toInt()
+                am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, target, 0)
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        @JavascriptInterface
+        fun musicFadeRestore(): Boolean {
+            return try {
+                val orig = savedMusicVolume ?: return true
+                savedMusicVolume = null
+                val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+                am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, orig, 0)
+                true
+            } catch (e: Exception) {
+                false
+            }
         }
 
         // Reminders (reminders.js): Android's own speech screen (Google's "Speak now" on Google TV),
@@ -2215,6 +2362,8 @@ class MainActivity : Activity() {
         }
 
         /** A TV's name, as apply.sh passes it: small letters, digits and dashes. */
+        /** Couch TV Setup left a design code: the page, when it is up, gets the design now. */
+        fun setupDesign() { shown?.get()?.let { a -> a.main.post { a.js("window.tv && tv.setupDesign && tv.setupDesign()") } } }
         private val TV_NAME = Regex("[a-z0-9-]{1,32}")
 
         private val INPUT_ACTIONS = listOf(

@@ -12,6 +12,7 @@ Three locks on the API, because a web page in another tab could otherwise try to
   rebinding page from reading the secret out of the page;
 - an Origin header, when there is one, must be this server too.
 """
+import hashlib
 import json
 import os
 import secrets
@@ -26,17 +27,21 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import errors, finder, guide, health, linkin, pairing, paths, release, steps, studio, tvprofile
+from . import errors, finder, guide, health, linkin, pairing, paths, release, scanlog, steps, studio, tidy, tvprofile
+from .helper import autostart as hautostart, config as hconfig, deeplink
 from .identity import Identity
 from .tv import Tv, TvError
 
 WEB = (Path(sys._MEIPASS) / "couchtv_setup" if getattr(sys, "frozen", False) else Path(__file__).parent) / "web"
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
-         ".svg": "image/svg+xml", ".png": "image/png"}
+         ".svg": "image/svg+xml", ".png": "image/png", ".webp": "image/webp", ".woff2": "font/woff2"}
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
        "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 SECRET = secrets.token_urlsafe(24)
 OS = "mac" if sys.platform == "darwin" else "windows" if sys.platform == "win32" else "linux"
+# What this Setup can do beyond the basics. The page shows a feature's button only when it is listed, so a
+# build without it hides it. "link-tv" (link a TV that is already set up) is on in every build (account linking).
+FEATURES = ["reset-tv", "link-tv"]
 ALLOW_WAIT_S = 45     # how long one try waits for Allow on the TV; the page counts it down
 IDLE_S = 180         # the page asks every 20 s; this long without it means the tab is closed
 FIRST_S = 600
@@ -54,10 +59,17 @@ class State:
         self.httpd = None
         self.port = None
         self.seen = None
+        self.tv_seen = finder.Seen()    # TVs the last scans found (kept ~30 s, never shown Ready once missed)
         self.started = time.time()
         self.link = studio.Link()      # the Couch TV account, in memory only
         self.handoff = None            # a code from couchtv://setup?handoff=..., not used yet
+        self.offer = None              # an account shown as "Link as X?", waiting for Yes (nothing used yet)
+        self.device = None             # the website's Allow, being waited for
+        self.health = None
+        self.account_error = None      # why the account part of an install did not happen, for the last screen
+        self.tv_key = None             # which TV is connected (steps.tv_key), not its address
         self.profile = None            # tvprofile of the connected TV
+        self.intent = None             # "helper" when opened by couchtv://helper/on
 
 
 S = State()
@@ -91,6 +103,8 @@ def error_payload(e):
 def run_job(name, fn):
     with S.lock:
         if S.job.get("running"):
+            if name == "scan" and S.job.get("name") == "scan":
+                return {"started": name}   # the page asked again while a scan is running: it joins that one
             raise TvError("Still busy with the last step.", "busy")
         S.job = {"name": name, "running": True, "progress": 0, "message": ""}
 
@@ -113,7 +127,7 @@ def run_job(name, fn):
 
 def need_tv():
     if not S.tv:
-        raise TvError("Connect to the TV first.", "no_tv")
+        raise TvError("This computer is not connected to the TV. Find the TV again.", "no_tv")
     return S.tv
 
 
@@ -129,9 +143,13 @@ def _attach(tv, ip, route):
     if S.tv:
         S.tv.close()
     S.tv, S.ip, S.route = tv, ip, route
+    # another TV, or the same one again: what was said about the one before (its My TVs row, its health report)
+    # never goes out under this one's name
+    S.link.tv, S.health = None, None
     S.facts = steps.facts(tv)
+    S.tv_key = steps.tv_key(tv)
     S.profile = tvprofile.read(tv, S.facts)
-    _remember(ip, S.facts, route=route)
+    _remember(ip, S.facts, route=route, key=S.tv_key)
     return {"facts": S.facts, "route": route, "profile": S.profile}
 
 
@@ -142,18 +160,45 @@ def _known():
         return {}
 
 
-def _remember(ip, f=None, route=None, room=None, tv_id=None):
-    """What this TV turned out to be, so the list and the kind question know it next time: its model,
+def _remember(ip, f=None, route=None, room=None, key=None):
+    """What the TV at this address turned out to be, so the list and the kind question know it next time: its model,
     kind, the way in that worked ("tls" means Wireless debugging is paired with this computer) and the
-    room name the person gave it ("Living room TV"), and its My TVs row id once an account set it up
-    (sent again when Setup sets the same TV up again)."""
+    room name the person gave it ("Living room TV"). Addresses move: when another TV answers here, the room
+    name of the one before is dropped."""
     k = _known()
     old = k.get(ip) or {}
+    if f and (old.get("key") != key if old.get("key") else old.get("name") != f.get("name")):
+        old = {}
     k[ip] = {"name": (f or {}).get("name") or old.get("name"), "kind": (f or {}).get("kind") or old.get("kind"),
              "route": route or old.get("route"), "room": room if room is not None else old.get("room"),
-             "tv_id": tv_id or old.get("tv_id")}
+             "key": key or old.get("key")}
     try:
         (paths.data() / "known-tvs.json").write_text(json.dumps(k), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _rows():
+    try:
+        return json.loads((paths.data() / "linked-tvs.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _row_name():
+    """This TV in this account (a hash of both): where its My TVs row id is kept, on this computer only."""
+    mail = (S.link.account or {}).get("email")
+    return hashlib.sha256(f"{S.tv_key}|{mail}".encode()).hexdigest()[:32] if S.tv_key and mail else None
+
+
+def _keep_row(tv_id):
+    name = _row_name()
+    if not name or not tv_id:
+        return
+    rows = _rows()
+    rows[name] = tv_id
+    try:
+        (paths.data() / "linked-tvs.json").write_text(json.dumps(rows), encoding="utf-8")
     except OSError:
         pass
 
@@ -173,20 +218,127 @@ def _town_weather(town):
     return {"lat": town["lat"], "lon": town["lon"], "place": town["name"], "timezone": near[0]["timezone"]}
 
 
+def _register(strict=False):
+    """Tells the account about the connected TV. strict: a failure is raised (the link step on the last screen
+    shows it); otherwise None (a setup goes on without the account parts)."""
+    known = _known().get(S.ip) or {}
+    name = known.get("room") or (S.facts or {}).get("name") or "TV"
+    try:
+        if S.tv_key and steps.tv_key(need_tv()) != S.tv_key:
+            # the connection came back by itself and another TV has the address now
+            raise TvError("This computer is not connected to the TV. Find the TV again.", "no_tv")
+        reg = _account(lambda: studio.register_tv(S.link, tvprofile.clean(S.profile), name, _rows().get(_row_name() or "")))
+    except TvError as e:
+        if strict:
+            raise
+        S.account_error = str(e)
+        return None
+    _keep_row(reg.get("tv_id"))
+    return reg
+
+
+def _account(fn):
+    """A call with the account's sign in. When that ran out (2 hours, signed out on the website, a TV unlinked there)
+    Setup is signed out here too and says so, so the page can offer the code again instead of failing for ever."""
+    try:
+        return fn()
+    except TvError as e:
+        if e.code == "expired":
+            S.link = studio.Link()
+            raise TvError("Your sign in ended. Link again with a new code from the website.", "signed_out") from e
+        raise
+
+
+def _offer(acct, code=None, link=None):
+    """Shows an account as "Link as X?". Nothing is used up and Setup's own sign in is untouched until Yes."""
+    if not (acct or {}).get("email"):
+        raise TvError(studio.OLD_SITE, "studio_old")
+    _drop_offer()
+    S.offer = {"id": secrets.token_urlsafe(12), "account": acct, "code": code, "link": link}
+    return {"ask": _offer_view()}
+
+
+def _offer_view():
+    if not S.offer:
+        return None
+    now = S.link.account if S.link.token else None
+    return {"id": S.offer["id"], "account": S.offer["account"], "instead_of": now}
+
+
+def _drop_offer():
+    if S.offer and S.offer.get("link"):
+        studio.end(S.offer["link"])
+    S.offer = None
+
+
+def _say_yes(offer_id):
+    o = S.offer
+    if not o or not secrets.compare_digest(str(offer_id or "").encode(), o["id"].encode()):
+        raise TvError("That question is no longer open. Use the code again.", "no_offer")
+    if S.job.get("running"):
+        raise TvError("Still busy with the last step.", "busy")
+    new = o["link"]
+    if new is None:
+        new = studio.Link()
+        S.offer = None            # used once, whatever comes back
+        acct = studio.handoff(new, o["code"])
+        if S.job.get("running"):       # a step that began meanwhile keeps the account it began with
+            studio.end(new)
+            raise TvError("Still busy with the last step.", "busy")
+        if acct.get("email") != o["account"]["email"]:
+            studio.end(new)
+            raise TvError("That code is for another account now. Use a new code.", "other_account")
+    S.offer = None
+    if S.link.token:
+        studio.end(S.link)
+    S.link, S.health, S.account_error = new, None, None
+    return {"account": S.link.account}
+
+
+def _link_now(progress):
+    """The last screen's "Link this TV": Couch TV is already on the TV, so nothing is installed. The account
+    gives the TV its link (and its design), the link goes into the app over ADB, and Setup tells the account
+    the TV is ready. One step for a person who finished the install before they signed in."""
+    tv = need_tv()
+    if not S.link.token:
+        raise TvError("Sign in to your Couch TV account first.", "no_account")
+    ver = steps.need_link_version(tv)          # before anything about the TV is sent
+    progress(0.2, "Linking the TV to your Couch TV account")
+    reg = _register(strict=True)
+    progress(0.6, "Sending the link to the TV")
+    new = {"link": reg["link"], "code": reg["code"]}
+    try:
+        took = steps.link_account(tv, new)
+    except TvError:
+        studio.report_done(S.link, False, ver, tvprofile.clean(S.profile), linked=new.get("said", False))
+        raise
+    progress(0.9, "Telling your account the TV is ready")
+    reported = studio.report_done(S.link, True, ver, tvprofile.clean(S.profile), linked=took)
+    return {"account": dict(_link_words(took, reported), design=reg["design"], reported=reported)}
+
+
+def _link_words(took, reported, wait_s=20):
+    """linked: only once it is known. The TV answered (True) and the account heard it, or the account saw the TV use
+    the link. "sent": it went to the TV and the account waits for the TV to check in."""
+    if took is True and reported:
+        return {"linked": True, "sent": False}
+    if not took:
+        return {"linked": False, "sent": False}
+    end = time.monotonic() + wait_s
+    while reported and time.monotonic() < end:
+        if studio.tv_seen(S.link):
+            return {"linked": True, "sent": False}
+        threading.Event().wait(4)
+    return {"linked": False, "sent": True}
+
+
 def _from_account(progress):
     """Registers the connected TV with the signed in account and gets what goes onto it. A failure
     here never stops the setup: Couch TV still goes on, without the account parts."""
     progress(0.26, "Linking the TV to your Couch TV account")
-    known = _known().get(S.ip) or {}
-    name = known.get("room") or (S.facts or {}).get("name") or "TV"
-    # set up here before: its My TVs row, but only when the TV at this address is still the same model
-    same = known.get("name") and known.get("name") == (S.facts or {}).get("name")
-    try:
-        reg = studio.register_tv(S.link, tvprofile.clean(S.profile), name, known.get("tv_id") if same else None)
-    except TvError:
+    reg = _register()
+    if reg is None:
         return None
-    if reg.get("tv_id"):
-        _remember(S.ip, tv_id=reg["tv_id"])
     people, town = studio.setup_inputs(reg["home"])
     return {"people": people, "weather": _town_weather(town), "design": reg["design"],
             "extras": {"link": reg["link"], "code": reg["code"]}}
@@ -215,12 +367,82 @@ def place_search(q):
     return {"places": [p for p in out if p["timezone"]]}
 
 
+def _studio_url():
+    """Where Open Couch TV Studio goes (only a link the person opens; nothing is sent there)."""
+    try:
+        return studio.base()
+    except TvError:
+        return studio.DEFAULT_STUDIO
+
+
+def helper_state():
+    cfg = hconfig.load()
+    return {"mode": cfg["mode"], "autostart": hautostart.is_enabled(), "intent": S.intent,
+            "can_autostart": True, "tvs": cfg["tvs"]}
+
+
+def helper_api(name, body):
+    """Extra features (Couch TV Helper): turn on, turn off, add a TV that needs it, start it now."""
+    if name == "state":
+        return helper_state()
+    if name == "intent":
+        S.intent = "helper" if body.get("intent") == "helper" else S.intent
+        return {"ok": True}
+    if name == "add-tv":
+        ip, kind = home_ip(body), str(body.get("kind") or "")
+        if not hconfig.needs_helper(kind):
+            raise TvError("That TV does not need the helper.", "bad_kind")
+        hconfig.add_tv(ip, kind, str(body.get("name") or ""))
+        return {"ok": True}
+    if name == "on":
+        want = body.get("autostart") is True
+        hconfig.turn_on(want)
+        if want:
+            hautostart.enable()
+        else:
+            hautostart.disable()
+        S.intent = None
+        if body.get("start") is not False and not os.environ.get("COUCHTV_SETUP_NO_HELPER_START"):
+            _start_helper()
+        return helper_state()
+    if name == "off":
+        hautostart.disable()
+        hconfig.turn_off()
+        return helper_state()
+    raise TvError("No such step.", "404")
+
+
+def _start_helper():
+    """The helper is the same program started with --helper, apart from this page."""
+    import subprocess
+    exe = [sys.executable, "--helper"] if getattr(sys, "frozen", False) else [sys.executable, "-m", "couchtv_setup", "--helper"]
+    subprocess.Popen(exe, stdin=subprocess.DEVNULL)
+
+
 def api(method, path, body):
     S.seen = time.time()
     if path == "/api/ping":
         return {"ok": True}
+    if path.startswith("/api/helper/"):
+        return helper_api(path[len("/api/helper/"):], body)
     if path == "/api/info":
-        return {"os": OS, "connected": bool(S.tv), "facts": S.facts, "route": S.route, "ip": S.ip, "profile": S.profile}
+        return {"os": OS, "connected": bool(S.tv), "facts": S.facts, "route": S.route, "ip": S.ip, "profile": S.profile,
+                "helper": helper_state(), "features": FEATURES, "studio": _studio_url()}
+    if path == "/api/reset-tv":
+        # "Set up another TV": forget everything that belongs to the TV just done (the connection, its facts,
+        # its health report, its row in the account). The sign in and the helper stay as they are.
+        if S.job.get("running"):
+            raise TvError("Still busy with the last step. Wait for it to finish, then set up another TV.", "busy")
+        if S.tv:
+            try:
+                S.tv.close()
+            except Exception:
+                pass
+        S.tv = S.ip = S.route = S.facts = S.profile = None
+        S.health = None
+        S.link.tv = None
+        S.job = {"running": False}
+        return {"ok": True}
     if path == "/api/quit":
         if S.job.get("running"):
             raise TvError("Still busy with the last step. Wait for it to finish, then close.", "busy")
@@ -231,6 +453,17 @@ def api(method, path, body):
     if path == "/api/scan":
         def scan(p):
             fake = os.environ.get("COUCHTV_SETUP_FAKE_SCAN")
+
+            def enrich(tvs):
+                for t in tvs:
+                    t["profile"] = tvprofile.guess(t)
+                    t["route"] = guide.route_for(t)
+                return tvs
+
+            def early(rows):
+                # the TVs' own announcements are in: show them while the knocking goes on
+                S.job["partial"] = {"tvs": S.tv_seen.apply(enrich(rows))}
+            diag = {}
             if fake:
                 # development and screenshots: recorded answers ({"heard", "knocks", "dial", "confirmed"}),
                 # merged exactly as a real scan would be, and nothing is sent on the network
@@ -239,12 +472,19 @@ def api(method, path, body):
                 time.sleep(float(rec.get("delay", 0.5)))
                 tvs = finder.merge(rec.get("heard", []), [tuple(k) for k in rec.get("knocks", [])], rec.get("dial", {}),
                                    _known(), rec.get("confirmed", {}))
+                diag["networks"] = []
             else:
-                tvs = finder.scan(known=_known())
-            for t in tvs:
-                t["profile"] = tvprofile.guess(t)
-                t["route"] = guide.route_for(t)
-            return {"tvs": tvs, "networks": [str(n) for n in finder.home_networks()]}
+                try:
+                    tvs = finder.scan(known=_known(), on_partial=early, diag=diag, hints=S.tv_seen.ips())
+                except Exception as e:
+                    diag.setdefault("error", str(getattr(e, "code", "") or "scan_failed"))
+                    scanlog.write(diag)
+                    raise
+            tvs = S.tv_seen.apply(enrich(tvs))
+            if not fake:
+                diag["shown"] = [{"ip": t["ip"], "status": t["status"], "stale": bool(t.get("stale"))} for t in tvs]
+                scanlog.write(diag)
+            return {"tvs": tvs, "networks": diag.get("networks", [])}
         return run_job("scan", scan)
     if path == "/api/guide":
         row = body.get("row") if isinstance(body.get("row"), dict) else {}
@@ -261,8 +501,11 @@ def api(method, path, body):
         _remember(ip, room=room or None)
         return {"ok": True}
     if path == "/api/account":
-        return {"mode": studio.mode(), "account": S.link.account if S.link.token else None,
+        return {"mode": studio.mode(), "studio": studio.base() if studio.mode() == "live" else None,
+                "account": S.link.account if S.link.token else None, "ask": _offer_view(),
                 "handoff": bool(S.handoff), "tv": S.link.tv and {k: S.link.tv.get(k) for k in ("tv_id", "design")}}
+    if path == "/api/link-tv":
+        return run_job("link", _link_now)
     if path in ("/api/handoff", "/api/handoff-in"):
         code = studio.read_code(body.get("code"))
         if path == "/api/handoff-in":
@@ -270,13 +513,34 @@ def api(method, path, body):
             return {"ok": bool(code)}
         code = code or S.handoff
         S.handoff = None
-        return {"account": studio.handoff(S.link, code)}
+        c, acct = studio.who(code)          # looked at, not used: the page asks "Link as X?"
+        return _offer(acct, code=c)
+    if path == "/api/link-yes":
+        return _say_yes(body.get("id"))
+    if path == "/api/link-no":
+        _drop_offer()
+        return {"ok": True}
     if path == "/api/device/start":
-        return studio.device_start(S.link)
+        S.device = studio.Link()
+        return studio.device_start(S.device)
     if path == "/api/device/poll":
-        return studio.device_poll(S.link)
+        if not S.device:
+            raise TvError("Start signing in first.", "no_device")
+        got = studio.device_poll(S.device)
+        if got.get("pending"):
+            return got
+        link, S.device = S.device, None
+        try:
+            return _offer(link.account, link=link)
+        except TvError:
+            studio.end(link)
+            raise
     if path == "/api/sign-out":
-        S.link = studio.Link()
+        if S.job.get("running"):
+            raise TvError("Still busy with the last step.", "busy")
+        studio.end(S.link)
+        _drop_offer()
+        S.link, S.health = studio.Link(), None
         return {"ok": True}
     if path == "/api/profile":
         need_tv()
@@ -287,9 +551,9 @@ def api(method, path, body):
         S.health = health.health_report(tv, (S.facts or {}).get("installed") or {})
         return {"report": S.health, "can_send": bool(S.link.token and S.link.tv)}
     if path == "/api/health/send":
-        if body.get("yes") is not True or not getattr(S, "health", None):
+        if body.get("yes") is not True or not S.health:
             raise TvError("Look at the report first, then press Send.", "no_ok")
-        out = studio.send_health(S.link, S.health)
+        out = _account(lambda: studio.send_health(S.link, S.health))
         S.health = None
         return out
     if path == "/api/look":
@@ -356,15 +620,17 @@ def api(method, path, body):
         return run_job("connect", connect)
     if path == "/api/plan":
         tv = need_tv()
-        return {"items": steps.plan(tv, S.facts, ambient_off=bool(body.get("ambient_off", True)),
+        return {"items": steps.plan(tv, S.facts, ambient_off=bool(body.get("ambient_off", False)),
                                     ontv_home_off=bool(body.get("ontv_home_off", True))), "facts": S.facts}
+    if path.startswith("/api/tidy/"):
+        return tidy.route(path[len("/api/tidy/"):], body, need_tv(), run_job)
     if path == "/api/place":
         return place_search(body.get("q"))
     if path == "/api/setup":
         tv = need_tv()
         people = [str(x) for x in (body.get("people") or []) if isinstance(x, str)]
         weather = body.get("weather") if isinstance(body.get("weather"), dict) else None
-        ambient_off = bool(body.get("ambient_off", True))
+        ambient_off = bool(body.get("ambient_off", False))   # off unless asked (the Tidy up step owns this switch)
         ontv_off = bool(body.get("ontv_home_off", True))
 
         def setup(progress):
@@ -373,15 +639,21 @@ def api(method, path, body):
                 r["apk"] = {"version": "none", "sha256": "", "checked": "nothing installed"}
                 return r
             apk = release.get(release.HOME_APK, lambda f, m=None: progress(0.25 * f, m))
+            S.account_error = None
             acct = _from_account(progress) if S.link.token else None
             ppl, wx = people, weather
             if acct:
                 a_people, a_weather = acct["people"], acct["weather"]
                 ppl = a_people or people          # the account's people win over names typed here
                 wx = a_weather or weather
-            r = steps.make_home(tv, apk["path"], ambient_off=ambient_off, people=ppl, weather=wx,
-                                ontv_home_switch_off=ontv_off, progress=lambda f, m=None: progress(0.27 + 0.73 * f, m),
-                                account=acct and acct["extras"])
+            try:
+                r = steps.make_home(tv, apk["path"], ambient_off=ambient_off, people=ppl, weather=wx,
+                                    ontv_home_switch_off=ontv_off, progress=lambda f, m=None: progress(0.27 + 0.73 * f, m),
+                                    account=acct and acct["extras"])
+            except Exception:
+                if acct:
+                    studio.report_done(S.link, False, None, tvprofile.clean(S.profile), linked=acct["extras"].get("said", False))
+                raise
             r["apk"] = {k: apk[k] for k in ("version", "sha256", "checked")}
             if r.get("front"):
                 progress(0.99, "Measuring how smoothly this TV draws Couch TV")
@@ -391,9 +663,14 @@ def api(method, path, body):
                 except Exception:
                     r["speed"] = None
             if acct:
-                r["account"] = {"linked": bool(acct["extras"].get("link")), "design": acct["design"],
-                                "people": len(ppl or []), "town": (acct["weather"] or {}).get("place"),
-                                "reported": studio.report_done(S.link, r.get("front"), apk.get("version"), tvprofile.clean(S.profile))}
+                took = r.get("link") or False
+                reported = studio.report_done(S.link, r.get("front"), apk.get("version"), tvprofile.clean(S.profile),
+                                              linked=took or acct["extras"].get("said", False))
+                r["account"] = dict(_link_words(took, reported), design=acct["design"] if took else None,
+                                    people=len(ppl or []), town=(acct["weather"] or {}).get("place"), reported=reported,
+                                    error=(r.get("link_error") or {}).get("error"))
+            elif S.account_error:
+                r["account_error"] = S.account_error
             return r
         return run_job("setup", setup)
     if path == "/api/check":
@@ -429,7 +706,7 @@ def api(method, path, body):
     if path == "/api/debug-off":
         tv = need_tv()
         steps.debugging_off(tv, S.route)
-        S.tv = None
+        S.tv, S.health = None, None
         return {"ok": True}
     if path == "/api/undo/plan":
         return steps.undo_plan(need_tv())
@@ -511,7 +788,26 @@ class Handler(BaseHTTPRequestHandler):
 def main(argv=None):
     # Opened by the website's "Set up my TV" link: hand the code to a Setup that is already running
     # (then just show its page), or keep it for this run's page.
-    link = studio.url_in(argv if argv is not None else sys.argv)
+    argv = argv if argv is not None else sys.argv
+    if "--bridge" in argv:      # the helper's child process: the bridge, inside this program
+        from .helper import bridge_proc
+        return bridge_proc.run_bridge()
+    if "--helper" in argv:      # Couch TV Helper: the bridge and the menu bar item, no setup page
+        from .helper import app as helper_app
+        return sys.exit(helper_app.run())
+    if deeplink.find(argv):     # couchtv://helper/on from the account page
+        S.intent = "helper"
+        try:
+            info = json.loads((paths.data() / linkin.RUNNING).read_text(encoding="utf-8"))
+            req = urllib.request.Request(f"http://127.0.0.1:{int(info['port'])}/api/helper/intent", data=b'{"intent":"helper"}',
+                                         method="POST", headers={"Content-Type": "application/json", "X-Setup-Key": str(info["key"])})
+            with urllib.request.urlopen(req, timeout=3):
+                if not os.environ.get("COUCHTV_SETUP_NO_BROWSER"):
+                    webbrowser.open(f"http://127.0.0.1:{int(info['port'])}/")
+                return
+        except Exception:
+            pass
+    link = studio.url_in(argv)
     code = studio.parse_url(link) if link else ""
     if code:
         running = linkin.hand_to_running(code)
@@ -530,7 +826,7 @@ def main(argv=None):
     S.httpd, S.port = httpd, httpd.server_address[1]
     linkin.write_running(S.port, SECRET)
     url = f"http://127.0.0.1:{S.port}/"
-    print(f"couch-tv Setup is open in your browser: {url}")
+    print(f"Couch TV Setup is open in your browser: {url}")
     print("Keep this running until you are done. Press Close setup on the page, or Ctrl+C here, to stop.")
     if not os.environ.get("COUCHTV_SETUP_NO_BROWSER"):
         webbrowser.open(url)
@@ -541,7 +837,7 @@ def main(argv=None):
             now = time.time()
             if (S.seen is None and now - S.started > FIRST_S) or \
                     (S.seen is not None and now - S.seen > IDLE_S and not S.job.get("running")):
-                print("The setup page was closed, so couch-tv Setup has stopped.")
+                print("The setup page was closed, so Couch TV Setup has stopped.")
                 httpd.shutdown()
                 return
     threading.Thread(target=stop_when_closed, daemon=True).start()
